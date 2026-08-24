@@ -183,12 +183,7 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals) {
     try {
       const killer = spawn(
         "taskkill",
-        [
-          "/pid",
-          String(child.pid),
-          "/T",
-          ...(signal === "SIGKILL" ? ["/F"] : []),
-        ],
+        ["/pid", String(child.pid), "/T", "/F"],
         { stdio: "ignore", windowsHide: true },
       );
       killer.once("error", () => {
@@ -562,6 +557,9 @@ const makeManager = Effect.gen(function* () {
               stdio: ["ignore", "pipe", "pipe"],
               // Own process group on POSIX → group kill takes the whole tree.
               detached: process.platform !== "win32",
+              // libuv otherwise escapes the command argument before cmd.exe
+              // sees it, changing quotes and shell semantics.
+              windowsVerbatimArguments: process.platform === "win32",
             }),
           catch: (error) => new SpawnError({ message: boundedError(error) }),
         });

@@ -1,0 +1,108 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+const root = path.resolve(import.meta.dirname, "..");
+const unit = [
+  "extensions/background-terminals/output.test.ts",
+  "extensions/background-terminals/prompt.test.ts",
+  "extensions/background-terminals/ps.test.ts",
+  "extensions/background-terminals/result-delivery.test.ts",
+  "extensions/firecrawl-search/index.test.ts",
+  "extensions/git-info/changed-files-view.test.ts",
+  "extensions/git-info/refresh-coordinator.test.ts",
+  "extensions/shared/context-utilization.test.ts",
+  "extensions/shared/tool-call-timeout.test.ts",
+  "extensions/subagents/by-the-way.test.ts",
+  "extensions/subagents/codex-process.test.ts",
+  "extensions/subagents/context-usage.test.ts",
+  "extensions/subagents/result-delivery.test.ts",
+  "extensions/subagents/takeover.test.ts",
+  "extensions/summaries/config.test.ts",
+  "extensions/summaries/index.test.ts",
+  "extensions/summaries/summarizer.test.ts",
+  "extensions/summaries/transcript.test.ts",
+  "extensions/workflows/artifacts.test.ts",
+  "extensions/workflows/controller.test.ts",
+  "extensions/workflows/meta.test.ts",
+  "extensions/workflows/serialization.test.ts",
+];
+const integration = [
+  "extensions/background-terminals/manager.test.ts",
+  "extensions/git-info/process.test.ts",
+  "extensions/shared/child-session.test.ts",
+  "extensions/subagents/manager.test.ts",
+  "extensions/workflows/runner.test.ts",
+  "extensions/workflows/sandbox.test.ts",
+];
+const live = [
+  "extensions/subagents/claude.test.ts",
+  "extensions/subagents/codex.test.ts",
+];
+const delegated = ["extensions/file-search/index.spec.ts"];
+
+function discoverTests(directory) {
+  const found = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...discoverTests(absolute));
+    if (
+      entry.isFile() &&
+      (entry.name.endsWith(".test.ts") || entry.name.endsWith(".spec.ts"))
+    ) {
+      found.push(path.relative(root, absolute).replaceAll("\\", "/"));
+    }
+  }
+  return found;
+}
+
+const discovered = discoverTests(path.join(root, "extensions")).sort();
+const classified = [...unit, ...integration, ...live, ...delegated].sort();
+assert.deepEqual(
+  classified,
+  discovered,
+  "Every extension test must be classified as unit, integration, live, or delegated",
+);
+
+function run(command, args, cwd = root) {
+  const result = spawnSync(command, args, {
+    cwd,
+    env: process.env,
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+const suite = process.argv[2];
+if (suite === "unit") {
+  run(process.execPath, [
+    "--test",
+    "--test-timeout=20000",
+    "--experimental-strip-types",
+    ...unit,
+  ]);
+} else if (suite === "integration") {
+  run(process.execPath, [
+    "--test",
+    "--test-timeout=20000",
+    "--experimental-strip-types",
+    ...integration,
+  ]);
+  const npmCli = process.env.npm_execpath;
+  assert.ok(
+    npmCli,
+    "npm_execpath is required to run the delegated Vitest suite",
+  );
+  run(
+    process.execPath,
+    [npmCli, "test"],
+    path.join(root, "extensions", "file-search"),
+  );
+} else {
+  throw new Error(
+    `Unknown suite ${JSON.stringify(suite)}. Use unit or integration.`,
+  );
+}

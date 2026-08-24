@@ -78,6 +78,23 @@ function resolveCodexBinary() {
   return undefined;
 }
 
+export function codexProcessInvocation(
+  binary: string,
+  platform: NodeJS.Platform = process.platform,
+  comSpec = process.env.ComSpec ?? "cmd.exe",
+) {
+  const args = ["app-server", "--stdio"];
+  if (platform === "win32" && binary.toLowerCase().endsWith(".cmd")) {
+    const command = `"${binary}" ${args.join(" ")}`;
+    return {
+      file: comSpec,
+      args: ["/d", "/s", "/c", `"${command}"`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { file: binary, args, windowsVerbatimArguments: false };
+}
+
 function record(value: unknown): JsonRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -317,13 +334,15 @@ const makeCodexSession = (
       Queue.offerUnsafe(events, event);
     };
 
+    const invocation = codexProcessInvocation(binary);
     const child = yield* Effect.try({
       try: () =>
-        spawn(binary, ["app-server", "--stdio"], {
+        spawn(invocation.file, invocation.args, {
           cwd: task.cwd,
           env: process.env,
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
+          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
           // Own process group on POSIX so teardown can signal the whole
           // tree: a wedged app-server must not orphan a still-running
           // shell command it spawned.

@@ -1,11 +1,39 @@
 # Setup
 
-Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
+Requires Node.js 22.19.0 or newer.
+
+Clone or copy this repository to `~/.pi/agent`, then install root and extension-local dependencies:
 
 ```sh
 cd ~/.pi/agent
 npm install
+npm run install:extensions
 ```
+
+For a lockfile-reproducible clean install:
+
+```sh
+npm ci
+npm run install:extensions:ci
+```
+
+## Dependency updates
+
+Keep direct Pi packages on the exact installed CLI generation. Keep `effect`, `@effect/platform-node`, and `@effect/vitest` on one exact version across extension manifests.
+
+```sh
+pi --version
+npm install --save-exact \
+  @earendil-works/pi-ai@<pi-version> \
+  @earendil-works/pi-coding-agent@<pi-version> \
+  @earendil-works/pi-tui@<pi-version>
+npm run install:extensions
+npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-tui
+npm run check
+npm test
+```
+
+When changing Effect, update every extension manifest in the same change, regenerate every extension lockfile with one npm version, then verify each tree with `npm ls effect`.
 
 ## Firecrawl
 

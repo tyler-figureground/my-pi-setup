@@ -1,7 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
@@ -214,17 +214,19 @@ it.effect("binary resolution: fdfind is accepted as a system fd", () =>
 
 it.effect("binary resolution: existing bin fallback is used silently", () =>
   Effect.gen(function* () {
-    const env = makeEnv({ available: ["/repo/bin/rg"] });
+    const binDir = join(parse(process.cwd()).root, "repo", "bin");
+    const bundled = join(binDir, "rg");
+    const env = makeEnv({ available: [bundled] });
     const resolved = yield* resolveBinary(
       TOOL_SPECS.rg,
-      "/repo/bin",
+      binDir,
       darwinArm,
       env,
     );
 
     assert.deepEqual(resolved, {
       tool: "rg",
-      command: "/repo/bin/rg",
+      command: bundled,
       source: "bundled",
     });
     assert.equal(env.installs.length, 0);
@@ -235,16 +237,17 @@ it.effect(
   "binary resolution: missing everywhere triggers exactly one install",
   () =>
     Effect.gen(function* () {
+      const binDir = join(parse(process.cwd()).root, "repo", "bin");
       const env = makeEnv({ available: [] });
       const resolved = yield* resolveBinary(
         TOOL_SPECS.rg,
-        "/repo/bin",
+        binDir,
         darwinArm,
         env,
       );
 
       assert.equal(resolved.source, "installed");
-      assert.equal(resolved.command, "/repo/bin/rg");
+      assert.equal(resolved.command, join(binDir, "rg"));
       assert.equal(env.installs.length, 1);
       assert.match(
         env.installs[0].url,

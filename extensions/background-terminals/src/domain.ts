@@ -60,10 +60,13 @@ export function formatElapsed(snap: TerminalSnapshot) {
     : `${seconds}s`;
 }
 
-/** "exit 0", "exit 137", "SIGTERM", or "running". */
+/** "exit 0", "SIGTERM", "killed (exit 1)", or "running". */
 export function formatExit(snap: TerminalSnapshot) {
   if (snap.status === "running") return "running";
   if (snap.signal) return snap.signal;
+  if (snap.status === "killed" && snap.exitCode !== undefined) {
+    return `killed (exit ${snap.exitCode})`;
+  }
   if (snap.exitCode !== undefined) return `exit ${snap.exitCode}`;
   return snap.status;
 }

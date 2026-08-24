@@ -7,7 +7,7 @@
   "type": "module",
   "private": true,
   "devDependencies": {
-    "@effect/tsgo": "^0.24.2",
+    "@effect/tsgo": "0.24.3",
     "typescript": "^7.0.2"
   }
 }
