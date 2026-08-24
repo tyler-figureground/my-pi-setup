@@ -22,6 +22,26 @@ test("Windows command shims run through cmd.exe without Node spawn EINVAL", () =
   );
 });
 
+test("Windows batch shims use the same guarded cmd.exe boundary", () => {
+  assert.deepEqual(
+    codexProcessInvocation(
+      "C:\\Program Files\\npm\\codex.bat",
+      "win32",
+      "C:\\Windows\\System32\\cmd.exe",
+    ),
+    {
+      file: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\npm\\codex.bat" app-server --stdio"',
+      ],
+      windowsVerbatimArguments: true,
+    },
+  );
+});
+
 test("native Codex executables spawn directly", () => {
   assert.deepEqual(
     codexProcessInvocation("C:\\tools\\codex.exe", "win32", "cmd.exe"),

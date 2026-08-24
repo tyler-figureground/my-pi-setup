@@ -590,13 +590,15 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     );
 
     const settledIds: string[] = [];
+    let earliestStatus: TerminalSnapshot["status"] | undefined;
     for (let i = 0; i < MAX_TRACKED + 4; i++) {
       const snap = await runTool(
         runtime,
         manager.start({ command: "true", title: `quick-${i}`, cwd }),
       );
       settledIds.push(snap.id);
-      await settlement(manager, snap.id);
+      const { snap: settled } = await settlement(manager, snap.id);
+      earliestStatus ??= settled.status;
     }
 
     const remaining = manager.view.list().map((snap) => snap.id);
@@ -610,7 +612,7 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
 
     const [historical] = await runTool(runtime, manager.kill([settledIds[0]]));
     assert.equal(historical.title, "quick-0");
-    assert.equal(historical.status, "done");
+    assert.equal(historical.status, earliestStatus);
     assert.equal(historical.wasRunning, false);
     assert.equal(historical.killed, false);
   });

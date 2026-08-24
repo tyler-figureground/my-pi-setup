@@ -84,7 +84,10 @@ export function codexProcessInvocation(
   comSpec = process.env.ComSpec ?? "cmd.exe",
 ) {
   const args = ["app-server", "--stdio"];
-  if (platform === "win32" && binary.toLowerCase().endsWith(".cmd")) {
+  // Node rejects direct .cmd/.bat spawning on Windows after CVE-2024-27980.
+  // Use an explicit cmd.exe boundary rather than shell mode so quoting and
+  // argument handling remain deterministic and avoid DEP0190.
+  if (platform === "win32" && /\.(cmd|bat)$/i.test(binary)) {
     const command = `"${binary}" ${args.join(" ")}`;
     return {
       file: comSpec,
