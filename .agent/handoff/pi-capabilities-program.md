@@ -68,8 +68,8 @@ Phase 0 baseline stabilization complete and integrated into live `main`. Stop be
 
 ## Repo state
 
-- Live branch: `main`
-- Ahead 7 / behind 0 after live-integration continuity commit
+- Live branch: `main`, tracking `fork/main`
+- Ahead 0 / behind 0 after final handoff push; ahead 7 / behind 0 relative to original `origin/main`
 - Live checkout: `C:/Users/Tyler/.pi/agent`
 - Implementation worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
 - Pre-existing deleted `AGENTS.md` and untracked `skills/impeccable/` preserved: yes
@@ -83,8 +83,9 @@ Phase 0 baseline stabilization complete and integrated into live `main`. Stop be
 - `87a2dca` - plan, ledger, risks, decisions, and handoff.
 - `1b1e784` - protected Codex launcher synthesis and pruning-history regression stabilization.
 - `738800d` - verification ledger, decision, and reconciliation handoff update.
-- Live-integration continuity commit - live verification evidence and final handoff.
+- `e22cc5b` - live verification evidence and integration handoff.
+- Final publication handoff commit - fork and tracking state.
 
 ## Next exact action
 
-Push integrated Phase 0 only with explicit approval. Do not begin Phase 1 until explicitly requested.
+Do not begin Phase 1 until explicitly requested.
