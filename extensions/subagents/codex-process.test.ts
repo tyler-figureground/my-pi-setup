@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { codexProcessInvocation } from "./src/backends/codex.ts";
+
+test("Windows command shims run through cmd.exe without Node spawn EINVAL", () => {
+  assert.deepEqual(
+    codexProcessInvocation(
+      "C:\\Program Files\\npm\\codex.cmd",
+      "win32",
+      "C:\\Windows\\System32\\cmd.exe",
+    ),
+    {
+      file: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\npm\\codex.cmd" app-server --stdio"',
+      ],
+      windowsVerbatimArguments: true,
+    },
+  );
+});
+
+test("native Codex executables spawn directly", () => {
+  assert.deepEqual(
+    codexProcessInvocation("C:\\tools\\codex.exe", "win32", "cmd.exe"),
+    {
+      file: "C:\\tools\\codex.exe",
+      args: ["app-server", "--stdio"],
+      windowsVerbatimArguments: false,
+    },
+  );
+  assert.deepEqual(codexProcessInvocation("/usr/bin/codex", "linux"), {
+    file: "/usr/bin/codex",
+    args: ["app-server", "--stdio"],
+    windowsVerbatimArguments: false,
+  });
+});
