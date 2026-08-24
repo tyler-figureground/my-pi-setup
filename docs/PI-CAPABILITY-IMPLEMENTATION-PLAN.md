@@ -1182,6 +1182,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-24 | Phase 0 Windows processes | `366fa6f`, `2c58fa3` | `npm run test:unit`; `npm run test:integration` | Native Windows process trees | Pass: 74 unit, 67 integration; 4 POSIX-only skipped | `cmd.exe` argument boundary, forced tree kill, truthful kill state, platform paths, Codex `.cmd` launcher |
 | 2026-08-24 | Phase 0 exit | `4dd6b32`, `366fa6f`, `2c58fa3` | `npm ci`; `npm run install:extensions:ci`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Offline production-extension smoke and process-leak gate; TUI checklist at `docs/verification/phase-0-tui-smoke.md` |
 | 2026-08-24 | Protected Codex reconciliation | `1b1e784` | focused Codex process tests; pruning test 3x; `npm run test:integration`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Synthesized explicit `cmd.exe` boundary with `.cmd`/`.bat` coverage; corrected pruning-history assertion exposed under concurrent Windows load |
+| 2026-08-24 | Phase 0 live integration | `738800d` | root and extension dependency installs; dependency-tree checks; `npm run verify` from live checkout | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; relocated DLL-locked prior dependency trees to external safety backup |
 
 # Decision log
 

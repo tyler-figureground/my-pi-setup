@@ -12,7 +12,7 @@ Execute the durable implementation program for every feature marked `[X]` in `C:
 
 ## Current phase
 
-Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler review.
+Phase 0 baseline stabilization complete and integrated into live `main`. Stop before Phase 1 pending Tyler approval.
 
 ## Completed this session
 
@@ -28,6 +28,8 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - [x] Added `docs/verification/phase-0-tui-smoke.md`.
 - [x] Reconciled protected Codex launcher intent on the implementation branch: explicit `cmd.exe` boundary now handles `.cmd` and `.bat`, retains rationale, and has regression coverage.
 - [x] Corrected pruning-history verification to compare retained status with the original settlement, eliminating a concurrent Windows-load false assumption without weakening behavior.
+- [x] Fast-forwarded verified Phase 0 into live `main` while preserving deleted `AGENTS.md` and untracked `skills/impeccable/`.
+- [x] Installed live dependency trees, relocated DLL-locked prior trees to an external safety backup, normalized the live worktree under LF policy, and passed full verification from the live checkout.
 
 ## In progress
 
@@ -36,7 +38,7 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 ## Blocked
 
 - Automated visual TUI verification needs a real ConPTY terminal. Attempt through this harness returned `stdin is not a tty`; manual checklist recorded. Headless lifecycle counterparts pass.
-- Applying the branch to live config still requires explicit integration approval. Codex reconciliation is complete and verified on the implementation branch; no live file was changed.
+- None for Phase 0 integration.
 
 ## Files changed
 
@@ -53,8 +55,8 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 
 ## Verification
 
-- `npm ci` - pass.
-- `npm run install:extensions:ci` - pass for all 10 extension packages.
+- Root `npm ci` - pass.
+- Extension dependency installs and `npm ls --depth=0` - pass for all 10 extension packages. Loaded native DLLs required relocating four prior `node_modules` trees outside the repo before fresh installs.
 - Pi dependency tree - all direct/nested Pi libraries `0.84.3`.
 - Effect topology - all seven Effect-using extension trees `4.0.0-beta.101`.
 - `npm run verify` - pass.
@@ -66,11 +68,12 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 
 ## Repo state
 
-- Branch: `pi-capabilities-phase-0`
-- Ahead 6 / behind 0 after reconciliation continuity commit
-- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
-- Pre-existing dirty files preserved: yes
-- Live checkout remained on `main`
+- Live branch: `main`
+- Ahead 7 / behind 0 after live-integration continuity commit
+- Live checkout: `C:/Users/Tyler/.pi/agent`
+- Implementation worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
+- Pre-existing deleted `AGENTS.md` and untracked `skills/impeccable/` preserved: yes
+- External safety backup: `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-live-backup-20260824-151315`
 
 ## Commits
 
@@ -79,8 +82,9 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - `2c58fa3` - Codex Windows command-shim regression test.
 - `87a2dca` - plan, ledger, risks, decisions, and handoff.
 - `1b1e784` - protected Codex launcher synthesis and pruning-history regression stabilization.
-- Reconciliation continuity commit - verification ledger, decision, and handoff update.
+- `738800d` - verification ledger, decision, and reconciliation handoff update.
+- Live-integration continuity commit - live verification evidence and final handoff.
 
 ## Next exact action
 
-Request explicit approval to integrate the verified Phase 0 branch into the protected live checkout. Do not begin Phase 1 until explicitly requested.
+Push integrated Phase 0 only with explicit approval. Do not begin Phase 1 until explicitly requested.
