@@ -1181,6 +1181,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-24 | Phase 0 formatting | `4dd6b32` | `npm run format:check` | n/a | Pass | LF policy in `.gitattributes`; 98 failures diagnosed as CRLF-only |
 | 2026-08-24 | Phase 0 Windows processes | `366fa6f`, `2c58fa3` | `npm run test:unit`; `npm run test:integration` | Native Windows process trees | Pass: 74 unit, 67 integration; 4 POSIX-only skipped | `cmd.exe` argument boundary, forced tree kill, truthful kill state, platform paths, Codex `.cmd` launcher |
 | 2026-08-24 | Phase 0 exit | `4dd6b32`, `366fa6f`, `2c58fa3` | `npm ci`; `npm run install:extensions:ci`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Offline production-extension smoke and process-leak gate; TUI checklist at `docs/verification/phase-0-tui-smoke.md` |
+| 2026-08-24 | Protected Codex reconciliation | `1b1e784` | focused Codex process tests; pruning test 3x; `npm run test:integration`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Synthesized explicit `cmd.exe` boundary with `.cmd`/`.bat` coverage; corrected pruning-history assertion exposed under concurrent Windows load |
 
 # Decision log
 
@@ -1198,6 +1199,7 @@ Record durable decisions here, then link a full ADR when needed.
 | D008 | 2026-08-24 | Repository text uses LF; Windows command files use CRLF | Accepted | Stable Prettier behavior under Git Bash and `core.autocrlf=true` |
 | D009 | 2026-08-24 | Deterministic unit/integration tests are default; provider tests are live-only | Accepted | No paid or credentialed calls from `npm test` |
 | D010 | 2026-08-24 | Invoke Windows shell command strings and `.cmd` shims through explicit `cmd.exe` boundaries | Accepted | Prevent Node 26 `spawn EINVAL`, quote corruption, and orphaned descendants |
+| D011 | 2026-08-24 | Reconcile protected live Codex work by retaining explicit `cmd.exe` invocation and adding `.bat` support plus rationale | Accepted | Preserves live intent while keeping deterministic quoting, testable invocation, and DEP0190 avoidance |
 
 # Risk register
 

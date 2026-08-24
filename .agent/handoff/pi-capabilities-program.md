@@ -26,6 +26,8 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - [x] Added LF policy and made formatting gate green.
 - [x] Added offline production-extension, print, JSON, RPC, reload, shutdown, and process-leak smoke coverage.
 - [x] Added `docs/verification/phase-0-tui-smoke.md`.
+- [x] Reconciled protected Codex launcher intent on the implementation branch: explicit `cmd.exe` boundary now handles `.cmd` and `.bat`, retains rationale, and has regression coverage.
+- [x] Corrected pruning-history verification to compare retained status with the original settlement, eliminating a concurrent Windows-load false assumption without weakening behavior.
 
 ## In progress
 
@@ -34,7 +36,7 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 ## Blocked
 
 - Automated visual TUI verification needs a real ConPTY terminal. Attempt through this harness returned `stdin is not a tty`; manual checklist recorded. Headless lifecycle counterparts pass.
-- Applying the branch to live config requires explicit reconciliation with Tyler's protected live modification to `extensions/subagents/src/backends/codex.ts`. No live file was changed.
+- Applying the branch to live config still requires explicit integration approval. Codex reconciliation is complete and verified on the implementation branch; no live file was changed.
 
 ## Files changed
 
@@ -42,7 +44,8 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - `package.json`, `package-lock.json`, extension package manifests/locks - dependency pins and verification scripts.
 - `extensions/background-terminals/` - Windows shell/process fixes and regression coverage.
 - `extensions/file-search/index.spec.ts` - platform-native path fixtures.
-- `extensions/subagents/src/backends/codex.ts`, `codex-process.test.ts` - Windows command-shim launcher and test.
+- `extensions/subagents/src/backends/codex.ts`, `codex-process.test.ts` - Windows `.cmd`/`.bat` command-shim launcher and tests.
+- `extensions/background-terminals/manager.test.ts` - pruning history asserts preserved settlement status under concurrent Windows load.
 - `scripts/` - test partition, dependency install, changed-file formatting.
 - `tests/smoke/` - offline CLI lifecycle harness.
 - `SETUP.md`, Effect notes, TUI checklist - setup and verification documentation.
@@ -55,7 +58,7 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - Pi dependency tree - all direct/nested Pi libraries `0.84.3`.
 - Effect topology - all seven Effect-using extension trees `4.0.0-beta.101`.
 - `npm run verify` - pass.
-- Unit - 74 pass.
+- Unit - 75 pass.
 - Integration - 67 pass; 4 POSIX-only cases skipped on Windows.
 - Smoke - pass: production extensions, print, JSON, RPC, reload, shutdown, no leaks.
 - Live Claude/Codex - 4/4 pass.
@@ -64,7 +67,7 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 ## Repo state
 
 - Branch: `pi-capabilities-phase-0`
-- Ahead 4 / behind 0 after continuity commit
+- Ahead 6 / behind 0 after reconciliation continuity commit
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
 - Pre-existing dirty files preserved: yes
 - Live checkout remained on `main`
@@ -74,8 +77,10 @@ Phase 0 baseline stabilization complete. Stop before Phase 1 pending Tyler revie
 - `4dd6b32` - LF formatting baseline.
 - `366fa6f` - Phase 0 dependency, process, test, and smoke stabilization.
 - `2c58fa3` - Codex Windows command-shim regression test.
-- Continuity commit - plan, ledger, risks, decisions, and handoff.
+- `87a2dca` - plan, ledger, risks, decisions, and handoff.
+- `1b1e784` - protected Codex launcher synthesis and pruning-history regression stabilization.
+- Reconciliation continuity commit - verification ledger, decision, and handoff update.
 
 ## Next exact action
 
-Review Phase 0 summary and protected Codex-file reconciliation. Do not begin Phase 1 until explicitly requested.
+Request explicit approval to integrate the verified Phase 0 branch into the protected live checkout. Do not begin Phase 1 until explicitly requested.
