@@ -12,7 +12,7 @@ Execute the durable implementation program for every feature marked `[X]` in `C:
 
 ## Current phase
 
-Phase 1 platform foundation complete and independently hardened in isolated worktree. Live fast-forward integration **IN PROGRESS**.
+Phase 1 platform foundation complete, independently hardened, and integrated into live `main`. Stop before Phase 2 pending Tyler approval.
 
 ## Completed this session
 
@@ -31,6 +31,9 @@ Phase 1 platform foundation complete and independently hardened in isolated work
 - [x] Completed two review passes and fixed role propagation, junction trust/layout, lifecycle late-start cleanup, StateStore ABA/validation/bounds/backup/diagnostics, artifact corruption/metadata conflicts, and strict smoke findings.
 - [x] Re-reviewed Phase 1 before integration and fixed reproduced lifecycle timeout leaks, bare-linked-worktree identity, parent extension leakage into child roles, canonical trust wiring, malformed optimistic-concurrency inputs, SQLite backup sidecar collisions, ArtifactStore partial collection deletion, junction traversal, stale-lock ABA races, crashed reclamation guards, and export-to-lock-path poisoning.
 - [x] Added native Windows and interface-level regressions for every material review finding; final isolated `npm run verify` passed.
+- [x] Published hardening commit `9b97aba`, fast-forwarded live `main`, and preserved deleted `AGENTS.md` plus untracked `skills/impeccable/`.
+- [x] Reinstalled root and all 11 extension dependency trees in live checkout; relocated DLL-locked `file-search` and `git-info` trees to external safety backup instead of deleting them.
+- [x] Ran final `npm run verify` from live checkout: 135 unit, 99 integration, 22 delegated file-search, smoke, and Claude/Codex 4/4 all passed.
 - [x] Fetched remote before survey; started `pi-capabilities-phase-0` from `origin/main`.
 - [x] Created external worktree at `~/.worktrees/my-pi-setup/pi-capabilities-phase-0` with independent `node_modules` installs.
 - [x] Preserved live deleted `AGENTS.md`, modified `extensions/subagents/src/backends/codex.ts`, and untracked `skills/impeccable/`.
@@ -48,9 +51,7 @@ Phase 1 platform foundation complete and independently hardened in isolated work
 
 ## In progress
 
-- [ ] Commit and publish Phase 1 review hardening.
-- [ ] Fast-forward verified Phase 1 into live `main` while preserving pre-existing dirty state.
-- [ ] Reinstall/verify from live checkout and record final evidence. Phase 2 remains intentionally unstarted.
+- [ ] None. Phase 2 intentionally not started.
 
 ## Blocked
 
@@ -86,6 +87,7 @@ Prior Phase 0 files:
 - Root `npm ci` - pass.
 - Independent extension installs - pass for all 11 extension packages, including new `platform` package; no junctioned dependency trees.
 - Final isolated `npm run verify` after review hardening - pass.
+- Final live-checkout `npm run verify` after dependency reinstall - pass.
 - Unit - 135 pass.
 - Integration - 99 pass; 4 POSIX-only cases skipped on Windows; delegated file-search - 22 pass.
 - Smoke - pass: exact public tool schemas, production extensions, print, JSON, RPC, reload, shutdown, no leaks.
@@ -102,13 +104,14 @@ Phase 0 baseline details:
 
 ## Repo state
 
-- Phase 1 branch: `pi-capabilities-phase-1`, tracking `fork/pi-capabilities-phase-1`
-- Branch state before final integration fetch/commit: ahead 0 / behind 0 relative to `fork/pi-capabilities-phase-1`; ahead 1 / behind 0 relative to `fork/main`
+- Live branch: `main`, ahead 2 / behind 0 relative to `fork/main` before final evidence commit
+- Phase 1 branch: `pi-capabilities-phase-1`, tracking `fork/pi-capabilities-phase-1`, ahead 0 / behind 0 after hardening push
 - Live checkout: `C:/Users/Tyler/.pi/agent`
 - Phase 1 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-1`
 - Phase 0 worktree retained: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
 - Pre-existing deleted `AGENTS.md` and untracked `skills/impeccable/` preserved: yes
-- External safety backup: `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-live-backup-20260824-151315`
+- Phase 0 external safety backup: `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-live-backup-20260824-151315`
+- Phase 1 DLL-lock safety backup: `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`
 
 ## Commits
 
@@ -125,4 +128,4 @@ Phase 0 baseline details:
 
 ## Next exact action
 
-Re-fetch, commit/push review hardening, then fast-forward live `main`, install extension dependencies, and run `npm run verify` from the live checkout. Do not begin Phase 2.
+Do not begin Phase 2 until explicitly requested.
