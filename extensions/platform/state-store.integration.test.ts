@@ -5,6 +5,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -12,12 +13,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import {
   CURRENT_SCHEMA_VERSION,
+  createMemoryStateStore,
   createSqliteStateStore,
   type StateStore,
 } from "./src/core/persistence/index.ts";
@@ -240,6 +242,180 @@ if (isContentionWorker) {
     }
   });
 
+  for (const adapter of ["memory", "node:sqlite"] as const) {
+    test(`${adapter} rejects malformed record versions and lease fences`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "pi-state-validation-"));
+      const store =
+        adapter === "memory"
+          ? createMemoryStateStore()
+          : opened(
+              createSqliteStateStore({ path: join(directory, "state.sqlite") }),
+            );
+      const malformedValues: unknown[] = [
+        0,
+        -1,
+        1.5,
+        Number.MAX_SAFE_INTEGER + 1,
+        "1",
+        true,
+        {},
+      ];
+
+      try {
+        for (const [index, malformed] of malformedValues.entries()) {
+          for (const operation of [
+            {
+              type: "put-record",
+              collection: "records",
+              key: `put-${index}`,
+              metadata: {},
+              expectedVersion: malformed,
+            },
+            {
+              type: "delete-record",
+              collection: "records",
+              key: `delete-${index}`,
+              expectedVersion: malformed,
+            },
+            {
+              type: "renew-lease",
+              resource: "lease",
+              owner: "worker",
+              fence: malformed,
+              ttlMs: 1_000,
+            },
+            {
+              type: "release-lease",
+              resource: "lease",
+              owner: "worker",
+              fence: malformed,
+            },
+          ]) {
+            const result = await store.transact({
+              transactionId: `tx-${adapter}-${operation.type}-${index}`,
+              operations: [operation],
+            } as unknown as Parameters<StateStore["transact"]>[0]);
+            assert.equal(result.ok, false, `${operation.type}: ${malformed}`);
+            if (!result.ok) {
+              assert.equal(
+                result.error.code,
+                "INVALID_REQUEST",
+                `${operation.type}: ${malformed}`,
+              );
+            }
+          }
+        }
+        for (const [index, malformed] of [null, undefined].entries()) {
+          for (const type of ["renew-lease", "release-lease"] as const) {
+            const result = await store.transact({
+              transactionId: `tx-${adapter}-${type}-empty-${index}`,
+              operations: [
+                {
+                  type,
+                  resource: "lease",
+                  owner: "worker",
+                  fence: malformed,
+                  ...(type === "renew-lease" ? { ttlMs: 1_000 } : {}),
+                },
+              ],
+            } as unknown as Parameters<StateStore["transact"]>[0]);
+            assert.equal(result.ok, false, `${type}: ${malformed}`);
+            if (!result.ok) {
+              assert.equal(result.error.code, "INVALID_REQUEST");
+            }
+          }
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    test(`${adapter} accepts null or positive safe expected versions`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "pi-state-version-input-"));
+      const store =
+        adapter === "memory"
+          ? createMemoryStateStore()
+          : opened(
+              createSqliteStateStore({ path: join(directory, "state.sqlite") }),
+            );
+
+      try {
+        const created = await store.transact({
+          transactionId: `tx-${adapter}-valid-create`,
+          operations: [
+            {
+              type: "put-record",
+              collection: "records",
+              key: "valid-version",
+              metadata: { version: 1 },
+              expectedVersion: null,
+            },
+          ],
+        });
+        assert.equal(created.ok, true);
+
+        const updated = await store.transact({
+          transactionId: `tx-${adapter}-valid-update`,
+          operations: [
+            {
+              type: "put-record",
+              collection: "records",
+              key: "valid-version",
+              metadata: { version: 2 },
+              expectedVersion: 1,
+            },
+          ],
+        });
+        assert.equal(updated.ok, true);
+
+        const explicitlyUndefined = await store.transact({
+          transactionId: `tx-${adapter}-valid-undefined`,
+          operations: [
+            {
+              type: "put-record",
+              collection: "records",
+              key: "explicit-undefined",
+              metadata: {},
+              expectedVersion: undefined,
+            },
+          ],
+        });
+        assert.equal(explicitlyUndefined.ok, true);
+
+        const deletedWithUndefined = await store.transact({
+          transactionId: `tx-${adapter}-valid-undefined-delete`,
+          operations: [
+            {
+              type: "delete-record",
+              collection: "records",
+              key: "explicit-undefined",
+              expectedVersion: undefined,
+            },
+          ],
+        });
+        assert.equal(deletedWithUndefined.ok, true);
+
+        const absentDelete = await store.transact({
+          transactionId: `tx-${adapter}-valid-null-delete`,
+          operations: [
+            {
+              type: "delete-record",
+              collection: "records",
+              key: "absent",
+              expectedVersion: null,
+            },
+          ],
+        });
+        assert.equal(absentDelete.ok, false);
+        if (!absentDelete.ok) {
+          assert.equal(absentDelete.error.code, "VERSION_CONFLICT");
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("node:sqlite record versions survive delete and recreation", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-state-record-head-"));
     const path = join(directory, "state.sqlite");
@@ -325,6 +501,8 @@ if (isContentionWorker) {
         backup.close();
       }
 
+      assert.deepEqual(readdirSync(dirname(destination)), ["state.sqlite"]);
+
       if (process.platform !== "win32") {
         assert.equal(statSync(path).mode & 0o777, 0o600);
         assert.equal(statSync(destination).mode & 0o777, 0o600);
@@ -333,6 +511,106 @@ if (isContentionWorker) {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test("SQLite backup rejects an existing destination family", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-state-backup-existing-"));
+    const path = join(directory, "source.sqlite");
+    const destination = join(directory, "destination.sqlite");
+    let staleWriter: DatabaseSync | undefined;
+    try {
+      const store = opened(createSqliteStateStore({ path }));
+      const sourceWrite = await store.transact({
+        transactionId: "tx-source-backup",
+        operations: [
+          {
+            type: "put-record",
+            collection: "runs",
+            key: "source",
+            metadata: { status: "source" },
+          },
+        ],
+      });
+      assert.equal(sourceWrite.ok, true);
+
+      staleWriter = new DatabaseSync(destination);
+      staleWriter.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE stale (value TEXT NOT NULL);
+        INSERT INTO stale VALUES ('destination');
+      `);
+      assert.equal(existsSync(destination), true);
+      assert.equal(existsSync(`${destination}-wal`), true);
+      assert.equal(existsSync(`${destination}-shm`), true);
+
+      const occupied = await store.export({
+        format: "sqlite-backup",
+        destination,
+      });
+      assert.equal(occupied.ok, false);
+      if (!occupied.ok) assert.equal(occupied.error.code, "INVALID_REQUEST");
+
+      staleWriter.close();
+      staleWriter = undefined;
+      rmSync(destination, { force: true });
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        const sidecarOnlyDestination = join(
+          directory,
+          `sidecar-only-${suffix.slice(1)}.sqlite`,
+        );
+        writeFileSync(`${sidecarOnlyDestination}${suffix}`, "stale", "utf8");
+        const sidecarOnly = await store.export({
+          format: "sqlite-backup",
+          destination: sidecarOnlyDestination,
+        });
+        assert.equal(sidecarOnly.ok, false, suffix);
+        if (!sidecarOnly.ok) {
+          assert.equal(sidecarOnly.error.code, "INVALID_REQUEST", suffix);
+        }
+      }
+    } finally {
+      staleWriter?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    test(`SQLite backup rejects destination=<store>${suffix}`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "pi-state-backup-sidecar-"));
+      const path = join(directory, "state.sqlite");
+      try {
+        const store = opened(createSqliteStateStore({ path }));
+        const exported = await store.export({
+          format: "sqlite-backup",
+          destination: `${path}${suffix}`,
+        });
+        assert.equal(exported.ok, false);
+        if (!exported.ok) assert.equal(exported.error.code, "INVALID_REQUEST");
+
+        const diagnostics = await store.diagnose();
+        assert.equal(diagnostics.ok && diagnostics.value.integrity, "ok");
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    test(`SQLite backup rejects when destination${suffix}=<store>`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "pi-state-backup-reverse-"));
+      const destination = join(directory, "state.sqlite");
+      const path = `${destination}${suffix}`;
+      try {
+        const store = opened(createSqliteStateStore({ path }));
+        const exported = await store.export({
+          format: "sqlite-backup",
+          destination,
+        });
+        assert.equal(exported.ok, false);
+        if (!exported.ok) assert.equal(exported.error.code, "INVALID_REQUEST");
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("SQLite backup rejects a junction alias of the source database", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-state-backup-alias-"));
@@ -343,12 +621,14 @@ if (isContentionWorker) {
     const path = join(data, "state.sqlite");
     try {
       const store = opened(createSqliteStateStore({ path }));
-      const exported = await store.export({
-        format: "sqlite-backup",
-        destination: join(alias, "state.sqlite"),
-      });
-      assert.equal(exported.ok, false);
-      if (!exported.ok) assert.equal(exported.error.code, "INVALID_REQUEST");
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        const exported = await store.export({
+          format: "sqlite-backup",
+          destination: join(alias, `state.sqlite${suffix}`),
+        });
+        assert.equal(exported.ok, false, suffix);
+        if (!exported.ok) assert.equal(exported.error.code, "INVALID_REQUEST");
+      }
     } finally {
       unlinkSync(alias);
       rmSync(directory, { recursive: true, force: true });

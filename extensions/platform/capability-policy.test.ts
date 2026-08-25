@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EXECUTION_ROLES } from "../shared/execution-role.ts";
 import {
   actorRoles,
   createCapabilityPolicy,
@@ -164,7 +165,8 @@ test("operation vocabulary has conservative normal and plan defaults", () => {
   }
 });
 
-test("all six actor roles are explicit and children cannot orchestrate", () => {
+test("all six actor roles are canonical and children cannot orchestrate", () => {
+  assert.equal(actorRoles, EXECUTION_ROLES);
   assert.deepEqual(actorRoles, [
     "parent",
     "subagent",

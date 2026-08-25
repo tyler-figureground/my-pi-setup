@@ -7,12 +7,25 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
+import type {
+  ExtensionAPI,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime } from "effect";
+import subagentsExtension from "./index.ts";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
-import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
+import type {
+  BackendName,
+  ParentContext,
+  SpawnTask,
+  SubagentSnapshot,
+} from "./src/domain.ts";
 import {
   SubagentManager,
   SubagentManagerLive,
@@ -273,4 +286,104 @@ test("send steers an idle subagent into another turn", async () => {
     assert.equal(afterSecond?.status, "done");
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
+});
+
+function completedSnapshot(spawnTask: SpawnTask): SubagentSnapshot {
+  return {
+    id: "sub-fixture",
+    origin: "model",
+    backend: "pi",
+    title: spawnTask.title,
+    prompt: spawnTask.prompt,
+    cwd: spawnTask.cwd,
+    status: "done",
+    createdAt: Date.now(),
+    settledAt: Date.now(),
+    meta: { backend: "pi", modelLabel: "fixture/model" },
+    usage: {},
+    transcript: [],
+    liveTools: [],
+    queued: [],
+    finalText: "done",
+    turns: 1,
+  };
+}
+
+test("subagent_spawn passes canonical cwd and resolved trust to the backend", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-subagent-context-"));
+  try {
+    const parentCwd = path.join(directory, "parent");
+    const alternate = path.join(directory, "alternate");
+    const alias = path.join(parentCwd, "child-alias");
+    await Promise.all([mkdir(parentCwd), mkdir(alternate)]);
+    await symlink(
+      alternate,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const tools = new Map<string, ToolDefinition>();
+    let observed:
+      | {
+          harness: string;
+          task: SpawnTask;
+          signal: AbortSignal | undefined;
+        }
+      | undefined;
+    subagentsExtension(
+      {
+        on() {},
+        registerTool(definition: ToolDefinition) {
+          tools.set(definition.name, definition);
+        },
+        registerMessageRenderer() {},
+        registerEntryRenderer() {},
+        registerCommand() {},
+        getThinkingLevel: () => "high",
+      } as unknown as ExtensionAPI,
+      {
+        async spawn(harness, spawnTask, signal) {
+          observed = { harness, task: spawnTask, signal };
+          return completedSnapshot(spawnTask);
+        },
+      },
+    );
+
+    const spawn = tools.get("subagent_spawn");
+    assert.ok(spawn);
+    const signal = new AbortController().signal;
+    const modelRegistry = { fixture: true };
+    await spawn.execute(
+      "call-1",
+      {
+        prompt: "inspect",
+        name: "child",
+        harness: "pi",
+        working_dir: "child-alias",
+      } as never,
+      signal,
+      undefined,
+      {
+        cwd: parentCwd,
+        isProjectTrusted: () => true,
+        model: { provider: "fixture", id: "parent-model" },
+        modelRegistry,
+      } as never,
+    );
+
+    assert.ok(observed);
+    assert.equal(observed.harness, "pi");
+    assert.equal(observed.signal, signal);
+    assert.equal(observed.task.cwd, await realpath(alternate));
+    assert.equal(observed.task.parent.parentCwd, parentCwd);
+    assert.equal(observed.task.parent.projectTrusted, false);
+    assert.deepEqual(observed.task.parent.inheritedModel, {
+      provider: "fixture",
+      id: "parent-model",
+    });
+    assert.equal(observed.task.parent.inheritedThinkingLevel, "high");
+    assert.equal(observed.task.parent.modelRegistry, modelRegistry);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

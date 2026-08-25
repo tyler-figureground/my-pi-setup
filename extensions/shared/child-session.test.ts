@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -24,9 +25,12 @@ import { Type } from "typebox";
 import { CHILD_EXECUTION_ROLES } from "./execution-role.ts";
 import {
   bindChildSessionExtensions,
+  canonicalPathKey,
+  CHILD_EXCLUDED_EXTENSION_NAMES,
   CHILD_EXCLUDED_TOOL_NAMES,
   childToolPolicy,
   createChildResources,
+  normalizeCanonicalPath,
   resolveStandaloneChildProjectContext,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
@@ -201,12 +205,96 @@ test("resource loading gates project extensions but retains global extensions", 
   });
 });
 
-test("every child role retains the compatibility denylist", () => {
+test("child loading omits parent lifecycle hooks but keeps child-safe extensions", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const parentMarker = path.join(directory, "parent-started");
+    const safeMarker = path.join(directory, "safe-started");
+    await mkdir(cwd);
+    await mkdir(path.join(agentDir, "extensions", "subagents"), {
+      recursive: true,
+    });
+    await mkdir(path.join(agentDir, "extensions", "file-search"), {
+      recursive: true,
+    });
+    const extensionSource = (toolName: string, marker: string) => `
+      import { writeFileSync } from "node:fs";
+      export default function (pi) {
+        pi.on("session_start", () => writeFileSync(${JSON.stringify(marker)}, "started"));
+        pi.registerTool({
+          name: ${JSON.stringify(toolName)}, label: ${JSON.stringify(toolName)},
+          description: "fixture", parameters: { type: "object", properties: {} },
+          async execute() { return { content: [{ type: "text", text: "ok" }] }; }
+        });
+      }
+    `;
+    await writeFile(
+      path.join(agentDir, "extensions", "subagents", "index.ts"),
+      extensionSource("subagent_spawn", parentMarker),
+    );
+    await writeFile(
+      path.join(agentDir, "extensions", "file-search", "index.ts"),
+      extensionSource("child_safe_tool", safeMarker),
+    );
+
+    const resources = await createChildResources({
+      role: "workflow",
+      cwd,
+      agentDir,
+      projectTrusted: false,
+    });
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: resources.loader,
+      settingsManager: resources.settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      ...resources.sessionOptions,
+    });
+    await bindChildSessionExtensions(session);
+
+    assert.equal(existsSync(parentMarker), false);
+    assert.equal(existsSync(safeMarker), true);
+    assert.equal(
+      session.getAllTools().some((tool) => tool.name === "subagent_spawn"),
+      false,
+    );
+    assert.equal(
+      session.getActiveToolNames().includes("child_safe_tool"),
+      true,
+    );
+    await shutdownAndDisposeChildSession(session);
+  });
+});
+
+test("role profiles retain the child tool contract", () => {
+  assert.deepEqual(CHILD_EXCLUDED_EXTENSION_NAMES, [
+    "ask-user",
+    "copy-all",
+    "git-info",
+    "model-info",
+    "platform",
+    "subagents",
+    "summaries",
+    "ui-customization",
+    "workflows",
+  ]);
   for (const role of CHILD_EXECUTION_ROLES) {
     assert.deepEqual(childToolPolicy(role), {
       excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
     });
   }
+});
+
+test("canonical path seam owns Windows display and comparison rules", () => {
+  if (process.platform !== "win32") return;
+  const extended = "\\\\?\\c:\\Users\\Fixture\\Project";
+  assert.equal(normalizeCanonicalPath(extended), "C:/Users/Fixture/Project");
+  assert.equal(
+    canonicalPathKey(extended),
+    canonicalPathKey("C:\\USERS\\FIXTURE\\PROJECT"),
+  );
 });
 
 test("alternate standalone cwd only uses explicit saved trust", async () => {

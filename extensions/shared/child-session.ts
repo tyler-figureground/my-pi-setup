@@ -7,6 +7,7 @@ import {
   ProjectTrustStore,
   SettingsManager,
   type AgentSession,
+  type LoadExtensionsResult,
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -15,6 +16,27 @@ import {
 } from "./execution-role.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+/** Canonical display form used wherever paths cross platform module seams. */
+export function normalizeCanonicalPath(value: string) {
+  let normalized = path.normalize(value);
+  if (process.platform !== "win32") return normalized;
+  if (normalized.startsWith("\\\\?\\UNC\\")) {
+    normalized = `\\\\${normalized.slice("\\\\?\\UNC\\".length)}`;
+  } else if (normalized.startsWith("\\\\?\\")) {
+    normalized = normalized.slice("\\\\?\\".length);
+  }
+  const portable = normalized.replaceAll("\\", "/");
+  return /^[a-z]:/i.test(portable)
+    ? `${portable[0]?.toUpperCase()}${portable.slice(1)}`
+    : portable;
+}
+
+/** Case-insensitive comparison key on Windows; display form elsewhere. */
+export function canonicalPathKey(value: string) {
+  const canonical = normalizeCanonicalPath(value);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
 
 /** Tools that headless children must not receive. Everything else stays enabled. */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
@@ -27,9 +49,63 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "ask_user",
 ] as const;
 
+/** Extensions whose public surface and session lifecycle belong to a parent. */
+export const CHILD_EXCLUDED_EXTENSION_NAMES = [
+  "ask-user",
+  "copy-all",
+  "git-info",
+  "model-info",
+  "platform",
+  "subagents",
+  "summaries",
+  "ui-customization",
+  "workflows",
+] as const;
+
+const compatibilityChildPolicy = {
+  excludedTools: CHILD_EXCLUDED_TOOL_NAMES,
+  excludedExtensions: CHILD_EXCLUDED_EXTENSION_NAMES,
+};
+
+const childRolePolicies = {
+  subagent: compatibilityChildPolicy,
+  workflow: compatibilityChildPolicy,
+  review: compatibilityChildPolicy,
+  scheduled: compatibilityChildPolicy,
+  "goal-worker": compatibilityChildPolicy,
+} as const satisfies Record<
+  ChildExecutionRole,
+  {
+    excludedTools: readonly string[];
+    excludedExtensions: readonly string[];
+  }
+>;
+
+function childExtensionName(filePath: string) {
+  const portable = normalizeCanonicalPath(filePath);
+  const basename = path.posix.basename(portable);
+  const entryName = basename.replace(/\.[^.]+$/, "");
+  return entryName === "index"
+    ? path.posix.basename(path.posix.dirname(portable))
+    : entryName;
+}
+
+export function filterChildExtensions(
+  base: LoadExtensionsResult,
+  role: ChildExecutionRole,
+) {
+  const excluded = new Set<string>(childRolePolicies[role].excludedExtensions);
+  return {
+    ...base,
+    extensions: base.extensions.filter(
+      (extension) => !excluded.has(childExtensionName(extension.resolvedPath)),
+    ),
+  };
+}
+
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
-export function childToolPolicy(_role: ChildExecutionRole) {
-  return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
+export function childToolPolicy(role: ChildExecutionRole) {
+  return { excludeTools: [...childRolePolicies[role].excludedTools] };
 }
 
 export interface ChildResourceOptions {
@@ -54,6 +130,7 @@ export async function createChildResources(options: ChildResourceOptions) {
     agentDir,
     settingsManager,
     eventBus,
+    extensionsOverride: (base) => filterChildExtensions(base, options.role),
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
@@ -72,17 +149,6 @@ export async function createChildResources(options: ChildResourceOptions) {
  * is trusted only when Pi's persisted trust store explicitly trusts it (or a
  * containing directory); unreadable/invalid trust data fails closed.
  */
-function canonicalTrustPath(value: string) {
-  let canonical = path.normalize(value);
-  if (process.platform !== "win32") return canonical;
-  if (canonical.startsWith("\\\\?\\UNC\\")) {
-    canonical = `\\\\${canonical.slice("\\\\?\\UNC\\".length)}`;
-  } else if (canonical.startsWith("\\\\?\\")) {
-    canonical = canonical.slice("\\\\?\\".length);
-  }
-  return canonical.toLowerCase();
-}
-
 export function resolveStandaloneChildProjectContext(options: {
   parentCwd: string;
   childCwd: string;
@@ -93,7 +159,7 @@ export function resolveStandaloneChildProjectContext(options: {
     const childCwd = realpathSync.native(path.resolve(options.childCwd));
     const parentCwd = realpathSync.native(path.resolve(options.parentCwd));
     const projectTrusted =
-      canonicalTrustPath(childCwd) === canonicalTrustPath(parentCwd)
+      canonicalPathKey(childCwd) === canonicalPathKey(parentCwd)
         ? options.parentTrusted
         : new ProjectTrustStore(options.agentDir ?? getAgentDir()).get(
             childCwd,

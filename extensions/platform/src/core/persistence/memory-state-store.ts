@@ -6,6 +6,8 @@ import {
   DEFAULT_SNAPSHOT_MAX_ENTRIES,
   DEFAULT_TRANSACTION_MAX_BYTES,
   DEFAULT_TRANSACTION_MAX_OPERATIONS,
+  isPositiveSafeInteger,
+  isValidExpectedVersion,
   type StateCompactRequest,
   type StateEvent,
   type StateLease,
@@ -19,7 +21,7 @@ import {
   type StateTransaction,
   type StateTransactionResult,
 } from "./state-store.ts";
-import { canonicalJson } from "./json.ts";
+import { canonicalJson, canonicalStateTransaction } from "./json.ts";
 
 interface MemoryReceipt {
   request: string;
@@ -144,8 +146,27 @@ function validateTransaction(
       );
     }
     if (
+      (operation.type === "put-record" || operation.type === "delete-record") &&
+      !isValidExpectedVersion(operation.expectedVersion)
+    ) {
+      return stateFailure(
+        "INVALID_REQUEST",
+        "Expected record version must be null or a positive safe integer",
+      );
+    }
+    if (
+      (operation.type === "renew-lease" ||
+        operation.type === "release-lease") &&
+      !isPositiveSafeInteger(operation.fence)
+    ) {
+      return stateFailure(
+        "INVALID_REQUEST",
+        "Lease fence must be a positive safe integer",
+      );
+    }
+    if (
       (operation.type === "claim-lease" || operation.type === "renew-lease") &&
-      (!Number.isSafeInteger(operation.ttlMs) || operation.ttlMs <= 0)
+      !isPositiveSafeInteger(operation.ttlMs)
     ) {
       return stateFailure(
         "INVALID_REQUEST",
@@ -158,7 +179,7 @@ function validateTransaction(
     }
   }
   try {
-    const request = canonicalJson(transaction);
+    const request = canonicalStateTransaction(transaction);
     if (Buffer.byteLength(request, "utf8") > maxTransactionBytes) {
       return stateFailure(
         "TRANSACTION_TOO_LARGE",

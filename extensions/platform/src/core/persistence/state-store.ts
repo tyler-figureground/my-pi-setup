@@ -63,7 +63,7 @@ export type StateMutation =
       readonly type: "delete-record";
       readonly collection: string;
       readonly key: string;
-      readonly expectedVersion?: number;
+      readonly expectedVersion?: number | null;
     }
   | {
       readonly type: "append-event";
@@ -205,4 +205,12 @@ export interface StateStoreOptions {
   readonly maxQueryLimit?: number;
   readonly maxSnapshotEntries?: number;
   readonly now?: () => number;
+}
+
+export function isPositiveSafeInteger(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function isValidExpectedVersion(value: unknown) {
+  return value === undefined || value === null || isPositiveSafeInteger(value);
 }

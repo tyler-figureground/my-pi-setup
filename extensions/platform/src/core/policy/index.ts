@@ -1,3 +1,8 @@
+import {
+  EXECUTION_ROLES,
+  type ExecutionRole,
+} from "../../../../shared/execution-role.ts";
+
 export const operationKinds = [
   "read",
   "local-write",
@@ -11,16 +16,8 @@ export const operationKinds = [
 
 export type OperationKind = (typeof operationKinds)[number];
 
-export const actorRoles = [
-  "parent",
-  "subagent",
-  "workflow",
-  "review",
-  "scheduled",
-  "goal-worker",
-] as const;
-
-export type ActorRole = (typeof actorRoles)[number];
+export const actorRoles = EXECUTION_ROLES;
+export type ActorRole = ExecutionRole;
 
 export type CapabilityOperation =
   | { readonly kind: "operation"; readonly name: OperationKind }

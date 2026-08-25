@@ -1,5 +1,16 @@
-import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import {
+  chmodSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { failure, success, type JsonObject } from "../result.ts";
 import {
@@ -9,6 +20,8 @@ import {
   DEFAULT_SNAPSHOT_MAX_ENTRIES,
   DEFAULT_TRANSACTION_MAX_BYTES,
   DEFAULT_TRANSACTION_MAX_OPERATIONS,
+  isPositiveSafeInteger,
+  isValidExpectedVersion,
   type StateCompactRequest,
   type StateEvent,
   type StateExportRequest,
@@ -24,7 +37,7 @@ import {
   type StateTransaction,
   type StateTransactionResult,
 } from "./state-store.ts";
-import { canonicalJson } from "./json.ts";
+import { canonicalJson, canonicalStateTransaction } from "./json.ts";
 
 export interface SqliteStateStoreOptions extends StateStoreOptions {
   readonly path: string;
@@ -123,8 +136,27 @@ function validateTransaction(
       );
     }
     if (
+      (operation.type === "put-record" || operation.type === "delete-record") &&
+      !isValidExpectedVersion(operation.expectedVersion)
+    ) {
+      return stateFailure(
+        "INVALID_REQUEST",
+        "Expected record version must be null or a positive safe integer",
+      );
+    }
+    if (
+      (operation.type === "renew-lease" ||
+        operation.type === "release-lease") &&
+      !isPositiveSafeInteger(operation.fence)
+    ) {
+      return stateFailure(
+        "INVALID_REQUEST",
+        "Lease fence must be a positive safe integer",
+      );
+    }
+    if (
       (operation.type === "claim-lease" || operation.type === "renew-lease") &&
-      (!Number.isSafeInteger(operation.ttlMs) || operation.ttlMs <= 0)
+      !isPositiveSafeInteger(operation.ttlMs)
     ) {
       return stateFailure(
         "INVALID_REQUEST",
@@ -137,7 +169,7 @@ function validateTransaction(
     }
   }
   try {
-    const request = canonicalJson(transaction);
+    const request = canonicalStateTransaction(transaction);
     if (Buffer.byteLength(request, "utf8") > maxTransactionBytes) {
       return stateFailure(
         "TRANSACTION_TOO_LARGE",
@@ -243,6 +275,12 @@ function canonicalFileCandidate(path: string) {
   return process.platform === "win32" ? candidate.toLowerCase() : candidate;
 }
 
+const SQLITE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+
+function sqliteFileFamily(path: string) {
+  return SQLITE_FILE_SUFFIXES.map((suffix) => `${path}${suffix}`);
+}
+
 function sameFileIdentity(left: string, right: string) {
   try {
     const leftStat = statSync(left);
@@ -251,6 +289,85 @@ function sameFileIdentity(left: string, right: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
+  }
+}
+
+function sqliteFileFamiliesCollide(left: string, right: string) {
+  return sqliteFileFamily(left).some((leftCandidate) =>
+    sqliteFileFamily(right).some(
+      (rightCandidate) =>
+        canonicalFileCandidate(leftCandidate) ===
+          canonicalFileCandidate(rightCandidate) ||
+        sameFileIdentity(leftCandidate, rightCandidate),
+    ),
+  );
+}
+
+function fileEntryExists(path: string) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function sqliteFileFamilyExists(path: string) {
+  return sqliteFileFamily(path).some(fileEntryExists);
+}
+
+function promoteTemporarySqliteBackup(temporary: string, destination: string) {
+  if (sqliteFileFamilyExists(destination)) return false;
+  try {
+    linkSync(temporary, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+  if (sqliteFileFamily(destination).slice(1).some(fileEntryExists)) {
+    unlinkSync(destination);
+    return false;
+  }
+  unlinkSync(temporary);
+  return true;
+}
+
+function removeTemporarySqliteBackup(directory: string, path: string) {
+  for (const candidate of sqliteFileFamily(path)) {
+    rmSync(candidate, { force: true });
+  }
+  rmdirSync(directory);
+}
+
+function verifySqliteBackup(path: string) {
+  const database = new DatabaseSync(path, {
+    enableForeignKeyConstraints: true,
+    enableDoubleQuotedStringLiterals: false,
+    allowExtension: false,
+  });
+  try {
+    database.exec("PRAGMA journal_mode = DELETE");
+    const rows = database
+      .prepare("PRAGMA integrity_check")
+      .all() as SqliteRow[];
+    if (
+      rows.length !== 1 ||
+      textColumn(rows[0], "integrity_check").toLowerCase() !== "ok"
+    ) {
+      throw new Error("SQLite backup integrity verification failed");
+    }
+    const schemaVersion = numberColumn(
+      database.prepare("PRAGMA user_version").get() as SqliteRow,
+      "user_version",
+    );
+    if (schemaVersion !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(
+        `SQLite backup schema verification failed: expected ${CURRENT_SCHEMA_VERSION}, got ${schemaVersion}`,
+      );
+    }
+  } finally {
+    database.close();
   }
 }
 
@@ -953,23 +1070,52 @@ function createAdapter(
         if (request.format === "sqlite-backup") {
           const destination = resolve(request.destination);
           mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
-          if (
-            canonicalFileCandidate(destination) ===
-              canonicalFileCandidate(path) ||
-            sameFileIdentity(destination, path)
-          ) {
+          if (sqliteFileFamiliesCollide(destination, path)) {
             return stateFailure(
               "INVALID_REQUEST",
-              "Backup destination must differ from store path",
+              "Backup destination and sidecars must differ from store files",
             );
           }
-          const pages = await backup(database, destination);
-          if (process.platform !== "win32") chmodSync(destination, 0o600);
-          return success({
-            format: "sqlite-backup" as const,
-            destination,
-            pages,
-          });
+          if (sqliteFileFamilyExists(destination)) {
+            return stateFailure(
+              "INVALID_REQUEST",
+              "Backup destination and sidecars must not already exist",
+            );
+          }
+          const temporaryDirectory = mkdtempSync(
+            join(dirname(destination), `.${basename(destination)}.backup-`),
+          );
+          const temporaryDestination = join(
+            temporaryDirectory,
+            basename(destination),
+          );
+          try {
+            // Let Windows release handles from a just-closed backup before promotion.
+            await new Promise((resolve) => setImmediate(resolve));
+            const pages = await backup(database, temporaryDestination);
+            verifySqliteBackup(temporaryDestination);
+            if (process.platform !== "win32") {
+              chmodSync(temporaryDestination, 0o600);
+            }
+            if (
+              !promoteTemporarySqliteBackup(temporaryDestination, destination)
+            ) {
+              return stateFailure(
+                "INVALID_REQUEST",
+                "Backup destination and sidecars must not already exist",
+              );
+            }
+            return success({
+              format: "sqlite-backup" as const,
+              destination,
+              pages,
+            });
+          } finally {
+            removeTemporarySqliteBackup(
+              temporaryDirectory,
+              temporaryDestination,
+            );
+          }
         }
         database.exec("BEGIN");
         snapshotOpen = true;

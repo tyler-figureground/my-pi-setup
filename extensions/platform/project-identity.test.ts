@@ -12,16 +12,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import { normalizeCanonicalPath } from "../shared/child-session.ts";
 import { createProjectIdentity } from "./src/core/projects/index.ts";
 
 const execFileAsync = promisify(execFile);
 
-function normalized(filePath: string) {
-  const normalizedPath = filePath.replaceAll("\\", "/");
-  return /^[a-z]:/i.test(normalizedPath)
-    ? `${normalizedPath[0]?.toUpperCase()}${normalizedPath.slice(1)}`
-    : normalizedPath;
-}
+const normalized = normalizeCanonicalPath;
 
 async function git(cwd: string, ...args: string[]) {
   await execFileAsync("git", args, { cwd });
@@ -169,6 +165,39 @@ test("bare repositories resolve without inventing a worktree", async () => {
         worktreeGitDir: canonicalBare,
         bare: true,
       },
+    );
+  });
+});
+
+test("a linked worktree of a bare repository has no invented main worktree", async () => {
+  await withTempDirectory(async (directory) => {
+    const source = path.join(directory, "source");
+    const bare = path.join(directory, "fixture.git");
+    const linked = path.join(directory, "linked");
+    await mkdir(source);
+    await git(source, "init");
+    await git(source, "config", "user.email", "fixture@example.test");
+    await git(source, "config", "user.name", "Fixture");
+    await writeFile(path.join(source, "tracked.txt"), "fixture\n", "utf8");
+    await git(source, "add", "tracked.txt");
+    await git(source, "commit", "-m", "fixture");
+    await git(directory, "clone", "--bare", source, bare);
+    await git(bare, "worktree", "add", linked);
+
+    const result = await createProjectIdentity().resolve(linked);
+
+    assert.equal(result.ok, true);
+    if (!result.ok || result.value.kind !== "git") return;
+    const canonicalBare = normalized(await realpath(bare));
+    const canonicalLinked = normalized(await realpath(linked));
+    assert.equal(result.value.bare, false);
+    assert.equal(result.value.repositoryRoot, canonicalLinked);
+    assert.equal(result.value.currentWorktree, canonicalLinked);
+    assert.equal(result.value.mainWorktree, null);
+    assert.equal(result.value.commonGitDir, canonicalBare);
+    assert.equal(
+      result.value.worktreeGitDir,
+      `${canonicalBare}/worktrees/linked`,
     );
   });
 });

@@ -140,7 +140,8 @@ export function createLifecycleSupervisor(
       throw new TypeError(`${name} must be finite and non-negative.`);
     }
   }
-  const entries = new Map<string, Entry>();
+  const currentEntries = new Map<string, Entry>();
+  const trackedEntries = new Set<Entry>();
   let nextOrder = 0;
   let state: "open" | "stopping" | "closed" = "open";
   let shutdownPromise: Promise<ShutdownReport> | undefined;
@@ -181,7 +182,7 @@ export function createLifecycleSupervisor(
         ),
       );
     }
-    const prior = entries.get(resource.id);
+    const prior = currentEntries.get(resource.id);
     if (prior) {
       if (prior.resource !== resource) {
         return Promise.reject(new ResourceConflictError(resource.id));
@@ -198,7 +199,8 @@ export function createLifecycleSupervisor(
       settlement: undefined as unknown as Promise<void>,
       cancelled: false,
     };
-    entries.set(resource.id, entry as Entry);
+    currentEntries.set(resource.id, entry as Entry);
+    trackedEntries.add(entry as Entry);
 
     const started = Promise.resolve()
       .then(() => resource.start(controller.signal))
@@ -212,15 +214,23 @@ export function createLifecycleSupervisor(
       });
 
     entry.settlement = started.then(() => undefined);
-    void entry.settlement.catch(() => undefined);
+    void entry.settlement
+      .finally(() => {
+        if (!entry.lease) trackedEntries.delete(entry as Entry);
+      })
+      .catch(() => undefined);
     entry.acquisition = raceDeadline(
       Promise.race([started, abortPromise(controller.signal)]),
       acquireTimeoutMs,
-      () =>
-        controller.abort(new DeadlineError("Resource acquisition timed out.")),
+      () => {
+        entry.cancelled = true;
+        controller.abort(new DeadlineError("Resource acquisition timed out."));
+      },
     ).catch((error) => {
       entry.cancelled = true;
-      if (entries.get(resource.id) === entry) entries.delete(resource.id);
+      if (currentEntries.get(resource.id) === entry) {
+        currentEntries.delete(resource.id);
+      }
       if (
         error instanceof ResourceAcquireAbortedError ||
         (controller.signal.aborted && state !== "open")
@@ -241,7 +251,7 @@ export function createLifecycleSupervisor(
     state = "stopping";
     shutdownReason = reason;
     const startedAt = Date.now();
-    const pending = [...entries.values()].filter((entry) => !entry.lease);
+    const pending = [...trackedEntries].filter((entry) => !entry.lease);
     for (const entry of pending) {
       if (!entry.lease) {
         entry.cancelled = true;
@@ -253,42 +263,16 @@ export function createLifecycleSupervisor(
 
     shutdownPromise = (async () => {
       const closed: string[] = [];
+      const closedIds = new Set<string>();
+      const markClosed = (resourceId: string) => {
+        if (closedIds.has(resourceId)) return;
+        closedIds.add(resourceId);
+        closed.push(resourceId);
+      };
       const failures: ShutdownFailure[] = [];
-      const active = [...entries.values()]
+      const active = [...trackedEntries]
         .filter((entry) => entry.lease)
         .sort((left, right) => right.order - left.order);
-
-      await Promise.all(
-        pending.map(async (entry) => {
-          const remaining = Math.max(
-            0,
-            shutdownTimeoutMs - (Date.now() - startedAt),
-          );
-          try {
-            await raceDeadline(entry.settlement, remaining);
-          } catch (error) {
-            if (
-              error instanceof ResourceAcquireAbortedError &&
-              entry.lateClose
-            ) {
-              closed.push(entry.resource.id);
-              return;
-            }
-            if (
-              !(error instanceof DeadlineError) &&
-              entry.controller.signal.aborted &&
-              !entry.lateClose
-            )
-              return;
-            failures.push({
-              resourceId: entry.resource.id,
-              phase: entry.lateClose ? "close" : "acquire",
-              kind: error instanceof DeadlineError ? "timeout" : "error",
-              message: errorMessage(error),
-            });
-          }
-        }),
-      );
 
       for (const entry of active) {
         const remaining = shutdownTimeoutMs - (Date.now() - startedAt);
@@ -315,7 +299,7 @@ export function createLifecycleSupervisor(
             () =>
               controller.abort(new DeadlineError("Resource close timed out.")),
           );
-          closed.push(entry.resource.id);
+          markClosed(entry.resource.id);
         } catch (error) {
           failures.push({
             resourceId: entry.resource.id,
@@ -326,8 +310,41 @@ export function createLifecycleSupervisor(
         }
       }
 
+      await Promise.all(
+        pending.map(async (entry) => {
+          const remaining = Math.max(
+            0,
+            shutdownTimeoutMs - (Date.now() - startedAt),
+          );
+          try {
+            await raceDeadline(entry.settlement, remaining);
+          } catch (error) {
+            if (
+              error instanceof ResourceAcquireAbortedError &&
+              entry.lateClose
+            ) {
+              markClosed(entry.resource.id);
+              return;
+            }
+            if (
+              !(error instanceof DeadlineError) &&
+              entry.controller.signal.aborted &&
+              !entry.lateClose
+            )
+              return;
+            failures.push({
+              resourceId: entry.resource.id,
+              phase: entry.lateClose ? "close" : "acquire",
+              kind: error instanceof DeadlineError ? "timeout" : "error",
+              message: errorMessage(error),
+            });
+          }
+        }),
+      );
+
       state = "closed";
-      entries.clear();
+      currentEntries.clear();
+      trackedEntries.clear();
       return {
         reason,
         status: failures.length === 0 ? "clean" : "degraded",

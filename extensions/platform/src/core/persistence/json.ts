@@ -1,3 +1,5 @@
+import type { StateTransaction } from "./state-store.ts";
+
 export function canonicalJson(value: unknown): string {
   const active = new WeakSet<object>();
 
@@ -44,4 +46,22 @@ export function canonicalJson(value: unknown): string {
   };
 
   return visit(value);
+}
+
+export function canonicalStateTransaction(transaction: StateTransaction) {
+  return canonicalJson({
+    ...transaction,
+    operations: transaction.operations.map((operation) => {
+      if (
+        (operation.type === "put-record" ||
+          operation.type === "delete-record") &&
+        operation.expectedVersion === undefined
+      ) {
+        const normalized = { ...operation };
+        delete normalized.expectedVersion;
+        return normalized;
+      }
+      return operation;
+    }),
+  });
 }

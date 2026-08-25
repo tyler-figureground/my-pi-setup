@@ -4,6 +4,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { failure, success, type ModuleError, type Outcome } from "../result.ts";
+import { normalizeCanonicalPath } from "../../../../shared/child-session.ts";
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 5_000;
@@ -21,7 +22,7 @@ interface GitProjectIdentityBase {
 
 export interface WorkingTreeProjectIdentity extends GitProjectIdentityBase {
   readonly repositoryRoot: string;
-  readonly mainWorktree: string;
+  readonly mainWorktree: string | null;
   readonly currentWorktree: string;
   readonly bare: false;
 }
@@ -55,15 +56,6 @@ export interface ProjectIdentity {
   ): Promise<Outcome<ResolvedProjectIdentity, ProjectIdentityError>>;
 }
 
-function normalizeCanonicalPath(filePath: string) {
-  const normalized = path.normalize(filePath);
-  if (process.platform !== "win32") return normalized;
-  const portable = normalized.replaceAll("\\", "/");
-  return /^[a-z]:/i.test(portable)
-    ? `${portable[0]?.toUpperCase()}${portable.slice(1)}`
-    : portable;
-}
-
 async function canonicalPath(filePath: string) {
   return normalizeCanonicalPath(await realpath(filePath));
 }
@@ -92,6 +84,22 @@ async function gitIsBare(cwd: string) {
   return (await gitOutput(cwd, "rev-parse", "--is-bare-repository")) === "true";
 }
 
+function parseGitWorktreeRecords(porcelain: string) {
+  return porcelain
+    .split("\0\0")
+    .filter(Boolean)
+    .map((record) => {
+      const fields = record.split("\0");
+      const worktree = fields.find((field) => field.startsWith("worktree "));
+      if (!worktree)
+        throw new Error("Git returned a malformed worktree record");
+      return {
+        path: worktree.slice("worktree ".length),
+        bare: fields.includes("bare"),
+      };
+    });
+}
+
 async function gitMainWorktree(cwd: string) {
   const { stdout } = await execFileAsync(
     "git",
@@ -103,11 +111,9 @@ async function gitMainWorktree(cwd: string) {
       timeout: GIT_TIMEOUT_MS,
     },
   );
-  const firstField = stdout
-    .split("\0")
-    .find((field) => field.startsWith("worktree "));
-  if (!firstField) throw new Error("Git returned no main worktree");
-  return canonicalPath(firstField.slice("worktree ".length));
+  const main = parseGitWorktreeRecords(stdout)[0];
+  if (!main) throw new Error("Git returned no main worktree record");
+  return main.bare ? null : canonicalPath(main.path);
 }
 
 function identityHash(

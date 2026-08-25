@@ -44,6 +44,8 @@ import {
   formatElapsed,
   latestText,
   REASONING_EFFORTS,
+  type BackendName,
+  type SpawnTask,
   type SubagentSnapshot,
 } from "./src/domain.ts";
 import {
@@ -115,7 +117,18 @@ function truncatedOutput(
   return text;
 }
 
-export default function (pi: ExtensionAPI) {
+export interface SubagentsExtensionOptions {
+  spawn?: (
+    harness: BackendName,
+    task: SpawnTask,
+    signal: AbortSignal | undefined,
+  ) => Promise<SubagentSnapshot>;
+}
+
+export default function subagentsExtension(
+  pi: ExtensionAPI,
+  options: SubagentsExtensionOptions = {},
+) {
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
   let sessionContext: ExtensionContext | undefined;
@@ -275,7 +288,6 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const manager = await getManager();
       const harness = params.harness;
 
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
@@ -290,26 +302,32 @@ export default function (pi: ExtensionAPI) {
       });
       const childCwd = childContext.cwd;
       const title = params.name.trim().slice(0, 160) || "subagent";
-      const snap = await runTool(
-        getRuntime(),
-        manager.spawn(harness, {
-          prompt: params.prompt,
-          title,
-          cwd: childCwd,
-          model: params.model,
-          reasoningEffort: params.reasoning_effort,
-          parent: {
-            parentCwd: ctx.cwd,
-            projectTrusted: childContext.projectTrusted,
-            inheritedModel: ctx.model
-              ? { provider: ctx.model.provider, id: ctx.model.id }
-              : undefined,
-            inheritedThinkingLevel: pi.getThinkingLevel(),
-            modelRegistry: ctx.modelRegistry,
-          },
-        }),
-        { signal, interruptMessage: "Subagent spawn aborted." },
-      );
+      const task = {
+        prompt: params.prompt,
+        title,
+        cwd: childCwd,
+        model: params.model,
+        reasoningEffort: params.reasoning_effort,
+        parent: {
+          parentCwd: ctx.cwd,
+          projectTrusted: childContext.projectTrusted,
+          inheritedModel: ctx.model
+            ? { provider: ctx.model.provider, id: ctx.model.id }
+            : undefined,
+          inheritedThinkingLevel: pi.getThinkingLevel(),
+          modelRegistry: ctx.modelRegistry,
+        },
+      } satisfies SpawnTask;
+      const snap = options.spawn
+        ? await options.spawn(harness, task, signal)
+        : await runTool(
+            getRuntime(),
+            (await getManager()).spawn(harness, task),
+            {
+              signal,
+              interruptMessage: "Subagent spawn aborted.",
+            },
+          );
 
       return {
         content: [

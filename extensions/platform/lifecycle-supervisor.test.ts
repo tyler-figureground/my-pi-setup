@@ -125,6 +125,83 @@ test("shutdown reports a pending acquisition that ignores abort", async () => {
   );
 });
 
+test("an already timed-out start remains tracked for bounded shutdown", async () => {
+  const pending = deferred<LifecycleLease<string>>();
+  const lateClosed = deferred<void>();
+  let lateCloseReason: string | undefined;
+  const supervisor = createLifecycleSupervisor({
+    acquireTimeoutMs: 5,
+    shutdownTimeoutMs: 10,
+  });
+  await assert.rejects(
+    supervisor.acquire(resource("timed-out-start", () => pending.promise)),
+    /Timed out/,
+  );
+  let retryCloses = 0;
+  await supervisor.acquire(
+    resource("timed-out-start", async () => ({
+      value: "retry",
+      close: () => void retryCloses++,
+    })),
+  );
+
+  const report = await supervisor.shutdown("reload");
+
+  assert.equal(report.status, "degraded");
+  assert.equal(retryCloses, 1);
+  assert.deepEqual(report.closed, ["timed-out-start"]);
+  assert.deepEqual(
+    report.failures.map(({ resourceId, phase, kind }) => ({
+      resourceId,
+      phase,
+      kind,
+    })),
+    [{ resourceId: "timed-out-start", phase: "acquire", kind: "timeout" }],
+  );
+
+  pending.resolve({
+    value: "late",
+    close: ({ reason }) => {
+      lateCloseReason = reason;
+      lateClosed.resolve();
+    },
+  });
+  await lateClosed.promise;
+  assert.equal(lateCloseReason, "reload");
+});
+
+test("a timed-out start permits retry and closes its eventual late lease", async () => {
+  const firstStart = deferred<LifecycleLease<string>>();
+  const firstClosed = deferred<void>();
+  let retryCloses = 0;
+  const supervisor = createLifecycleSupervisor({ acquireTimeoutMs: 5 });
+  await assert.rejects(
+    supervisor.acquire(
+      resource("retry-after-timeout", () => firstStart.promise),
+    ),
+    /Timed out/,
+  );
+
+  const value = await supervisor.acquire(
+    resource("retry-after-timeout", async () => ({
+      value: "retry",
+      close: () => void retryCloses++,
+    })),
+  );
+  assert.equal(value, "retry");
+
+  firstStart.resolve({
+    value: "late",
+    close: () => firstClosed.resolve(),
+  });
+  await firstClosed.promise;
+
+  const report = await supervisor.shutdown("quit");
+  assert.equal(report.status, "clean");
+  assert.deepEqual(report.closed, ["retry-after-timeout"]);
+  assert.equal(retryCloses, 1);
+});
+
 test("shutdown reports a failed late closer", async () => {
   const pending = deferred<LifecycleLease<string>>();
   const supervisor = createLifecycleSupervisor({ shutdownTimeoutMs: 100 });
