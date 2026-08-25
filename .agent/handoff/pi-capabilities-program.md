@@ -104,7 +104,7 @@ Phase 0 baseline details:
 
 ## Repo state
 
-- Live branch: `main`, ahead 2 / behind 0 relative to `fork/main` before final evidence commit
+- Live branch: `main`, ahead 0 / behind 0 relative to `fork/main` after final push
 - Phase 1 branch: `pi-capabilities-phase-1`, tracking `fork/pi-capabilities-phase-1`, ahead 0 / behind 0 after hardening push
 - Live checkout: `C:/Users/Tyler/.pi/agent`
 - Phase 1 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-1`
