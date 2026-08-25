@@ -25,6 +25,12 @@ const fixture = path.join(
   "fixtures",
   "lifecycle-extension.ts",
 );
+const publicToolContract = JSON.parse(
+  fs.readFileSync(
+    path.join(root, "tests", "smoke", "fixtures", "public-tool-contract.json"),
+    "utf8",
+  ),
+);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-phase-0-smoke-"));
 const agentDir = path.join(tempRoot, "agent");
 const logPath = path.join(tempRoot, "lifecycle.jsonl");
@@ -245,6 +251,19 @@ async function smokeRepositoryExtensions() {
       `registered tool ${tool}; saw ${start.tools.join(", ")}`,
     );
   }
+  const actualToolContract = start.toolContracts
+    .filter(
+      (contract) =>
+        contract.source !== "builtin" && contract.name !== "smoke_probe",
+    )
+    .map(({ name, parameters }) => ({ name, parameters }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  assert.deepEqual(
+    actualToolContract,
+    publicToolContract,
+    "public tool names and parameter schemas remain compatible",
+  );
+
   for (const command of [
     "ps",
     "copy-all",

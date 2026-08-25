@@ -47,6 +47,11 @@ export default function lifecycleSmoke(pi: ExtensionAPI) {
       reason: event.reason,
       mode: ctx.mode,
       tools: pi.getAllTools().map((tool) => tool.name),
+      toolContracts: pi.getAllTools().map((tool) => ({
+        name: tool.name,
+        parameters: tool.parameters,
+        source: tool.sourceInfo.source,
+      })),
       commands: pi.getCommands().map((command) => command.name),
     });
     if (ctx.hasUI) {

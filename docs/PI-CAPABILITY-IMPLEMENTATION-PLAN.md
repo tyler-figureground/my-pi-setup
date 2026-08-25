@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 0 complete**
+Status: **Phase 1 complete**
 Created: 2026-08-24
 Last updated: 2026-08-24
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -355,86 +355,86 @@ Goal: green, reproducible foundation before feature code.
 
 ---
 
-# Phase 1 - Platform foundation
+# Phase 1 - Platform foundation **COMPLETE**
 
 Goal: create shared deep modules before capability-specific implementation.
 
 ## Composition root
 
-- [ ] Create `extensions/platform/` package and minimal `index.ts`
-- [ ] Register no user-facing tools until core lifecycle is verified
-- [ ] Define feature flags, all defaulting off during migration
-- [ ] Add startup diagnostics for invalid config without blocking unrelated features
-- [ ] Ensure platform does not replace custom header/footer
+- [x] Create `extensions/platform/` package and minimal `index.ts`
+- [x] Register no user-facing tools until core lifecycle is verified
+- [x] Define feature flags, all defaulting off during migration
+- [x] Add startup diagnostics for invalid config without blocking unrelated features
+- [x] Ensure platform does not replace custom header/footer
 
 ## `LifecycleSupervisor`
 
-- [ ] Define resource interface and bounded shutdown contract
-- [ ] Support timers, watchers, sockets, child processes, and external client closers
-- [ ] Make acquisition/shutdown idempotent
-- [ ] Abort acquisition if session shuts down mid-start
-- [ ] Close resources in deterministic reverse order
-- [ ] Verify `/reload`, new/resume/fork, and process exit
-- [ ] Add fake resources for deadline/error/race tests
+- [x] Define resource interface and bounded shutdown contract
+- [x] Support timers, watchers, sockets, child processes, and external client closers
+- [x] Make acquisition/shutdown idempotent
+- [x] Abort acquisition if session shuts down mid-start
+- [x] Close resources in deterministic reverse order
+- [x] Verify `/reload`, new/resume/fork, and process exit
+- [x] Add fake resources for deadline/error/race tests
 
 ## `ProjectIdentity`
 
-- [ ] Resolve canonical cwd, repo root, main worktree, common Git dir, and current worktree
-- [ ] Normalize Windows drive casing and separators
-- [ ] Resolve symlink/junction identity without following unsafe deletion paths
-- [ ] Represent non-Git projects explicitly
-- [ ] Provide stable project ID shared by worktrees
-- [ ] Add repositories, linked worktrees, symlinks, junctions, bare repos, and non-repo fixtures
+- [x] Resolve canonical cwd, repo root, main worktree, common Git dir, and current worktree
+- [x] Normalize Windows drive casing and separators
+- [x] Resolve symlink/junction identity without following unsafe deletion paths
+- [x] Represent non-Git projects explicitly
+- [x] Provide stable project ID shared by worktrees
+- [x] Add repositories, linked worktrees, symlinks, junctions, bare repos, and non-repo fixtures
 
 ## `CapabilityPolicy`
 
-- [ ] Define operation vocabulary: read, local-write, process, network-read, remote-write, credential-use, orchestration, publish
-- [ ] Define actor roles from child-role list
-- [ ] Define decisions: allow, deny, require-user-confirmation
-- [ ] Classify current built-in/custom tools
-- [ ] Unknown tool defaults to side-effecting
-- [ ] Preserve denial reason and provenance
-- [ ] Ensure agent messages cannot grant approval
-- [ ] Add in-memory policy adapter for tests
+- [x] Define operation vocabulary: read, local-write, process, network-read, remote-write, credential-use, orchestration, publish
+- [x] Define actor roles from child-role list
+- [x] Define decisions: allow, deny, require-user-confirmation
+- [x] Classify current built-in/custom tools
+- [x] Unknown tool defaults to side-effecting
+- [x] Preserve denial reason and provenance
+- [x] Ensure agent messages cannot grant approval
+- [x] Add in-memory policy adapter for tests
 
 ## `StateStore`
 
-- [ ] Write storage decision ADR after SQLite feasibility spike
-- [ ] Define schema versioning and migrations
-- [ ] Implement transactions, event append, lease claim, query, and compaction
-- [ ] Implement in-memory test adapter
-- [ ] Implement production adapter with cross-process locking
-- [ ] Store metadata only; large bodies go to `ArtifactStore`
-- [ ] Use restrictive file permissions where supported
-- [ ] Recover cleanly from interrupted writes and stale leases
-- [ ] Add backup/export and corruption diagnostics
+- [x] Write storage decision ADR after SQLite feasibility spike
+- [x] Define schema versioning and migrations
+- [x] Implement transactions, event append, lease claim, query, and compaction
+- [x] Implement in-memory test adapter
+- [x] Implement production adapter with cross-process locking
+- [x] Store metadata only; large bodies go to `ArtifactStore`
+- [x] Use restrictive file permissions where supported
+- [x] Recover cleanly from interrupted writes and stale leases
+- [x] Add backup/export and corruption diagnostics
 
 ## `ArtifactStore`
 
-- [ ] Define content-addressed `put/get/export` interface
-- [ ] Persist metadata separately from bodies
-- [ ] Enforce per-artifact and total storage limits
-- [ ] Sanitize filenames and reject traversal
-- [ ] Provide retention and garbage collection
-- [ ] Keep artifact bodies out of model context by default
-- [ ] Port reusable atomic/bounded serialization from workflows
+- [x] Define content-addressed `put/get/export` interface
+- [x] Persist metadata separately from bodies
+- [x] Enforce per-artifact and total storage limits
+- [x] Sanitize filenames and reject traversal
+- [x] Provide retention and garbage collection
+- [x] Keep artifact bodies out of model context by default
+- [x] Port reusable atomic/bounded serialization from workflows
 
 ## Child roles and compatibility
 
-- [ ] Add explicit role to `createChildResources`
-- [ ] Add role-aware extension/tool filtering
-- [ ] Preserve existing subagent/workflow tool behavior
-- [ ] Add compatibility tests for all existing tool names and schemas
-- [ ] Prevent recursive platform daemons in child sessions
+- [x] Add explicit role to `createChildResources`
+- [x] Add role-aware extension/tool filtering
+- [x] Preserve existing subagent/workflow tool behavior
+- [x] Add compatibility tests for all existing tool names and schemas
+- [x] Prevent recursive platform daemons in child sessions
 
 ## Phase 1 exit gate
 
-- [ ] Core modules pass interface-level tests
-- [ ] Cross-process store tests pass on Windows
-- [ ] Resource leak tests pass
-- [ ] Existing extension suite remains green
-- [ ] Platform feature flags off produces behavior identical to baseline
-- [ ] ADRs and diagrams committed
+- [x] Core modules pass interface-level tests
+- [x] Cross-process store tests pass on Windows
+- [x] Resource leak tests pass
+- [x] Existing extension suite remains green
+- [x] Platform feature flags off produces behavior identical to baseline
+- [x] ADRs and diagrams committed
 
 ---
 
@@ -1183,6 +1183,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-24 | Phase 0 exit | `4dd6b32`, `366fa6f`, `2c58fa3` | `npm ci`; `npm run install:extensions:ci`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Offline production-extension smoke and process-leak gate; TUI checklist at `docs/verification/phase-0-tui-smoke.md` |
 | 2026-08-24 | Protected Codex reconciliation | `1b1e784` | focused Codex process tests; pruning test 3x; `npm run test:integration`; `npm run verify` | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Synthesized explicit `cmd.exe` boundary with `.cmd`/`.bat` coverage; corrected pruning-history assertion exposed under concurrent Windows load |
 | 2026-08-24 | Phase 0 live integration | `738800d` | root and extension dependency installs; dependency-tree checks; `npm run verify` from live checkout | Claude/Codex 4/4; print/JSON/RPC/reload/shutdown | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; relocated DLL-locked prior dependency trees to external safety backup |
+| 2026-08-24 | Phase 1 platform foundation | This commit | independent root/11-extension installs; `npm run verify` | 133 unit; 70 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Claude/Codex 4/4 | Pass | Deep module contracts, native Windows SQLite contention, real lifecycle resources, disabled-platform compatibility, public tool-schema snapshot, ADRs and architecture diagram |
 
 # Decision log
 
@@ -1192,15 +1193,18 @@ Record durable decisions here, then link a full ADR when needed.
 |---|---|---|---|---|
 | D001 | 2026-08-24 | Scope equals `[X]` markers only | Accepted | 15 selected capabilities |
 | D002 | 2026-08-24 | Feature 20 `[s]` treated as skipped | Accepted | Not an `[X]` selection |
-| D003 | 2026-08-24 | One platform composition root with deep internal modules | Proposed | Deterministic policy/lifecycle ordering; avoid 15 independent daemons |
-| D004 | 2026-08-24 | Existing public tools remain backward compatible | Proposed | Preserve current workflows and user muscle memory |
+| D003 | 2026-08-24 | One platform composition root with deep internal modules | Accepted | Deterministic policy/lifecycle ordering; ADR `docs/adr/0001-platform-composition-root.md` |
+| D004 | 2026-08-24 | Existing public tools remain backward compatible | Accepted | Checked-in name/schema contract plus smoke verification |
 | D005 | 2026-08-24 | Goal graph remains distinct from arbitrary workflow JavaScript | Proposed | Durable declarative recovery vs advanced scripting |
-| D006 | 2026-08-24 | Unknown tools count as side-effecting in plan mode | Proposed | Safe dynamic MCP/browser/tool loading |
+| D006 | 2026-08-24 | Unknown tools count as side-effecting in plan mode | Accepted | Safe dynamic MCP/browser/tool loading; policy contract test |
 | D007 | 2026-08-24 | Preserve independent extension package topology in Phase 0; pin Effect ecosystem to `4.0.0-beta.101` | Accepted | Avoid workspace migration while eliminating version drift |
 | D008 | 2026-08-24 | Repository text uses LF; Windows command files use CRLF | Accepted | Stable Prettier behavior under Git Bash and `core.autocrlf=true` |
 | D009 | 2026-08-24 | Deterministic unit/integration tests are default; provider tests are live-only | Accepted | No paid or credentialed calls from `npm test` |
 | D010 | 2026-08-24 | Invoke Windows shell command strings and `.cmd` shims through explicit `cmd.exe` boundaries | Accepted | Prevent Node 26 `spawn EINVAL`, quote corruption, and orphaned descendants |
 | D011 | 2026-08-24 | Reconcile protected live Codex work by retaining explicit `cmd.exe` invocation and adding `.bat` support plus rationale | Accepted | Preserves live intent while keeping deterministic quoting, testable invocation, and DEP0190 avoidance |
+| D012 | 2026-08-24 | Use built-in `node:sqlite` for `StateStore` | Accepted | Native Windows WAL/contention/backup spike; no external dependency; ADR `docs/adr/0002-state-store-node-sqlite.md` |
+| D013 | 2026-08-24 | Bind execution role through each loader's event bus and capture it privately in composition | Accepted | Concurrent in-process children cannot race through environment variables or pass caller-supplied daemon roles |
+| D014 | 2026-08-24 | Address artifact bodies by SHA-256 and reject conflicting logical metadata | Accepted | Deduplicate storage without silently changing filename, media type, metadata, or retention |
 
 # Risk register
 
@@ -1218,7 +1222,7 @@ Record durable decisions here, then link a full ADR when needed.
 | Memory poisoning/stale facts | High | Medium | Provenance, contradiction, review queue, auto off | Open |
 | Multi-process duplicate schedules/messages | Medium | High | Transactional claims and leases | Open |
 | Tool schema/context explosion | High | Medium | Deferred registration/activation | Open |
-| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor` and soak tests | Open |
+| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, real-resource cleanup tests, smoke leak gate | Mitigated for Phase 1 foundation |
 | Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 

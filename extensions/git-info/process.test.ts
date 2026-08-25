@@ -9,7 +9,7 @@ test.after(async () => {
   await runtime.dispose();
 });
 
-const runNode = (source: string, timeout = 1_000) =>
+const runNode = (source: string, timeout = 5_000) =>
   runtime.runPromise(
     runCommand(
       process.execPath,

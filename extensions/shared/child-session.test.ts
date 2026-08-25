@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -13,11 +21,13 @@ import {
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { CHILD_EXECUTION_ROLES } from "./execution-role.ts";
 import {
   bindChildSessionExtensions,
   CHILD_EXCLUDED_TOOL_NAMES,
   childToolPolicy,
   createChildResources,
+  resolveStandaloneChildProjectContext,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
   type DisposableChildSession,
@@ -92,7 +102,7 @@ test("child denylist keeps extension and workflow structured tools available", a
       settingsManager,
       sessionManager: SessionManager.inMemory(directory),
       customTools: [structuredOutput],
-      ...childToolPolicy(),
+      ...childToolPolicy("workflow"),
     });
     await bindChildSessionExtensions(session);
 
@@ -164,6 +174,7 @@ test("resource loading gates project extensions but retains global extensions", 
     );
 
     const untrusted = await createChildResources({
+      role: "subagent",
       cwd,
       agentDir,
       projectTrusted: false,
@@ -175,6 +186,7 @@ test("resource loading gates project extensions but retains global extensions", 
     assert.equal(untrustedTools.includes("project_fixture"), false);
 
     const trusted = await createChildResources({
+      role: "review",
       cwd,
       agentDir,
       projectTrusted: true,
@@ -184,7 +196,17 @@ test("resource loading gates project extensions but retains global extensions", 
       .extensions.flatMap((extension) => [...extension.tools.keys()]);
     assert.equal(trustedTools.includes("global_fixture"), true);
     assert.equal(trustedTools.includes("project_fixture"), true);
+    assert.equal(untrusted.role, "subagent");
+    assert.equal(trusted.role, "review");
   });
+});
+
+test("every child role retains the compatibility denylist", () => {
+  for (const role of CHILD_EXECUTION_ROLES) {
+    assert.deepEqual(childToolPolicy(role), {
+      excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
+    });
+  }
 });
 
 test("alternate standalone cwd only uses explicit saved trust", async () => {
@@ -214,7 +236,8 @@ test("alternate standalone cwd only uses explicit saved trust", async () => {
       false,
     );
 
-    new ProjectTrustStore(agentDir).set(childCwd, true);
+    const trustStore = new ProjectTrustStore(agentDir);
+    trustStore.set(childCwd, true);
     assert.equal(
       resolveStandaloneChildProjectTrust({
         parentCwd,
@@ -224,6 +247,63 @@ test("alternate standalone cwd only uses explicit saved trust", async () => {
       }),
       true,
     );
+
+    const aliasCwd = path.join(directory, "parent-alias");
+    await symlink(
+      parentCwd,
+      aliasCwd,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    trustStore.set(aliasCwd, true);
+    assert.equal(
+      resolveStandaloneChildProjectTrust({
+        parentCwd,
+        childCwd: aliasCwd,
+        parentTrusted: false,
+        agentDir,
+      }),
+      false,
+      "an alias of the live parent inherits its distrust",
+    );
+  });
+});
+
+test("resolved child context is stable after a junction is retargeted", async () => {
+  await withTempDir(async (directory) => {
+    const parentCwd = path.join(directory, "parent");
+    const trustedCwd = path.join(directory, "trusted");
+    const untrustedCwd = path.join(directory, "untrusted");
+    const aliasCwd = path.join(directory, "alias");
+    const agentDir = path.join(directory, "agent");
+    await Promise.all(
+      [parentCwd, trustedCwd, untrustedCwd].map((value) =>
+        mkdir(value, { recursive: true }),
+      ),
+    );
+    await symlink(
+      trustedCwd,
+      aliasCwd,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    new ProjectTrustStore(agentDir).set(trustedCwd, true);
+
+    const context = resolveStandaloneChildProjectContext({
+      parentCwd,
+      childCwd: aliasCwd,
+      parentTrusted: false,
+      agentDir,
+    });
+    assert.equal(context.projectTrusted, true);
+    assert.equal(context.cwd, await realpath(trustedCwd));
+
+    await unlink(aliasCwd);
+    await symlink(
+      untrustedCwd,
+      aliasCwd,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.equal(context.cwd, await realpath(trustedCwd));
+    assert.notEqual(context.cwd, await realpath(aliasCwd));
   });
 });
 

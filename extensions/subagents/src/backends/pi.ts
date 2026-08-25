@@ -19,10 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
@@ -34,20 +31,14 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import {
+  bindChildSessionExtensions,
+  createChildResources,
+  shutdownAndDisposeChildSession,
+} from "../../../shared/child-session.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
-
-/** Tools that headless children must not receive. Everything else stays enabled. */
-const CHILD_EXCLUDED_TOOL_NAMES = [
-  "subagent_spawn",
-  "subagent_wait",
-  "subagent_cancel",
-  "subagent_check",
-  "subagent_list",
-  "workflow",
-  "ask_user",
-] as const;
 
 // --- Model + effort resolution -----------------------------------------------
 
@@ -92,18 +83,7 @@ function resolvePiModel(
   throw new Error(`Unknown model "${hint}".`);
 }
 
-// --- Child session helpers (ported from v1 shared/child-session.ts) -----------
-
-/** Load normal global/package resources and trust-gated project resources. */
-async function createChildResources(cwd: string, projectTrusted: boolean) {
-  const agentDir = getAgentDir();
-  const settingsManager = SettingsManager.create(cwd, agentDir, {
-    projectTrusted,
-  });
-  const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
-  await loader.reload();
-  return { loader, settingsManager };
-}
+// --- Child session helpers ---------------------------------------------------
 
 function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -121,29 +101,6 @@ function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
     .finally(() => {
       if (timer) clearTimeout(timer);
     });
-}
-
-/** Emit child session_shutdown (bounded), then dispose. Never throws. */
-async function shutdownAndDisposeChildSession(session: AgentSession) {
-  try {
-    if (session.extensionRunner.hasHandlers("session_shutdown")) {
-      await waitBounded(
-        session.extensionRunner.emit({
-          type: "session_shutdown",
-          reason: "quit",
-        }),
-        CHILD_SHUTDOWN_TIMEOUT_MS,
-      );
-    }
-  } catch {
-    // Extension runner inspection/emission is best-effort during teardown.
-  } finally {
-    try {
-      session.dispose();
-    } catch {
-      // Disposal is terminal and must remain idempotent for callers.
-    }
-  }
 }
 
 // --- Event translation ----------------------------------------------------------
@@ -281,10 +238,12 @@ const makePiSession = (
 
     const session = yield* Effect.tryPromise({
       try: async () => {
-        const { loader, settingsManager } = await createChildResources(
-          task.cwd,
-          task.parent.projectTrusted,
-        );
+        const { loader, settingsManager, sessionOptions } =
+          await createChildResources({
+            role: "subagent",
+            cwd: task.cwd,
+            projectTrusted: task.parent.projectTrusted,
+          });
         const { session } = await createAgentSession({
           cwd: task.cwd,
           sessionManager: SessionManager.create(task.cwd),
@@ -292,13 +251,13 @@ const makePiSession = (
           resourceLoader: loader,
           model,
           thinkingLevel,
-          excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
+          ...sessionOptions,
         });
         // Start child extension session hooks/resources in headless mode.
         // A rejection here would otherwise leak the freshly created session:
         // the scope finalizer that owns cleanup is only registered later.
         try {
-          await session.bindExtensions({ mode: "print" });
+          await bindChildSessionExtensions(session);
         } catch (error) {
           await shutdownAndDisposeChildSession(session);
           throw error;

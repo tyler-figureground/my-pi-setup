@@ -1,5 +1,7 @@
+import { realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
+  createEventBus,
   DefaultResourceLoader,
   getAgentDir,
   ProjectTrustStore,
@@ -7,6 +9,10 @@ import {
   type AgentSession,
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
+import {
+  bindExecutionRole,
+  type ChildExecutionRole,
+} from "./execution-role.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -22,11 +28,12 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
 ] as const;
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
-export function childToolPolicy() {
+export function childToolPolicy(_role: ChildExecutionRole) {
   return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
 }
 
 export interface ChildResourceOptions {
+  role: ChildExecutionRole;
   cwd: string;
   projectTrusted: boolean;
   appendSystemPrompt?: string[];
@@ -35,20 +42,29 @@ export interface ChildResourceOptions {
 
 /** Load normal global/package resources and trust-gated project resources. */
 export async function createChildResources(options: ChildResourceOptions) {
+  const cwd = realpathSync.native(path.resolve(options.cwd));
   const agentDir = options.agentDir ?? getAgentDir();
-  const settingsManager = SettingsManager.create(options.cwd, agentDir, {
+  const settingsManager = SettingsManager.create(cwd, agentDir, {
     projectTrusted: options.projectTrusted,
   });
+  const eventBus = createEventBus();
+  bindExecutionRole(eventBus, options.role);
   const loader = new DefaultResourceLoader({
-    cwd: options.cwd,
+    cwd,
     agentDir,
     settingsManager,
+    eventBus,
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
   });
   await loader.reload();
-  return { loader, settingsManager };
+  return {
+    role: options.role,
+    loader,
+    settingsManager,
+    sessionOptions: childToolPolicy(options.role),
+  };
 }
 
 /**
@@ -56,21 +72,42 @@ export async function createChildResources(options: ChildResourceOptions) {
  * is trusted only when Pi's persisted trust store explicitly trusts it (or a
  * containing directory); unreadable/invalid trust data fails closed.
  */
-export function resolveStandaloneChildProjectTrust(options: {
+function canonicalTrustPath(value: string) {
+  let canonical = path.normalize(value);
+  if (process.platform !== "win32") return canonical;
+  if (canonical.startsWith("\\\\?\\UNC\\")) {
+    canonical = `\\\\${canonical.slice("\\\\?\\UNC\\".length)}`;
+  } else if (canonical.startsWith("\\\\?\\")) {
+    canonical = canonical.slice("\\\\?\\".length);
+  }
+  return canonical.toLowerCase();
+}
+
+export function resolveStandaloneChildProjectContext(options: {
   parentCwd: string;
   childCwd: string;
   parentTrusted: boolean;
   agentDir?: string;
 }) {
-  if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
-    return options.parentTrusted;
-  }
   try {
-    const trustStore = new ProjectTrustStore(options.agentDir ?? getAgentDir());
-    return trustStore.get(options.childCwd) === true;
+    const childCwd = realpathSync.native(path.resolve(options.childCwd));
+    const parentCwd = realpathSync.native(path.resolve(options.parentCwd));
+    const projectTrusted =
+      canonicalTrustPath(childCwd) === canonicalTrustPath(parentCwd)
+        ? options.parentTrusted
+        : new ProjectTrustStore(options.agentDir ?? getAgentDir()).get(
+            childCwd,
+          ) === true;
+    return { cwd: childCwd, projectTrusted };
   } catch {
-    return false;
+    return { cwd: path.resolve(options.childCwd), projectTrusted: false };
   }
+}
+
+export function resolveStandaloneChildProjectTrust(
+  options: Parameters<typeof resolveStandaloneChildProjectContext>[0],
+) {
+  return resolveStandaloneChildProjectContext(options).projectTrusted;
 }
 
 /** Start child extension session hooks/resources in headless print mode. */

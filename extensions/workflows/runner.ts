@@ -105,6 +105,7 @@ export function createWorkflowResources(
   projectTrusted: boolean,
 ) {
   return createChildResources({
+    role: "workflow",
     cwd,
     projectTrusted,
     ...(variant === "structured"
@@ -452,7 +453,7 @@ export async function runAgent(
       settingsManager: options.settingsManager,
       sessionManager: SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
-      ...childToolPolicy(),
+      ...childToolPolicy("workflow"),
     }));
     await bindChildSessionExtensions(session);
     unsubscribeToolTimeout = guardWorkflowChildTools(

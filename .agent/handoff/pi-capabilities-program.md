@@ -12,10 +12,23 @@ Execute the durable implementation program for every feature marked `[X]` in `C:
 
 ## Current phase
 
-Phase 0 baseline stabilization complete and integrated into live `main`. Stop before Phase 1 pending Tyler approval.
+Phase 1 platform foundation complete and verified in isolated worktree. Await review/approval before push or live integration.
 
 ## Completed this session
 
+- [x] Tyler approved Phase 1 and confirmed public TDD seams.
+- [x] Created `pi-capabilities-phase-1` worktree from fetched `fork/main`; installed independent root and extension dependencies.
+- [x] Added minimal `extensions/platform/` composition root with all 15 migration flags off, inert lifecycle hooks, and no public tools/commands/UI ownership.
+- [x] Implemented `LifecycleSupervisor` seam with idempotent acquisition/shutdown, abort-safe startup, reverse-order bounded cleanup, failure reports, and race/error/deadline tests; composition root owns one supervisor per session runtime.
+- [x] Implemented `ProjectIdentity.resolve(cwd)` with canonical Windows paths, explicit non-Git/bare results, linked-worktree identity, common project IDs, and real Git/junction fixtures.
+- [x] Implemented pure `CapabilityPolicy.decide` with eight-capability vocabulary, six roles, multi-capability tool classification, conservative unknowns, deny precedence, provenance, in-memory rules, and no approval input.
+- [x] Implemented `ArtifactStore` with content-addressed immutable bodies, separate metadata, in-memory/filesystem adapters, exact limits and quotas, safe export, retention/GC, atomic writes, cross-process locking, and native Windows tests. Lock cleanup never recursively deletes directories.
+- [x] Ran native `node:sqlite` spike: WAL, 12-process single-winner lease claim, backup, and integrity check passed without a new dependency.
+- [x] Implemented `StateStore` with plain-data transaction/query/compact/export/diagnose seam, in-memory and built-in `node:sqlite` adapters, migrations, WAL, idempotency, ordered events, fenced leases, backup, diagnostics, and native Windows cross-process contention tests.
+- [x] Added loader-scoped execution roles, canonical child trust/cwd binding, consolidated Pi child resource/shutdown code, parent-only private daemon acquisition, and unchanged workflow/subagent behavior.
+- [x] Froze all existing public tool names and schemas in smoke coverage; flags-off platform adds no public surface or header/footer ownership.
+- [x] Added `CONTEXT.md`, two ADRs, and platform architecture diagram.
+- [x] Completed two review passes and fixed role propagation, junction trust/layout, lifecycle late-start cleanup, StateStore ABA/validation/bounds/backup/diagnostics, artifact corruption/metadata conflicts, and strict smoke findings.
 - [x] Fetched remote before survey; started `pi-capabilities-phase-0` from `origin/main`.
 - [x] Created external worktree at `~/.worktrees/my-pi-setup/pi-capabilities-phase-0` with independent `node_modules` installs.
 - [x] Preserved live deleted `AGENTS.md`, modified `extensions/subagents/src/backends/codex.ts`, and untracked `skills/impeccable/`.
@@ -33,14 +46,25 @@ Phase 0 baseline stabilization complete and integrated into live `main`. Stop be
 
 ## In progress
 
-- [ ] None. Phase 1 intentionally not started.
+- [ ] None. Phase 2 intentionally not started.
 
 ## Blocked
 
-- Automated visual TUI verification needs a real ConPTY terminal. Attempt through this harness returned `stdin is not a tty`; manual checklist recorded. Headless lifecycle counterparts pass.
-- None for Phase 0 integration.
+- No implementation blocker. Push and live integration require Tyler's explicit approval.
+- Visual TUI verification remains unavailable through this harness, but Phase 1 adds no user-facing TUI surface; print/JSON/RPC/reload/session-shutdown counterparts pass.
 
 ## Files changed
+
+- `extensions/platform/` - composition root, core modules, adapters, package lock, contract/integration tests.
+- `extensions/shared/execution-role.ts`, `child-session.ts` - role transport, canonical child context, shared resource/shutdown seam.
+- `extensions/subagents/`, `extensions/workflows/` - explicit child roles and duplicated Pi child helper removal.
+- `tests/smoke/fixtures/public-tool-contract.json`, smoke harness - exact public schema and flags-off compatibility evidence.
+- `CONTEXT.md`, `docs/adr/`, `docs/architecture/platform-foundation.md` - domain language, decisions, diagram.
+- `scripts/run-test-suite.mjs` - Phase 1 test classification.
+- `extensions/git-info/process.test.ts` - Windows-load-safe fixture deadline; explicit timeout case unchanged.
+- `docs/PI-CAPABILITY-IMPLEMENTATION-PLAN.md`, this handoff - Phase 1 tracking and evidence.
+
+Prior Phase 0 files:
 
 - `.gitattributes` - LF/Windows command-file policy.
 - `package.json`, `package-lock.json`, extension package manifests/locks - dependency pins and verification scripts.
@@ -56,27 +80,35 @@ Phase 0 baseline stabilization complete and integrated into live `main`. Stop be
 ## Verification
 
 - Root `npm ci` - pass.
-- Extension dependency installs and `npm ls --depth=0` - pass for all 10 extension packages. Loaded native DLLs required relocating four prior `node_modules` trees outside the repo before fresh installs.
+- Independent extension installs - pass for all 11 extension packages, including new `platform` package; no junctioned dependency trees.
+- `npm run verify` after final code edit - pass.
+- Unit - 133 pass.
+- Integration - 70 pass; 4 POSIX-only cases skipped on Windows; delegated file-search - 22 pass.
+- Smoke - pass: exact public tool schemas, production extensions, print, JSON, RPC, reload, shutdown, no leaks.
+- Native Windows StateStore contention - one lease winner across eight processes; stale fencing, backup aliases, corruption diagnostics pass.
+- Live Claude/Codex - 4/4 pass.
+- TUI visual - not applicable to disabled, non-UI Phase 1 surface; harness limitation remains documented.
+
+Phase 0 baseline details:
+
+- Extension dependency installs and `npm ls --depth=0` - pass for all 10 Phase 0 extension packages. Loaded native DLLs required relocating four prior `node_modules` trees outside the repo before fresh installs.
 - Pi dependency tree - all direct/nested Pi libraries `0.84.3`.
 - Effect topology - all seven Effect-using extension trees `4.0.0-beta.101`.
-- `npm run verify` - pass.
-- Unit - 75 pass.
-- Integration - 67 pass; 4 POSIX-only cases skipped on Windows.
-- Smoke - pass: production extensions, print, JSON, RPC, reload, shutdown, no leaks.
-- Live Claude/Codex - 4/4 pass.
-- TUI visual checklist - not run; harness lacks TTY/ConPTY input.
+- Phase 0 `npm run verify` - pass: 75 unit, 67 integration, 4 POSIX-only skips, smoke, Claude/Codex 4/4.
 
 ## Repo state
 
-- Live branch: `main`, tracking `fork/main`
-- Ahead 0 / behind 0 after final handoff push; ahead 9 / behind 0 relative to original `origin/main`
+- Phase 1 branch: `pi-capabilities-phase-1`, tracking `fork/main`
+- Branch state after final fetch and Phase 1 commit: ahead 1 / behind 0 relative to `fork/main`; ahead 10 / behind 0 relative to original `origin/main`
 - Live checkout: `C:/Users/Tyler/.pi/agent`
-- Implementation worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
+- Phase 1 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-1`
+- Phase 0 worktree retained: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-0`
 - Pre-existing deleted `AGENTS.md` and untracked `skills/impeccable/` preserved: yes
 - External safety backup: `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-live-backup-20260824-151315`
 
 ## Commits
 
+- Phase 1 implementation and evidence - this commit.
 - `4dd6b32` - LF formatting baseline.
 - `366fa6f` - Phase 0 dependency, process, test, and smoke stabilization.
 - `2c58fa3` - Codex Windows command-shim regression test.
@@ -89,4 +121,4 @@ Phase 0 baseline stabilization complete and integrated into live `main`. Stop be
 
 ## Next exact action
 
-Do not begin Phase 1 until explicitly requested.
+Review the Phase 1 commit and verification evidence. Re-fetch, then push only after Tyler explicitly approves publication. Do not begin Phase 2.

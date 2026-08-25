@@ -33,9 +33,7 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
-  getAgentDir,
   getMarkdownTheme,
-  ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
@@ -75,6 +73,7 @@ import {
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
+import { resolveStandaloneChildProjectContext } from "../shared/child-session.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -114,27 +113,6 @@ function truncatedOutput(
     text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
   }
   return text;
-}
-
-/**
- * Same-directory children inherit the live parent decision. An alternate cwd
- * is trusted only when pi's persisted trust store explicitly trusts it (or a
- * containing directory); unreadable/invalid trust data fails closed.
- */
-function resolveChildProjectTrust(options: {
-  parentCwd: string;
-  childCwd: string;
-  parentTrusted: boolean;
-}) {
-  if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
-    return options.parentTrusted;
-  }
-  try {
-    const trustStore = new ProjectTrustStore(getAgentDir());
-    return trustStore.get(options.childCwd) === true;
-  } catch {
-    return false;
-  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -305,22 +283,24 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
+      const childContext = resolveStandaloneChildProjectContext({
+        parentCwd: ctx.cwd,
+        childCwd: cwd,
+        parentTrusted: ctx.isProjectTrusted(),
+      });
+      const childCwd = childContext.cwd;
       const title = params.name.trim().slice(0, 160) || "subagent";
       const snap = await runTool(
         getRuntime(),
         manager.spawn(harness, {
           prompt: params.prompt,
           title,
-          cwd,
+          cwd: childCwd,
           model: params.model,
           reasoningEffort: params.reasoning_effort,
           parent: {
             parentCwd: ctx.cwd,
-            projectTrusted: resolveChildProjectTrust({
-              parentCwd: ctx.cwd,
-              childCwd: cwd,
-              parentTrusted: ctx.isProjectTrusted(),
-            }),
+            projectTrusted: childContext.projectTrusted,
             inheritedModel: ctx.model
               ? { provider: ctx.model.provider, id: ctx.model.id }
               : undefined,
@@ -340,14 +320,14 @@ export default function (pi: ExtensionAPI) {
               title: snap.title,
               harness,
               modelLabel: snap.meta.modelLabel ?? "?",
-              cwd,
+              cwd: childCwd,
             }),
           },
         ],
         details: {
           id: snap.id,
           title: snap.title,
-          cwd,
+          cwd: childCwd,
           harness,
           model: snap.meta.modelLabel,
         },
