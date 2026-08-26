@@ -27,3 +27,19 @@ _Avoid_: Artifact, database row
 **Lease**:
 Time-bounded exclusive claim carrying a fencing token that rejects stale owners.
 _Avoid_: Lock
+
+**Lazy Rule**:
+Trusted Markdown guidance whose bounded metadata is indexed at startup and whose body enters model context only after a matching project-relative path is observed.
+_Avoid_: Always-on instruction, prompt include
+
+**Context Epoch**:
+Caller-assigned scope in which one Lazy Rule may be injected at most once. A new prompt, reload, or branch restoration may begin a new epoch.
+_Avoid_: Turn ID
+
+**Plan Mode**:
+Host-enforced session state that preserves the exact prior tool set while `CapabilityPolicy` denies every side-effecting or unknown operation until direct user approval.
+_Avoid_: Planning prompt, read-only suggestion
+
+**Declarative Hook**:
+Trusted, provenance-carrying event matcher and bounded action definition executed through `TriggerEngine` and still subordinate to `CapabilityPolicy`.
+_Avoid_: Shell snippet, callback

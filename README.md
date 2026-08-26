@@ -10,6 +10,9 @@ This setup is fairly opinionated, it:
 - adds workflows to pi
 - adds an ask user tool, which lets the model ask multiple choice questions
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
+- adds host-enforced read-only agent plan mode with direct user approval
+- loads trusted path-scoped rules only when matching files become relevant
+- runs bounded declarative hooks through shared policy and lifecycle controls
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

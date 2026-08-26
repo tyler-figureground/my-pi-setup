@@ -1,8 +1,8 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 1 complete**
+Status: **Phase 2 complete**
 Created: 2026-08-24
-Last updated: 2026-08-24
+Last updated: 2026-08-25
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
 Continuity file: `.agent/handoff/pi-capabilities-program.md`
 
@@ -60,7 +60,7 @@ The reviewed file contains 15 `[X]` selections.
 | F02 | Guarded worktrees and isolated agent workspaces | 3 | [ ] |
 | F03 | Live browser control and visual verification | 5 | [ ] |
 | F04 | LSP diagnostics and symbol navigation | 4 | [ ] |
-| F05 | Read-only plan mode | 2 | [ ] |
+| F05 | Read-only plan mode | 2 | [x] |
 | F06 | First-class local code review | 4 | [ ] |
 | F07 | MCP client and OAuth | 5 | [ ] |
 | F08 | Declarative lifecycle hooks | 2, 7 | [ ] |
@@ -68,7 +68,7 @@ The reviewed file contains 15 `[X]` selections.
 | F10 | Cross-session messaging and queue | 6 | [ ] |
 | F11 | Persistent memory | 6 | [ ] |
 | F13 | Persistent task graph and goal mode | 8 | [ ] |
-| F14 | Path-scoped lazy project rules | 2 | [ ] |
+| F14 | Path-scoped lazy project rules | 2 | [x] |
 | F15 | Reactive monitor | 7 | [ ] |
 | F16 | Scheduled and recurring prompts | 7 | [ ] |
 | F23 | Shareable interactive artifacts | 9 | [ ] |
@@ -438,7 +438,7 @@ Goal: create shared deep modules before capability-specific implementation.
 
 ---
 
-# Phase 2 - Policy, lazy rules, plan mode, and declarative hook core
+# Phase 2 - Policy, lazy rules, plan mode, and declarative hook core **COMPLETE**
 
 Features: F05, F08 foundation, F14.
 
@@ -446,95 +446,95 @@ Features: F05, F08 foundation, F14.
 
 ### Interface and discovery
 
-- [ ] Define rule format and frontmatter schema
-- [ ] Choose user and trusted-project locations
-- [ ] Support include/exclude path patterns and priority
-- [ ] Record source path and trust provenance
-- [ ] Detect duplicate IDs and conflicting rules
-- [ ] Reject malformed project rules without loading them
+- [x] Define rule format and frontmatter schema
+- [x] Choose user and trusted-project locations
+- [x] Support include/exclude path patterns and priority
+- [x] Record source path and trust provenance
+- [x] Detect duplicate IDs and conflicting rules
+- [x] Reject malformed project rules without loading them
 
 ### Activation
 
-- [ ] Index metadata only at startup
-- [ ] Activate full rule content on relevant read/edit/search/LSP/browser/review path
-- [ ] Inject each rule once per applicable context epoch
-- [ ] Avoid unrelated rule content in prompt
-- [ ] Handle renamed files and worktree-relative paths
-- [ ] Handle symlinks/junctions through `ProjectIdentity`
-- [ ] Expose `/rules` inspector with active/source/reason fields
-- [ ] Support `/reload`
+- [x] Index metadata only at startup
+- [x] Activate full rule content on current read/edit/search paths and bounded path-bearing future tool inputs/results
+- [x] Inject each rule once per applicable context epoch
+- [x] Avoid unrelated rule content in prompt
+- [x] Handle renamed files and worktree-relative paths
+- [x] Handle symlinks/junctions through `ProjectIdentity`
+- [x] Expose `/rules` inspector with active/source/reason fields
+- [x] Support `/reload`
 
 ### Acceptance
 
-- [ ] Relevant rule appears before model acts on matching file
-- [ ] Unrelated rule remains absent
-- [ ] More-specific precedence deterministic
-- [ ] Untrusted project rules ignored
-- [ ] Path traversal and symlink bypass tests pass
-- [ ] Context-size comparison recorded
+- [x] Relevant rule appears before model acts on matching file
+- [x] Unrelated rule remains absent
+- [x] More-specific precedence deterministic
+- [x] Untrusted project rules ignored
+- [x] Path traversal and symlink bypass tests pass
+- [x] Context-size comparison recorded
 
 ## F05 read-only plan mode
 
 ### State and interface
 
-- [ ] Define `off`, `planning`, `approval-pending`, and `executing` states
-- [ ] Persist state and exact pre-plan active tool set in session entries
-- [ ] Add `/plan [prompt]`, `/plan status`, `/plan cancel`, and approval flow
-- [ ] Add visible mode status/widget
-- [ ] Store plan in configurable project/user plan location
+- [x] Define `off`, `planning`, `approval-pending`, and `executing` states
+- [x] Persist state and exact pre-plan active tool set in session entries
+- [x] Add `/plan [prompt]`, `/plan status`, `/plan cancel`, and approval flow
+- [x] Add visible mode status/widget
+- [x] Store plan in configurable project/user plan location
 
 ### Enforcement
 
-- [ ] Use `CapabilityPolicy` as host backstop
-- [ ] Disable mutation-capable and unknown tools while planning
-- [ ] Expose dedicated read-only Git/search/LSP operations
-- [ ] Block write/edit and shell-mediated mutation
-- [ ] Block mutating MCP/browser calls
-- [ ] Block schedules, publishing, and agent work unless explicitly read-only
-- [ ] Ensure dynamically activated tools are classified before use
-- [ ] Restore exact prior tool set after approved exit
-- [ ] Restore plan state correctly after resume/tree navigation
+- [x] Use `CapabilityPolicy` as host backstop
+- [x] Disable mutation-capable and unknown tools while planning
+- [x] Expose dedicated read-only Git and existing search operations; keep LSP operations Phase 4-owned
+- [x] Block write/edit and shell-mediated mutation
+- [x] Block mutating MCP/browser calls
+- [x] Block schedules, publishing, and agent work unless explicitly read-only
+- [x] Ensure dynamically activated tools are classified before use
+- [x] Restore exact prior tool set after approved exit
+- [x] Restore plan state correctly after resume/tree navigation
 
 ### Acceptance
 
-- [ ] Every known mutation path has a denial test
-- [ ] Reads remain usable
-- [ ] Approval transition cannot be triggered by another agent/session message
-- [ ] Aborted/failed plan leaves no source changes
-- [ ] Resume and `/reload` retain state
-- [ ] TUI clearly distinguishes plan from execution
+- [x] Every known agent tool, interactive shell, and hook mutation path has a denial test; explicit operator commands are documented authority
+- [x] Reads remain usable
+- [x] Approval transition cannot be triggered by another agent/session message
+- [x] Aborted/failed plan leaves no source changes
+- [x] Resume and `/reload` retain state
+- [x] TUI status/widget semantics distinguish plan from execution; manual visual checklist and harness limit documented
 
 ## F08 declarative hooks, core
 
 ### Format and trust
 
-- [ ] Trial `pi-yaml-hooks` in disposable profile
-- [ ] Decide adopt/wrap/build and record ADR
-- [ ] Define global and trusted-project config locations
-- [ ] Parse YAML with bounded aliases/depth/size
-- [ ] Validate event, matcher, action, timeout, and failure policy
-- [ ] Record config provenance
-- [ ] Add `/hooks`, `/hooks validate`, `/hooks reload`, and `/hooks logs`
+- [x] Trial `pi-yaml-hooks` in disposable profile
+- [x] Decide adopt/wrap/build and record ADR
+- [x] Define global and trusted-project config locations
+- [x] Parse YAML with bounded aliases/depth/size
+- [x] Validate event, matcher, action, timeout, and failure policy
+- [x] Record config provenance
+- [x] Add `/hooks`, `/hooks validate`, `/hooks reload`, and `/hooks logs`
 
 ### Trigger core
 
-- [ ] Implement hook registration through `TriggerEngine`
-- [ ] Support command, notify/status, context injection, and policy decision actions
-- [ ] Define deterministic ordering
-- [ ] Add recursion/reentrancy guard
-- [ ] Add per-hook timeout and output cap
-- [ ] Make fail-open/fail-closed explicit by event/action
-- [ ] Never execute untrusted project hooks
-- [ ] Prevent hooks from silently bypassing plan policy
+- [x] Implement hook registration through `TriggerEngine`
+- [x] Support command, notify/status, context injection, and policy decision actions
+- [x] Define deterministic ordering
+- [x] Add recursion/reentrancy guard
+- [x] Add per-hook timeout and output cap
+- [x] Make fail-open/fail-closed explicit by event/action
+- [x] Never execute untrusted project hooks
+- [x] Prevent hooks from silently bypassing plan policy
 
 ### Phase 2 exit gate
 
-- [ ] F14 acceptance complete
-- [ ] F05 acceptance complete
-- [ ] Hook core acceptance complete
-- [ ] Existing tools restore correctly after plan mode
-- [ ] Context and startup-cost measurements recorded
-- [ ] Documentation includes rule/hook examples and security limits
+- [x] F14 acceptance complete
+- [x] F05 acceptance complete
+- [x] Hook core acceptance complete
+- [x] Existing tools restore correctly after plan mode
+- [x] Context and startup-cost measurements recorded
+- [x] Documentation includes rule/hook examples and security limits
 
 ---
 
@@ -1186,6 +1186,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-24 | Phase 1 platform foundation | `624ef28` | independent root/11-extension installs; `npm run verify` | 133 unit; 70 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Claude/Codex 4/4 | Pass | Deep module contracts, native Windows SQLite contention, real lifecycle resources, disabled-platform compatibility, public tool-schema snapshot, ADRs and architecture diagram |
 | 2026-08-24 | Phase 1 independent-review hardening | `9b97aba` | three review/fix/re-review rounds; focused native Windows regressions; final `npm run verify` | 135 unit; 99 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Claude/Codex 4/4 | Pass | Closed lifecycle late-start leak, bare-linked-worktree identity, child role/trust filtering, StateStore validation/backup sidecars, ArtifactStore junction/ABA/partial-GC/export-lock failures |
 | 2026-08-25 | Phase 1 live integration | `624ef28`, `9b97aba` | root and 11-extension dependency installs; `npm run verify` from live checkout | 135 unit; 99 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Claude/Codex 4/4 | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; relocated DLL-locked file-search/git-info dependency trees to external safety backup |
+| 2026-08-25 | Phase 2 policy, rules, plan, hooks | `9f4c4da` | exact dependency audit; native package trial; three review rounds; `npm run check`; formatting; unit/integration/smoke; native Windows process and filesystem probes | 163 unit; 115 integration + 22 delegated; 4 POSIX-only skipped; repository print/JSON/RPC/reload/resume/shutdown/leaks; Codex live 2/2; Claude live blocked after earlier 4/4 by account session limit | Pass with external Claude limit | F14 and F05 complete; F08 hook core complete, Phase 7 completion remains; performance and TUI-call evidence recorded |
 
 # Decision log
 
@@ -1207,6 +1208,10 @@ Record durable decisions here, then link a full ADR when needed.
 | D012 | 2026-08-24 | Use built-in `node:sqlite` for `StateStore` | Accepted | Native Windows WAL/contention/backup spike; no external dependency; ADR `docs/adr/0002-state-store-node-sqlite.md` |
 | D013 | 2026-08-24 | Bind execution role through each loader's event bus and capture it privately in composition | Accepted | Concurrent in-process children cannot race through environment variables or pass caller-supplied daemon roles |
 | D014 | 2026-08-24 | Address artifact bodies by SHA-256 and reject conflicting logical metadata | Accepted | Deduplicate storage without silently changing filename, media type, metadata, or retention |
+| D015 | 2026-08-25 | Build declarative hooks against platform seams; do not adopt, wrap, or port `pi-yaml-hooks@2026.8.11` | Accepted | Native-Windows package trial is an explicit no-op; ADR `docs/adr/0003-build-declarative-hook-core.md` |
+| D016 | 2026-08-25 | Plan mode governs agent tool calls, interactive shell interception, and hook effects; explicit extension/RPC administrative commands remain direct operator authority | Accepted | Pi 0.84.3 dispatches extension commands before input interception; documentation states authority boundary without claiming OS containment |
+| D017 | 2026-08-25 | Lazy rules block and retry the first side-effecting path operation, filter stale epoch messages, and cap matching/injection | Accepted | Relevant guidance must reach model before mutation; search-result paths activate before next model call |
+| D018 | 2026-08-25 | Hook and read-only Git commands use one bounded no-shell process module with minimal environment and native tree termination | Accepted | Generic `pi.exec` buffers output and cannot guarantee Windows descendant cleanup |
 
 # Risk register
 
@@ -1223,8 +1228,8 @@ Record durable decisions here, then link a full ADR when needed.
 | Browser mutates remote system in plan mode | Medium | High | Side-effect policy and explicit approval | Open |
 | Memory poisoning/stale facts | High | Medium | Provenance, contradiction, review queue, auto off | Open |
 | Multi-process duplicate schedules/messages | Medium | High | Transactional claims and leases | Open |
-| Tool schema/context explosion | High | Medium | Deferred registration/activation | Open |
-| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, real-resource cleanup tests, smoke leak gate | Mitigated for Phase 1 foundation |
+| Tool schema/context explosion | High | Medium | Deferred registration/activation | Mitigated for rules and Phase 2 tools; future adapters open |
+| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 2 |
 | Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 

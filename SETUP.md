@@ -35,6 +35,34 @@ npm test
 
 When changing Effect, update every extension manifest in the same change, regenerate every extension lockfile with one npm version, then verify each tree with `npm ls effect`.
 
+## Capability platform
+
+`platform.json` enables read-only plan mode, path-scoped lazy rules, and declarative hooks:
+
+```json
+{
+  "planMode": true,
+  "hooks": true,
+  "rules": true,
+  "plan": {
+    "defaultScope": "user",
+    "userDirectory": "plans",
+    "projectDirectory": ".pi/plans"
+  }
+}
+```
+
+Configuration locations:
+
+- user rules: `~/.pi/agent/rules/`
+- trusted-project rules: `<project>/.pi/rules/`
+- global hooks: `~/.pi/agent/hooks.yaml`
+- trusted-project hooks: `<project>/.pi/hooks.yaml`
+- user plans: `~/.pi/agent/plans/`
+- trusted-project plans: `<project>/.pi/plans/`
+
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md) for formats, commands, security limits, and rollback.
+
 ## Firecrawl
 
 The search, scrape, and crawl tools require a Firecrawl API key. Follow [Firecrawl's Node.js getting-started guide](https://docs.firecrawl.dev/quickstarts/nodejs) to create one, then copy the example environment file:

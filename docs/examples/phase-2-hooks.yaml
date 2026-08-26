@@ -1,0 +1,37 @@
+version: 1
+hooks:
+  - id: planning-context
+    event: before_agent_start
+    priority: 10
+    match: {}
+    action:
+      type: context
+      content: "Check the repository handoff before changing tracked files."
+    timeoutMs: 500
+    outputCapBytes: 4096
+    failurePolicy: open
+
+  - id: notify-after-agent
+    event: agent_settled
+    priority: 20
+    match: {}
+    action:
+      type: notify
+      message: "Agent run settled."
+      level: info
+    timeoutMs: 500
+    outputCapBytes: 1024
+    failurePolicy: open
+
+  - id: block-direct-write
+    event: tool_call
+    priority: 0
+    match:
+      toolName: write
+    action:
+      type: policy
+      decision: deny
+      reason: "Use the reviewed edit workflow instead of direct writes."
+    timeoutMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
