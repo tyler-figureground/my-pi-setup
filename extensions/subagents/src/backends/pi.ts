@@ -31,6 +31,7 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { compilePiExecutionPolicy } from "../profile-policy.ts";
 import {
   bindChildSessionExtensions,
   createChildResources,
@@ -236,13 +237,29 @@ const makePiSession = (
     const thinkingLevel = (task.reasoningEffort ??
       task.parent.inheritedThinkingLevel) as ThinkingLevel | undefined;
 
+    const execution = task.execution
+      ? yield* Effect.try({
+          try: () => compilePiExecutionPolicy(task.execution!),
+          catch: (error) => new SpawnError({ message: boundedError(error) }),
+        })
+      : undefined;
+
     const session = yield* Effect.tryPromise({
       try: async () => {
         const { loader, settingsManager, sessionOptions } =
           await createChildResources({
-            role: "subagent",
+            role: execution?.role ?? "subagent",
             cwd: task.cwd,
             projectTrusted: task.parent.projectTrusted,
+            ...(task.workspace ? { allowProjectResources: false } : {}),
+            ...(execution
+              ? {
+                  appendSystemPrompt: execution.appendSystemPrompt,
+                  allowedTools: execution.allowedTools,
+                  disallowedTools: execution.disallowedTools,
+                  ...(task.workspace ? { writeRoot: task.workspace.path } : {}),
+                }
+              : {}),
           });
         const { session } = await createAgentSession({
           cwd: task.cwd,
@@ -471,12 +488,23 @@ const makePiSession = (
       });
     };
 
-    // Session naming is best-effort.
-    yield* Effect.try(() =>
+    // Session naming and profile metadata are best-effort.
+    yield* Effect.try(() => {
       session.sessionManager.appendSessionInfo(
         `${task.origin === "btw" ? "btw" : "subagent"}: ${task.title}`,
-      ),
-    ).pipe(Effect.ignore);
+      );
+      if (task.profile && task.execution) {
+        session.sessionManager.appendCustomEntry("agent-profile", {
+          name: task.profile.name,
+          digest: task.profile.contentDigest,
+          generation: task.profile.catalogGeneration,
+          scope: task.profile.source.scope,
+          path: task.profile.source.path,
+          role: task.execution.role,
+          workspacePolicy: task.execution.workspace,
+        });
+      }
+    }).pipe(Effect.ignore);
 
     emit({ _tag: "MetaChanged", meta: currentMeta() });
     startRun(task.prompt);

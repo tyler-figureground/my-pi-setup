@@ -24,6 +24,7 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { compileCodexExecutionPolicy } from "../profile-policy.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MODEL_LIST_TIMEOUT_MS = 5_000;
@@ -83,7 +84,7 @@ export function codexProcessInvocation(
   platform: NodeJS.Platform = process.platform,
   comSpec = process.env.ComSpec ?? "cmd.exe",
 ) {
-  const args = ["app-server", "--stdio"];
+  const args = ["--disable", "multi_agent", "app-server", "--stdio"];
   // Node rejects direct .cmd/.bat spawning on Windows after CVE-2024-27980.
   // Use an explicit cmd.exe boundary rather than shell mode so quoting and
   // argument handling remain deterministic and avoid DEP0190.
@@ -325,6 +326,12 @@ const makeCodexSession = (
   task: SpawnTask,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
+    const execution = task.execution
+      ? compileCodexExecutionPolicy(task.execution)
+      : undefined;
+    if (execution && !execution.ok) {
+      return yield* new SpawnError({ message: execution.error });
+    }
     const binary = resolveCodexBinary();
     if (!binary) {
       return yield* new SpawnError({
@@ -905,7 +912,10 @@ const makeCodexSession = (
             title: "pi subagent",
             version: "2.0.0",
           },
-          capabilities: { experimentalApi: true },
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+          },
         });
         writeMessage({ method: "initialized" });
         // Headless children cannot answer approval prompts. The caller
@@ -914,8 +924,15 @@ const makeCodexSession = (
         return request("thread/start", {
           cwd: task.cwd,
           approvalPolicy: "never",
-          sandbox: "danger-full-access",
+          sandbox: execution?.ok
+            ? execution.value.sandbox
+            : "danger-full-access",
           ephemeral: false,
+          ...(execution?.ok && execution.value.developerInstructions
+            ? {
+                developerInstructions: execution.value.developerInstructions,
+              }
+            : {}),
           ...(task.model ? { model: task.model } : {}),
         });
       },

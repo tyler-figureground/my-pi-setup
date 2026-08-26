@@ -8,6 +8,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { createPlatformExtension } from "./index.ts";
+import { platformAgentServices } from "./src/agents/services.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -603,6 +604,65 @@ test("platform wiring composes plan mode, lazy rules, hooks, persistence, trust,
     });
     assert.equal(harness.statuses.get("platform-plan"), undefined);
     assert.equal(harness.statuses.get("platform-hook:lifecycle"), undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("platform composition binds and unbinds Phase 3 profile and workspace authorities", async () => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "pi-phase3-composition-"),
+  );
+  const project = path.join(directory, "project");
+  const agentDir = path.join(directory, "agent");
+  try {
+    await mkdir(project, { recursive: true });
+    await mkdir(path.join(agentDir, "agents"), { recursive: true });
+    await execFileAsync("git", ["init"], { cwd: project, windowsHide: true });
+    await execFileAsync(
+      "git",
+      ["config", "user.email", "tests@example.invalid"],
+      { cwd: project, windowsHide: true },
+    );
+    await execFileAsync("git", ["config", "user.name", "Pi Tests"], {
+      cwd: project,
+      windowsHide: true,
+    });
+    await writeFile(path.join(project, "tracked.txt"), "base\n", "utf8");
+    await execFileAsync("git", ["add", "tracked.txt"], {
+      cwd: project,
+      windowsHide: true,
+    });
+    await execFileAsync("git", ["commit", "-m", "base"], {
+      cwd: project,
+      windowsHide: true,
+    });
+    await writeFile(
+      path.join(agentDir, "agents", "reviewer.yaml"),
+      "name: reviewer\ndescription: Reviewer\nbackend: pi\ninstructions: { inline: Review }\nskills: []\nallowedTools: [read]\n",
+      "utf8",
+    );
+    const harness = createHarness();
+    harness.context.cwd = project;
+    createPlatformExtension({
+      agentDir,
+      flags: { profiles: true, workspaces: true },
+    })(harness.api);
+
+    await harness.emit("session_start", {
+      type: "session_start",
+      reason: "startup",
+    });
+    const services = platformAgentServices(harness.api.events);
+    assert.ok(services?.profiles);
+    assert.ok(services?.workspaces);
+    assert.equal(services.profiles.resolve("reviewer").ok, true);
+
+    await harness.emit("session_shutdown", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    assert.equal(platformAgentServices(harness.api.events), undefined);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
   createEventBus,
@@ -46,6 +46,7 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_check",
   "subagent_list",
   "workflow",
+  "workspace_list",
   "ask_user",
 ] as const;
 
@@ -104,15 +105,61 @@ export function filterChildExtensions(
 }
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
-export function childToolPolicy(role: ChildExecutionRole) {
-  return { excludeTools: [...childRolePolicies[role].excludedTools] };
+export function childToolPolicy(
+  role: ChildExecutionRole,
+  restrictions: {
+    readonly allowedTools?: readonly string[];
+    readonly disallowedTools?: readonly string[];
+  } = {},
+) {
+  const excludeTools = [
+    ...new Set([
+      ...childRolePolicies[role].excludedTools,
+      ...(restrictions.disallowedTools ?? []),
+    ]),
+  ];
+  return {
+    ...(restrictions.allowedTools
+      ? { tools: [...restrictions.allowedTools] }
+      : {}),
+    excludeTools,
+  };
+}
+
+export function workspaceContainsWriteTarget(
+  workspaceRoot: string,
+  cwd: string,
+  target: string,
+) {
+  try {
+    const root = realpathSync.native(path.resolve(workspaceRoot));
+    const requested = path.resolve(cwd, target);
+    const canonical = existsSync(requested)
+      ? realpathSync.native(requested)
+      : path.join(
+          realpathSync.native(path.dirname(requested)),
+          path.basename(requested),
+        );
+    const nested = path.relative(root, canonical);
+    return (
+      nested !== ".." &&
+      !nested.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(nested)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface ChildResourceOptions {
   role: ChildExecutionRole;
   cwd: string;
   projectTrusted: boolean;
+  allowProjectResources?: boolean;
   appendSystemPrompt?: string[];
+  allowedTools?: readonly string[];
+  disallowedTools?: readonly string[];
+  writeRoot?: string;
   agentDir?: string;
 }
 
@@ -121,7 +168,8 @@ export async function createChildResources(options: ChildResourceOptions) {
   const cwd = realpathSync.native(path.resolve(options.cwd));
   const agentDir = options.agentDir ?? getAgentDir();
   const settingsManager = SettingsManager.create(cwd, agentDir, {
-    projectTrusted: options.projectTrusted,
+    projectTrusted:
+      options.allowProjectResources === false ? false : options.projectTrusted,
   });
   const eventBus = createEventBus();
   bindExecutionRole(eventBus, options.role);
@@ -134,13 +182,48 @@ export async function createChildResources(options: ChildResourceOptions) {
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
+    ...(options.writeRoot
+      ? {
+          extensionFactories: [
+            {
+              name: "guarded-workspace-write-root",
+              factory: (pi) => {
+                pi.on("tool_call", (event) => {
+                  if (event.toolName !== "write" && event.toolName !== "edit") {
+                    return;
+                  }
+                  const input = event.input as { path?: unknown };
+                  if (
+                    typeof input.path !== "string" ||
+                    !workspaceContainsWriteTarget(
+                      options.writeRoot!,
+                      cwd,
+                      input.path,
+                    )
+                  ) {
+                    return {
+                      block: true,
+                      terminate: true,
+                      reason:
+                        "Guarded workspace child cannot write outside its leased workspace.",
+                    };
+                  }
+                });
+              },
+            },
+          ],
+        }
+      : {}),
   });
   await loader.reload();
   return {
     role: options.role,
     loader,
     settingsManager,
-    sessionOptions: childToolPolicy(options.role),
+    sessionOptions: childToolPolicy(options.role, {
+      allowedTools: options.allowedTools,
+      disallowedTools: options.disallowedTools,
+    }),
   };
 }
 

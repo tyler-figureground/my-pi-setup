@@ -8,6 +8,11 @@
  */
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { GuardedWorkspaceBinding } from "../../shared/guarded-workspace.ts";
+import type {
+  ResolvedExecutionPolicy,
+  ResolvedProfileIdentity,
+} from "../../shared/agent-profile.ts";
 import { Data } from "effect";
 
 export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
@@ -46,6 +51,11 @@ export interface ParentContext {
   readonly modelRegistry?: ModelRegistry;
 }
 
+export interface WorkspaceControl {
+  renew(): Promise<GuardedWorkspaceBinding>;
+  preserve(): Promise<void>;
+}
+
 export interface SpawnTask {
   /** Omitted for normal tool-driven spawns. */
   readonly origin?: SubagentOrigin;
@@ -60,6 +70,13 @@ export interface SpawnTask {
   readonly model?: string;
   /** Shared effort scale; each backend maps it to its native equivalent. */
   readonly reasoningEffort?: ReasoningEffort;
+  /** Host-resolved immutable identity. Agent text can never manufacture it. */
+  readonly profile?: ResolvedProfileIdentity;
+  /** Effective host policy paired with profile identity. */
+  readonly execution?: ResolvedExecutionPolicy;
+  readonly workspace?: GuardedWorkspaceBinding;
+  /** Host-only lifecycle authority; backend adapters must ignore it. */
+  readonly workspaceControl?: WorkspaceControl;
   readonly parent: ParentContext;
 }
 
@@ -73,6 +90,9 @@ export interface SubagentMeta {
   readonly sessionFilePath?: string;
   /** Claude session id / Codex conversation id. */
   readonly nativeSessionId?: string;
+  /** Host metadata attached to every normalized transcript snapshot. */
+  readonly profile?: ResolvedProfileIdentity;
+  readonly workspace?: GuardedWorkspaceBinding;
 }
 
 // --- Transcript ------------------------------------------------------------
@@ -196,6 +216,8 @@ export interface SubagentSnapshot {
   readonly title: string;
   readonly prompt: string;
   readonly cwd: string;
+  readonly profile?: ResolvedProfileIdentity;
+  readonly workspace?: GuardedWorkspaceBinding;
   readonly status: SubagentStatus;
   readonly createdAt: number;
   readonly settledAt?: number;

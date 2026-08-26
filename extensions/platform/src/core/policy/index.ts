@@ -130,6 +130,7 @@ const toolOperations = {
     subagent_cancel: ["orchestration"],
     subagent_check: ["read"],
     subagent_list: ["read"],
+    workspace_list: ["read"],
     workflow: ["orchestration"],
     git_status: ["read"],
     git_diff: ["read"],

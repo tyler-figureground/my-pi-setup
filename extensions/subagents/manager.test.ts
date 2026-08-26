@@ -70,6 +70,28 @@ function task(prompt: string): SpawnTask {
   return { prompt, title: "test", cwd: process.cwd(), parent };
 }
 
+function profileIdentity(name: string) {
+  return {
+    name,
+    contentDigest: "a".repeat(64),
+    catalogGeneration: 1,
+    source: { scope: "managed" as const, path: `<managed:${name}>` },
+  };
+}
+
+function executionPolicy(
+  limits: { maxTurns?: number; timeoutMs?: number } = {},
+) {
+  return {
+    role: "subagent" as const,
+    instructions: [],
+    skills: [],
+    tools: { denied: [] },
+    limits,
+    workspace: "current" as const,
+  };
+}
+
 async function withManager(
   run: (
     manager: SubagentManagerShape,
@@ -134,6 +156,83 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
     assert.equal(failed?.status, "error");
     assert.match(failed?.errorText ?? "", /task failed/);
     assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
+  });
+});
+
+test("settled guarded subagent preserves its workspace lease exactly once", async () => {
+  await withManager(async (manager, runtime) => {
+    let preserved = 0;
+    const workspace = {
+      workspaceId: "workspace-one",
+      owner: { sessionId: "session", agentId: "agent" },
+      fence: 1,
+      expiresAt: Date.now() + 60_000,
+      projectId: "git:fixture",
+      projectRoot: process.cwd(),
+      path: process.cwd(),
+      state: "leased" as const,
+      role: "subagent" as const,
+      projectTrusted: true as const,
+    };
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", {
+        ...task("Guarded task"),
+        workspace,
+        workspaceControl: {
+          async renew() {
+            return workspace;
+          },
+          async preserve() {
+            preserved++;
+          },
+        },
+      }),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    const deadline = Date.now() + 2_000;
+    while (preserved === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(preserved, 1);
+    await assert.rejects(
+      runTool(runtime, manager.send(snap.id, "continue")),
+      /workspace was preserved/,
+    );
+  });
+});
+
+test("profile max turns is enforced by the manager supervisor", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", {
+        ...task("Multi-turn profiled task"),
+        profile: profileIdentity("one-turn"),
+        execution: executionPolicy({ maxTurns: 1 }),
+      }),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    const settled = manager.view.get(snap.id);
+    assert.equal(settled?.status, "error");
+    assert.match(settled?.errorText ?? "", /maximum of 1 turn/i);
+  });
+});
+
+test("profile timeout is enforced by the manager supervisor", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", {
+        ...task("Long running profiled task"),
+        profile: profileIdentity("bounded"),
+        execution: executionPolicy({ timeoutMs: 20 }),
+      }),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    const settled = manager.view.get(snap.id);
+    assert.equal(settled?.status, "error");
+    assert.match(settled?.errorText ?? "", /profile timeout/i);
   });
 });
 
@@ -308,6 +407,95 @@ function completedSnapshot(spawnTask: SpawnTask): SubagentSnapshot {
     turns: 1,
   };
 }
+
+test("subagent_spawn resolves a named profile while keeping explicit model overrides", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-subagent-profile-"));
+  try {
+    const tools = new Map<string, ToolDefinition>();
+    let observed: { harness: string; task: SpawnTask } | undefined;
+    const profile = {
+      description: "Review security",
+      identity: {
+        ...profileIdentity("security-reviewer"),
+        source: {
+          scope: "user" as const,
+          path: path.join(directory, "security-reviewer.yaml"),
+        },
+      },
+      defaults: {
+        backend: "claude" as const,
+        model: "sonnet",
+        effort: "high" as const,
+      },
+      policy: {
+        role: "review" as const,
+        instructions: ["Review trust boundaries."],
+        skills: [],
+        tools: { allowed: ["read", "rg"], denied: ["bash"] },
+        limits: { maxTurns: 8, timeoutMs: 60_000 },
+        workspace: "current" as const,
+      },
+    };
+    subagentsExtension(
+      {
+        on() {},
+        registerTool(definition: ToolDefinition) {
+          tools.set(definition.name, definition);
+        },
+        registerMessageRenderer() {},
+        registerEntryRenderer() {},
+        registerCommand() {},
+        getThinkingLevel: () => "medium",
+      } as unknown as ExtensionAPI,
+      {
+        profileCatalog: {
+          async reload() {
+            return { generation: 1, profiles: [profile], diagnostics: [] };
+          },
+          inspect: () => ({
+            generation: 1,
+            profiles: [profile],
+            diagnostics: [],
+          }),
+          list: () => [profile],
+          resolve: () => ({ ok: true, value: profile }),
+          diagnostics: () => [],
+        },
+        async spawn(harness, task) {
+          observed = { harness, task };
+          return completedSnapshot(task);
+        },
+      },
+    );
+
+    const spawn = tools.get("subagent_spawn");
+    assert.ok(spawn);
+    await spawn.execute(
+      "call-profile",
+      {
+        prompt: "inspect",
+        name: "security",
+        profile: "security-reviewer",
+        model: "opus",
+      } as never,
+      undefined,
+      undefined,
+      {
+        cwd: directory,
+        isProjectTrusted: () => true,
+      } as never,
+    );
+
+    assert.ok(observed);
+    assert.equal(observed.harness, "claude");
+    assert.equal(observed.task.model, "opus");
+    assert.equal(observed.task.reasoningEffort, "high");
+    assert.equal(observed.task.profile, profile.identity);
+    assert.equal(observed.task.execution, profile.policy);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("subagent_spawn passes canonical cwd and resolved trust to the backend", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-subagent-context-"));

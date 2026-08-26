@@ -27,6 +27,7 @@ const unit = [
   "extensions/subagents/by-the-way.test.ts",
   "extensions/subagents/codex-process.test.ts",
   "extensions/subagents/context-usage.test.ts",
+  "extensions/subagents/profile-policy.test.ts",
   "extensions/subagents/result-delivery.test.ts",
   "extensions/subagents/takeover.test.ts",
   "extensions/summaries/config.test.ts",
@@ -47,17 +48,21 @@ const integration = [
   "extensions/platform/lifecycle-supervisor.integration.test.ts",
   "extensions/platform/phase2-composition.test.ts",
   "extensions/platform/plan-mode.integration.test.ts",
+  "extensions/platform/profiles.test.ts",
   "extensions/platform/project-identity.test.ts",
   "extensions/platform/rules.integration.test.ts",
   "extensions/platform/state-store.integration.test.ts",
+  "extensions/platform/workspaces.test.ts",
   "extensions/shared/child-session.test.ts",
   "extensions/subagents/manager.test.ts",
+  "extensions/subagents/phase3-wiring.test.ts",
   "extensions/workflows/runner.test.ts",
   "extensions/workflows/sandbox.test.ts",
 ];
 const live = [
   "extensions/subagents/claude.test.ts",
   "extensions/subagents/codex.test.ts",
+  "extensions/subagents/pi.test.ts",
 ];
 const delegated = ["extensions/file-search/index.spec.ts"];
 

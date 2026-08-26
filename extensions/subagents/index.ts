@@ -76,6 +76,14 @@ import {
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import { resolveStandaloneChildProjectContext } from "../shared/child-session.ts";
+import type { ProfileCatalog } from "../platform/src/profiles/index.ts";
+import { platformAgentServices } from "../platform/src/agents/services.ts";
+import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
+import type {
+  WorkspaceInventory,
+  WorkspaceLease,
+  WorkspaceResult,
+} from "../platform/src/workspaces/index.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -91,21 +99,44 @@ interface BtwResultData {
   readonly sessionFilePath?: string;
 }
 
+function inventoryDirtySummary(inventory: WorkspaceInventory) {
+  return Object.entries(inventory)
+    .filter(([key, value]) => key !== "entries" && value === true)
+    .map(([key]) => key);
+}
+
 function describeSubagent(snap: SubagentSnapshot) {
   const details = [
     `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
     formatContextUtilization(snap.usage),
     formatElapsed(snap),
-    snap.cwd,
+    snap.profile ? `profile=${snap.profile.name}` : "",
+    snap.workspace ? `workspace=${snap.workspace.workspaceId}` : "unisolated",
+    snap.workspace ? snap.workspace.projectRoot : snap.cwd,
   ].filter(Boolean);
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
+}
+
+export function mapGuardedWorkspacePaths(
+  snap: Pick<SubagentSnapshot, "workspace">,
+  text: string,
+) {
+  return snap.workspace
+    ? text
+        .replaceAll(snap.workspace.path, snap.workspace.projectRoot)
+        .replaceAll(
+          snap.workspace.path.replaceAll("\\", "/"),
+          snap.workspace.projectRoot.replaceAll("\\", "/"),
+        )
+    : text;
 }
 
 function truncatedOutput(
   snap: SubagentSnapshot,
   maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
 ): string {
-  const output = snap.finalText || "(no output)";
+  const rawOutput = snap.finalText || "(no output)";
+  const output = mapGuardedWorkspacePaths(snap, rawOutput);
   const truncation = truncateHead(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
@@ -118,6 +149,7 @@ function truncatedOutput(
 }
 
 export interface SubagentsExtensionOptions {
+  profileCatalog?: ProfileCatalog;
   spawn?: (
     harness: BackendName,
     task: SpawnTask,
@@ -231,9 +263,50 @@ export default function subagentsExtension(
     if (sessionContext?.isIdle()) flushResults();
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    const manager = platformAgentServices(pi.events)?.workspaces;
+    if (!manager) return;
+    const bindings = ctx.sessionManager
+      .getBranch()
+      .filter(
+        (entry) =>
+          entry.type === "custom" &&
+          entry.customType === "guarded-workspace-binding",
+      )
+      .map(
+        (entry) =>
+          (entry as { data?: unknown }).data as {
+            workspace?: SubagentSnapshot["workspace"];
+          },
+      )
+      .filter((entry) => entry.workspace !== undefined);
+    for (const binding of bindings.slice(-64)) {
+      const workspace = binding.workspace!;
+      const rebound = await manager.rebind({
+        workspaceId: workspace.workspaceId,
+        owner: workspace.owner,
+        fence: workspace.fence,
+      });
+      if (rebound.ok) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Guarded workspace ${workspace.workspaceId} remains leased; recovery waits for expiry or explicit cancellation.`,
+            "info",
+          );
+        }
+      } else if (
+        (rebound.error.code === "IDENTITY_MISMATCH" ||
+          rebound.error.code === "LEASE_LOST") &&
+        ctx.hasUI
+      ) {
+        ctx.ui.notify(
+          `Guarded workspace ${workspace.workspaceId} resume rejected: ${rebound.error.message}`,
+          "warning",
+        );
+      }
+    }
   });
 
   pi.on("agent_settled", flushResults);
@@ -268,9 +341,17 @@ export default function subagentsExtension(
       name: Type.String({
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
       }),
-      harness: StringEnum(BACKEND_NAMES, {
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
-      }),
+      harness: Type.Optional(
+        StringEnum(BACKEND_NAMES, {
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
+        }),
+      ),
+      profile: Type.Optional(
+        Type.String({
+          description:
+            "Persistent agent profile name. Supplies backend, restrictions, instructions, limits, role, and workspace policy.",
+        }),
+      ),
       working_dir: Type.Optional(
         Type.String({
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
@@ -287,27 +368,169 @@ export default function subagentsExtension(
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const harness = params.harness;
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
+      const profileCatalog =
+        options.profileCatalog ?? platformAgentServices(pi.events)?.profiles;
+      const profileResult = params.profile
+        ? profileCatalog?.resolve(params.profile)
+        : undefined;
+      if (params.profile && !profileResult) {
+        throw new Error(
+          "Named agent profiles are unavailable in this session. Enable the profiles platform capability.",
+        );
+      }
+      if (profileResult && !profileResult.ok) {
+        throw new Error(profileResult.error.message);
+      }
+      const profile = profileResult?.ok ? profileResult.value : undefined;
+      if (
+        profile &&
+        params.harness &&
+        params.harness !== profile.defaults.backend
+      ) {
+        throw new Error(
+          `Profile ${JSON.stringify(profile.identity.name)} requires ${profile.defaults.backend}; harness cannot override profile authority.`,
+        );
+      }
+      const harness = profile?.defaults.backend ?? params.harness;
+      if (!harness) {
+        throw new Error("Provide either profile or harness.");
+      }
 
-      const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
+      if (
+        profile?.policy.workspace === "isolated" &&
+        params.working_dir !== undefined
+      ) {
+        throw new Error(
+          "working_dir cannot weaken an isolated profile workspace policy.",
+        );
+      }
+      let cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
+      let workspaceLease: WorkspaceResult<WorkspaceLease> | undefined;
+      const workspaceManager = platformAgentServices(pi.events)?.workspaces;
+      if (profile?.policy.workspace === "isolated") {
+        if (!workspaceManager) {
+          throw new Error(
+            "Isolated agent profile requires the workspaces platform capability.",
+          );
+        }
+        const created = await workspaceManager.create({
+          base: { kind: "current-head" },
+        });
+        if (!created.ok) throw new Error(created.error.message);
+        const workspaceTtlMs = Math.min(
+          Math.max(
+            (profile.policy.limits.timeoutMs ?? 300_000) + 120_000,
+            600_000,
+          ),
+          86_400_000,
+        );
+        workspaceLease = await workspaceManager.lease({
+          workspaceId: created.value.workspaceId,
+          owner: {
+            sessionId: ctx.sessionManager.getSessionId(),
+            agentId: `tool-${toolCallId}`,
+          },
+          ttlMs: workspaceTtlMs,
+          role: profile.policy.role,
+          profile: profile.identity.name,
+          profileDigest: profile.identity.contentDigest,
+          profileGeneration: profile.identity.catalogGeneration,
+          profileScope: profile.identity.source.scope,
+          profilePath: profile.identity.source.path,
+        });
+        if (!workspaceLease.ok) throw new Error(workspaceLease.error.message);
+        cwd = workspaceLease.value.snapshot.path;
+      }
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
-      const childContext = resolveStandaloneChildProjectContext({
-        parentCwd: ctx.cwd,
-        childCwd: cwd,
-        parentTrusted: ctx.isProjectTrusted(),
-      });
+      const childContext = workspaceLease?.ok
+        ? { cwd, projectTrusted: ctx.isProjectTrusted() }
+        : resolveStandaloneChildProjectContext({
+            parentCwd: ctx.cwd,
+            childCwd: cwd,
+            parentTrusted: ctx.isProjectTrusted(),
+          });
       const childCwd = childContext.cwd;
       const title = params.name.trim().slice(0, 160) || "subagent";
+      let activeWorkspaceLease = workspaceLease?.ok
+        ? workspaceLease.value
+        : undefined;
+      const workspaceBinding = () =>
+        activeWorkspaceLease
+          ? {
+              workspaceId: activeWorkspaceLease.workspaceId,
+              owner: activeWorkspaceLease.owner,
+              fence: activeWorkspaceLease.fence,
+              expiresAt: activeWorkspaceLease.expiresAt,
+              projectId: activeWorkspaceLease.snapshot.projectId,
+              projectRoot: activeWorkspaceLease.snapshot.projectRoot,
+              path: activeWorkspaceLease.snapshot.path,
+              state: "leased" as const,
+              role: profile!.policy.role,
+              profile: profile!.identity,
+              projectTrusted: true as const,
+            }
+          : undefined;
+      let workspaceLifecycle: Promise<void> = Promise.resolve();
+      const workspaceControl =
+        activeWorkspaceLease && workspaceManager
+          ? {
+              async renew() {
+                let binding:
+                  NonNullable<SubagentSnapshot["workspace"]> | undefined;
+                workspaceLifecycle = workspaceLifecycle.then(async () => {
+                  if (!activeWorkspaceLease) {
+                    throw new Error("Workspace was already preserved.");
+                  }
+                  const renewed = await workspaceManager.renew(
+                    activeWorkspaceLease,
+                    Math.min(
+                      Math.max(
+                        (profile?.policy.limits.timeoutMs ?? 300_000) + 120_000,
+                        600_000,
+                      ),
+                      86_400_000,
+                    ),
+                  );
+                  if (!renewed.ok) throw new Error(renewed.error.message);
+                  activeWorkspaceLease = renewed.value;
+                  binding = workspaceBinding()!;
+                });
+                await workspaceLifecycle;
+                return binding!;
+              },
+              async preserve() {
+                workspaceLifecycle = workspaceLifecycle.then(async () => {
+                  if (!activeWorkspaceLease) return;
+                  const preserved = await workspaceManager.disposition(
+                    activeWorkspaceLease,
+                    { kind: "preserve" },
+                  );
+                  if (!preserved.ok) throw new Error(preserved.error.message);
+                  activeWorkspaceLease = undefined;
+                });
+                await workspaceLifecycle;
+              },
+            }
+          : undefined;
       const task = {
         prompt: params.prompt,
         title,
         cwd: childCwd,
-        model: params.model,
-        reasoningEffort: params.reasoning_effort,
+        model: params.model ?? profile?.defaults.model,
+        reasoningEffort: params.reasoning_effort ?? profile?.defaults.effort,
+        ...(profile
+          ? { profile: profile.identity, execution: profile.policy }
+          : {}),
+        ...(workspaceBinding()
+          ? {
+              workspace: workspaceBinding()!,
+              workspaceControl: workspaceControl!,
+            }
+          : {}),
         parent: {
           parentCwd: ctx.cwd,
           projectTrusted: childContext.projectTrusted,
@@ -318,36 +541,71 @@ export default function subagentsExtension(
           modelRegistry: ctx.modelRegistry,
         },
       } satisfies SpawnTask;
-      const snap = options.spawn
-        ? await options.spawn(harness, task, signal)
-        : await runTool(
-            getRuntime(),
-            (await getManager()).spawn(harness, task),
-            {
-              signal,
-              interruptMessage: "Subagent spawn aborted.",
-            },
-          );
+      let snap: SubagentSnapshot;
+      try {
+        snap = options.spawn
+          ? await options.spawn(harness, task, signal)
+          : await runTool(
+              getRuntime(),
+              (await getManager()).spawn(harness, task),
+              {
+                signal,
+                interruptMessage: "Subagent spawn aborted.",
+              },
+            );
+      } catch (error) {
+        if (workspaceControl) {
+          try {
+            await workspaceControl.preserve();
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Subagent spawn and guarded workspace preservation both failed.",
+            );
+          }
+        }
+        throw error;
+      }
+
+      if (snap.workspace) {
+        pi.appendEntry("guarded-workspace-binding", {
+          workspace: snap.workspace,
+          profile: snap.profile,
+        });
+      }
 
       return {
         content: [
           {
             type: "text",
-            text: buildSubagentSpawnResult({
-              id: snap.id,
-              title: snap.title,
-              harness,
-              modelLabel: snap.meta.modelLabel ?? "?",
-              cwd: childCwd,
-            }),
+            text: [
+              buildSubagentSpawnResult({
+                id: snap.id,
+                title: snap.title,
+                harness,
+                modelLabel: snap.meta.modelLabel ?? "?",
+                cwd: snap.workspace?.projectRoot ?? childCwd,
+              }),
+              ...(workspaceLease?.ok
+                ? (workspaceLease.value.snapshot.warnings ?? []).map(
+                    (warning) => `Workspace warning: ${warning}`,
+                  )
+                : []),
+            ].join("\n"),
           },
         ],
         details: {
           id: snap.id,
           title: snap.title,
-          cwd: childCwd,
+          cwd: snap.workspace?.projectRoot ?? childCwd,
           harness,
           model: snap.meta.modelLabel,
+          profile: snap.profile?.name,
+          workspace: snap.workspace?.workspaceId,
+          isolation: snap.workspace ? "guarded-workspace" : "unisolated",
+          warnings: workspaceLease?.ok
+            ? (workspaceLease.value.snapshot.warnings ?? [])
+            : [],
         },
       };
     },
@@ -525,7 +783,7 @@ export default function subagentsExtension(
       let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
       if (snap.errorText) text += `\nError: ${snap.errorText}`;
 
-      const output = latestText(snap);
+      const output = mapGuardedWorkspacePaths(snap, latestText(snap));
       if (output) {
         const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
         text += `\n\nLatest output:\n${preview.content}`;
@@ -561,6 +819,50 @@ export default function subagentsExtension(
             title: snap.title,
             harness: snap.backend,
             status: snap.status,
+            profile: snap.profile?.name,
+            workspace: snap.workspace?.workspaceId,
+            isolation: snap.workspace ? "guarded-workspace" : "unisolated",
+          })),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "workspace_list",
+    label: "List Guarded Workspaces",
+    description:
+      "Inspect guarded agent workspaces, durable states, dirty classifications, and recovery warnings. Read-only.",
+    parameters: Type.Object({}),
+    async execute() {
+      const manager = platformAgentServices(pi.events)?.workspaces;
+      if (!manager) throw new Error("Guarded workspaces are not enabled.");
+      const inspected = await manager.inspect();
+      if (!inspected.ok) throw new Error(inspected.error.message);
+      const text =
+        inspected.value.length === 0
+          ? "No guarded workspaces."
+          : inspected.value
+              .map(({ snapshot, inventory }) => {
+                const dirty = inventory
+                  ? Object.entries(inventory)
+                      .filter(([key, value]) =>
+                        key === "entries" ? false : value === true,
+                      )
+                      .map(([key]) => key)
+                      .join(", ") || "clean"
+                  : "not present";
+                return `${snapshot.workspaceId} [${snapshot.state}] · ${dirty}`;
+              })
+              .join("\n");
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          workspaces: inspected.value.map(({ snapshot, inventory }) => ({
+            id: snapshot.workspaceId,
+            state: snapshot.state,
+            project: snapshot.projectId,
+            dirty: inventory ? inventoryDirtySummary(inventory) : [],
           })),
         },
       };
@@ -712,6 +1014,201 @@ export default function subagentsExtension(
       badge: "by the way",
     });
   };
+
+  pi.registerCommand("agents", {
+    description: "Browse and validate persistent named agent profiles",
+    handler: async (rawArgs, ctx) => {
+      const catalog =
+        options.profileCatalog ?? platformAgentServices(pi.events)?.profiles;
+      if (!catalog) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            "Named agent profiles are not enabled for this session.",
+            "warning",
+          );
+        }
+        return;
+      }
+      if (rawArgs.trim() === "reload") {
+        const resolved = await createProjectIdentity().resolve(ctx.cwd);
+        if (!resolved.ok) {
+          if (ctx.hasUI) ctx.ui.notify(resolved.error.message, "error");
+          return;
+        }
+        const project = resolved.value;
+        const projectRoot =
+          project.kind === "git" && !project.bare
+            ? project.repositoryRoot
+            : project.canonicalCwd;
+        await catalog.reload({
+          projectRoot,
+          projectTrusted: ctx.isProjectTrusted(),
+        });
+      }
+      const snapshot = catalog.inspect();
+      const diagnostics = snapshot.diagnostics.filter(
+        (diagnostic) => diagnostic.severity === "error",
+      );
+      const lines = [
+        ...snapshot.profiles.map((profile) => {
+          const policy = profile.policy;
+          return `${profile.identity.name} [${profile.identity.source.scope}] · ${profile.defaults.backend}${profile.defaults.model ? `/${profile.defaults.model}` : ""} · ${policy.workspace} · ${policy.role} · ${profile.identity.contentDigest.slice(0, 8)}`;
+        }),
+        ...snapshot.diagnostics.map(
+          (diagnostic) =>
+            `${diagnostic.severity.toUpperCase()} ${diagnostic.code} · ${diagnostic.path} · ${diagnostic.message}`,
+        ),
+      ];
+      if (ctx.mode === "tui" && lines.length > 0) {
+        await ctx.ui.select(
+          `Agent profiles · generation ${snapshot.generation}${diagnostics.length > 0 ? ` · ${diagnostics.length} invalid` : ""}`,
+          lines,
+        );
+      } else if (ctx.hasUI) {
+        ctx.ui.notify(
+          lines.length > 0
+            ? lines.join("\n")
+            : diagnostics.length > 0
+              ? diagnostics.map((diagnostic) => diagnostic.message).join("\n")
+              : "No agent profiles found.",
+          diagnostics.length > 0 ? "warning" : "info",
+        );
+      }
+    },
+  });
+
+  pi.registerCommand("workspaces", {
+    description: "Inspect and disposition guarded agent workspaces",
+    handler: async (_args, ctx) => {
+      const manager = platformAgentServices(pi.events)?.workspaces;
+      if (!manager) {
+        if (ctx.hasUI)
+          ctx.ui.notify("Guarded workspaces are not enabled.", "warning");
+        return;
+      }
+      const inspected = await manager.inspect();
+      if (!inspected.ok) {
+        if (ctx.hasUI) ctx.ui.notify(inspected.error.message, "error");
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            inspected.value
+              .map(
+                ({ snapshot }) =>
+                  `${snapshot.workspaceId} [${snapshot.state}] ${snapshot.path}`,
+              )
+              .join("\n") || "No guarded workspaces.",
+            "info",
+          );
+        }
+        return;
+      }
+      if (inspected.value.length === 0) {
+        ctx.ui.notify("No guarded workspaces.", "info");
+        return;
+      }
+      const labels = inspected.value.map(
+        ({ snapshot, inventory }) =>
+          `${snapshot.workspaceId} [${snapshot.state}] · ${inventory ? inventoryDirtySummary(inventory).join(", ") || "clean" : "not present"}`,
+      );
+      const selected = await ctx.ui.select("Guarded workspaces", labels);
+      const index = selected ? labels.indexOf(selected) : -1;
+      if (index < 0) return;
+      const choice = inspected.value[index]!;
+      if (choice.snapshot.state === "leased") {
+        ctx.ui.notify(
+          "Workspace is leased by an active or recoverable agent. Wait, cancel it, or run recovery after lease expiry.",
+          "warning",
+        );
+        return;
+      }
+      if (
+        choice.snapshot.state === "integrated" ||
+        choice.snapshot.state === "abandoned"
+      ) {
+        ctx.ui.notify("Workspace disposition is already terminal.", "info");
+        return;
+      }
+      const action = await ctx.ui.select("Workspace action", [
+        ...(choice.snapshot.state === "dirty" ? ["mark reviewed"] : []),
+        ...(choice.snapshot.state === "reviewed" ? ["integrate"] : []),
+        "abandon",
+      ]);
+      if (!action) return;
+      const lease = await manager.lease({
+        workspaceId: choice.snapshot.workspaceId,
+        owner: {
+          sessionId: ctx.sessionManager.getSessionId(),
+          agentId: "workspace-ui",
+        },
+        ttlMs: 300_000,
+        role: "review",
+      });
+      if (!lease.ok) {
+        ctx.ui.notify(lease.error.message, "error");
+        return;
+      }
+      if (action === "mark reviewed") {
+        const evidence = await ctx.ui.input(
+          "Review evidence",
+          "Tests, review, and commit reference",
+        );
+        if (!evidence?.trim()) {
+          await manager.disposition(lease.value, { kind: "preserve" });
+          return;
+        }
+        const reviewed = await manager.disposition(lease.value, {
+          kind: "mark-reviewed",
+          evidence: evidence.trim(),
+        });
+        if (!reviewed.ok) {
+          ctx.ui.notify(reviewed.error.message, "error");
+          return;
+        }
+        await manager.disposition(lease.value, { kind: "preserve" });
+        ctx.ui.notify("Workspace marked reviewed.", "info");
+        return;
+      }
+      if (action === "integrate") {
+        const targetBranch = await ctx.ui.input("Target branch", "main");
+        const expectedTargetCommit = await ctx.ui.input(
+          "Expected target commit",
+          "full Git object id",
+        );
+        if (!targetBranch || !expectedTargetCommit) {
+          await manager.disposition(lease.value, { kind: "preserve" });
+          return;
+        }
+        const integrated = await manager.integrate(lease.value, {
+          targetBranch,
+          expectedTargetCommit,
+        });
+        ctx.ui.notify(
+          integrated.ok ? "Workspace integrated." : integrated.error.message,
+          integrated.ok ? "info" : "error",
+        );
+        return;
+      }
+      const confirmed = await ctx.ui.confirm(
+        "Abandon guarded workspace?",
+        "This permanently removes workspace data after safety revalidation.",
+      );
+      if (!confirmed) {
+        await manager.disposition(lease.value, { kind: "preserve" });
+        return;
+      }
+      const abandoned = await manager.disposition(lease.value, {
+        kind: "abandon",
+        acknowledgeDataLoss: true,
+      });
+      ctx.ui.notify(
+        abandoned.ok ? "Workspace abandoned." : abandoned.error.message,
+        abandoned.ok ? "info" : "error",
+      );
+    },
+  });
 
   pi.registerCommand("btw", {
     description:

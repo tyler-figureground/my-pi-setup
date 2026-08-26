@@ -2,6 +2,8 @@
   "planMode": true,
   "hooks": true,
   "rules": true,
+  "profiles": true,
+  "workspaces": true,
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",

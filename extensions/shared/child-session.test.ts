@@ -34,6 +34,7 @@ import {
   resolveStandaloneChildProjectContext,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
+  workspaceContainsWriteTarget,
   type DisposableChildSession,
 } from "./child-session.ts";
 
@@ -119,6 +120,7 @@ test("child denylist keeps extension and workflow structured tools available", a
         "subagent_check",
         "subagent_list",
         "workflow",
+        "workspace_list",
         "ask_user",
       ],
     );
@@ -266,6 +268,50 @@ test("child loading omits parent lifecycle hooks but keeps child-safe extensions
     );
     await shutdownAndDisposeChildSession(session);
   });
+});
+
+test("guarded workspace write containment rejects absolute and junction escapes", async () => {
+  await withTempDir(async (directory) => {
+    const workspace = path.join(directory, "workspace");
+    const outside = path.join(directory, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    const alias = path.join(workspace, "escape");
+    await symlink(
+      outside,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.equal(
+      workspaceContainsWriteTarget(workspace, workspace, "inside.txt"),
+      true,
+    );
+    assert.equal(
+      workspaceContainsWriteTarget(
+        workspace,
+        workspace,
+        path.join(outside, "x.txt"),
+      ),
+      false,
+    );
+    assert.equal(
+      workspaceContainsWriteTarget(workspace, workspace, "escape/x.txt"),
+      false,
+    );
+  });
+});
+
+test("profile tool restrictions narrow Pi children without restoring orchestration", () => {
+  assert.deepEqual(
+    childToolPolicy("review", {
+      allowedTools: ["read", "rg", "subagent_spawn"],
+      disallowedTools: ["bash", "read"],
+    }),
+    {
+      tools: ["read", "rg", "subagent_spawn"],
+      excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES, "bash", "read"],
+    },
+  );
 });
 
 test("role profiles retain the child tool contract", () => {

@@ -15,7 +15,7 @@ test("Windows command shims run through cmd.exe without Node spawn EINVAL", () =
         "/d",
         "/s",
         "/c",
-        '""C:\\Program Files\\npm\\codex.cmd" app-server --stdio"',
+        '""C:\\Program Files\\npm\\codex.cmd" --disable multi_agent app-server --stdio"',
       ],
       windowsVerbatimArguments: true,
     },
@@ -35,7 +35,7 @@ test("Windows batch shims use the same guarded cmd.exe boundary", () => {
         "/d",
         "/s",
         "/c",
-        '""C:\\Program Files\\npm\\codex.bat" app-server --stdio"',
+        '""C:\\Program Files\\npm\\codex.bat" --disable multi_agent app-server --stdio"',
       ],
       windowsVerbatimArguments: true,
     },
@@ -47,13 +47,13 @@ test("native Codex executables spawn directly", () => {
     codexProcessInvocation("C:\\tools\\codex.exe", "win32", "cmd.exe"),
     {
       file: "C:\\tools\\codex.exe",
-      args: ["app-server", "--stdio"],
+      args: ["--disable", "multi_agent", "app-server", "--stdio"],
       windowsVerbatimArguments: false,
     },
   );
   assert.deepEqual(codexProcessInvocation("/usr/bin/codex", "linux"), {
     file: "/usr/bin/codex",
-    args: ["app-server", "--stdio"],
+    args: ["--disable", "multi_agent", "app-server", "--stdio"],
     windowsVerbatimArguments: false,
   });
 });

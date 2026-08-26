@@ -33,6 +33,8 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { compileClaudeExecutionPolicy } from "../profile-policy.ts";
+import { workspaceContainsWriteTarget } from "../../../shared/child-session.ts";
 
 const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
@@ -137,21 +139,16 @@ class ClaudeInput implements AsyncIterable<SDKUserMessage> {
 
 // --- Model, effort, and transcript helpers ----------------------------------
 
-/**
- * Claude's deprecated-but-supported maxThinkingTokens is the closest match to
- * the shared numeric scale requested by this extension. Zero explicitly
- * disables extended thinking in SDK 0.3.207; an omitted effort leaves the CLI
- * default untouched.
- */
-const THINKING_BUDGETS = {
-  off: 0,
-  minimal: 1_024,
-  low: 4_096,
-  medium: 10_000,
-  high: 16_000,
-  xhigh: 32_000,
-  max: 63_999,
-} satisfies Record<ReasoningEffort, number>;
+export function claudeReasoningOptions(effort: ReasoningEffort | undefined) {
+  if (effort === undefined) return {};
+  if (effort === "off") {
+    return { thinking: { type: "disabled" as const } };
+  }
+  return {
+    thinking: { type: "adaptive" as const },
+    effort: effort === "minimal" ? ("low" as const) : effort,
+  };
+}
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(
@@ -215,7 +212,7 @@ function assistantParts(message: SDKAssistantMessage): TranscriptPart[] {
 
 /** Claude Code's project-directory escaping, verified against CLI 2.1.207. */
 function sessionFilePath(cwd: string, sessionId: string) {
-  const projectDirectory = cwd.replace(/[/.]/g, "-");
+  const projectDirectory = cwd.replace(/[\\/:.]/g, "-");
   return path.join(
     os.homedir(),
     ".claude",
@@ -317,8 +314,12 @@ const makeClaudeSession = (
       } satisfies SubagentMeta as SubagentMeta,
     };
 
-    const thinkingBudget = task.reasoningEffort
-      ? THINKING_BUDGETS[task.reasoningEffort]
+    const reasoning = claudeReasoningOptions(task.reasoningEffort);
+    const execution = task.execution
+      ? yield* Effect.try({
+          try: () => compileClaudeExecutionPolicy(task.execution!),
+          catch: (error) => new SpawnError({ message: boundedError(error) }),
+        })
       : undefined;
     const claudeBinary = resolveClaudeBinary();
     const nativeQuery = yield* Effect.try({
@@ -330,25 +331,120 @@ const makeClaudeSession = (
             // Headless children cannot answer approval prompts. The caller
             // already chose to launch an autonomous subagent, so let it use
             // its tools without interactive permission checks.
-            permissionMode: "bypassPermissions",
-            allowDangerouslySkipPermissions: true,
+            permissionMode: task.workspace ? "default" : "bypassPermissions",
+            ...(task.workspace
+              ? {
+                  hooks: {
+                    PreToolUse: [
+                      {
+                        hooks: [
+                          async (input: any) => {
+                            const toolName = input.tool_name as string;
+                            const toolInput = input.tool_input as Record<
+                              string,
+                              unknown
+                            >;
+                            if (
+                              toolName === "Write" ||
+                              toolName === "Edit" ||
+                              toolName === "NotebookEdit"
+                            ) {
+                              const target =
+                                typeof toolInput.file_path === "string"
+                                  ? toolInput.file_path
+                                  : typeof toolInput.notebook_path === "string"
+                                    ? toolInput.notebook_path
+                                    : undefined;
+                              if (
+                                !target ||
+                                !workspaceContainsWriteTarget(
+                                  task.workspace!.path,
+                                  task.cwd,
+                                  target,
+                                )
+                              ) {
+                                return {
+                                  hookSpecificOutput: {
+                                    hookEventName: "PreToolUse" as const,
+                                    permissionDecision: "deny" as const,
+                                    permissionDecisionReason:
+                                      "Guarded workspace profile cannot write outside its leased workspace.",
+                                  },
+                                };
+                              }
+                            }
+                            return { continue: true };
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  canUseTool: async (
+                    toolName: string,
+                    input: Record<string, unknown>,
+                  ) => {
+                    if (
+                      toolName === "Write" ||
+                      toolName === "Edit" ||
+                      toolName === "NotebookEdit"
+                    ) {
+                      const target =
+                        typeof input.file_path === "string"
+                          ? input.file_path
+                          : typeof input.notebook_path === "string"
+                            ? input.notebook_path
+                            : undefined;
+                      if (
+                        !target ||
+                        !workspaceContainsWriteTarget(
+                          task.workspace!.path,
+                          task.cwd,
+                          target,
+                        )
+                      ) {
+                        return {
+                          behavior: "deny" as const,
+                          message:
+                            "Guarded workspace profile cannot write outside its leased workspace.",
+                          interrupt: true,
+                        };
+                      }
+                    }
+                    return {
+                      behavior: "allow" as const,
+                      updatedInput: input,
+                    };
+                  },
+                }
+              : { allowDangerouslySkipPermissions: true }),
             // Keep child orchestration inside this extension's global manager
             // and concurrency cap rather than Claude Code's native subagents.
-            disallowedTools: ["Agent", "Task"],
+            disallowedTools: execution?.disallowedTools ?? ["Agent", "Task"],
+            ...(execution?.tools ? { tools: execution.tools } : {}),
+            ...(execution?.sandbox ? { sandbox: execution.sandbox } : {}),
+            ...(execution?.appendSystemPrompt
+              ? {
+                  systemPrompt: {
+                    type: "preset" as const,
+                    preset: "claude_code" as const,
+                    append: execution.appendSystemPrompt,
+                  },
+                }
+              : {}),
             // For cwds pi marked untrusted, restrict to user-level settings so
             // an untrusted project's config cannot reconfigure the child.
-            ...(task.parent.projectTrusted
-              ? {}
-              : { settingSources: ["user" as const] }),
+            ...(task.workspace
+              ? { settingSources: [] }
+              : task.parent.projectTrusted
+                ? {}
+                : { settingSources: ["user" as const] }),
             includePartialMessages: true,
             abortController,
             ...(claudeBinary
               ? { pathToClaudeCodeExecutable: claudeBinary }
               : {}),
             ...(task.model ? { model: task.model } : {}),
-            ...(thinkingBudget !== undefined
-              ? { maxThinkingTokens: thinkingBudget }
-              : {}),
+            ...reasoning,
           },
         }),
       catch: (error) => new SpawnError({ message: boundedError(error) }),

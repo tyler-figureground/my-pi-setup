@@ -23,6 +23,8 @@ export const availablePlatformFlags = Object.freeze([
   "planMode",
   "hooks",
   "rules",
+  "profiles",
+  "workspaces",
 ] as const satisfies readonly PlatformFlagName[]);
 
 const availablePlatformFlagSet = new Set<PlatformFlagName>(

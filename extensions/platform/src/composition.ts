@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -16,7 +17,9 @@ import {
   loadPlatformFlags,
   type PlatformPlanConfiguration,
 } from "./config.ts";
+import { bindPlatformAgentServices } from "./agents/services.ts";
 import { createCapabilityPolicy } from "./core/policy/index.ts";
+import { createSqliteStateStore } from "./core/persistence/index.ts";
 import {
   createProjectIdentity,
   type ProjectIdentity,
@@ -25,6 +28,8 @@ import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
+import { createProfileCatalog } from "./profiles/index.ts";
+import { createWorkspaceManager } from "./workspaces/index.ts";
 
 export function canOwnPlatformDaemons(role: ExecutionRole) {
   return role === "parent";
@@ -83,6 +88,7 @@ export function createPlatformExtension(
       plan?: ReturnType<typeof createPlanCapability>;
       rules?: ReturnType<typeof createRulesCapability>;
       hooks?: ReturnType<typeof createHooksCapability>;
+      unbindAgentServices?: () => void;
     };
     let runtime: PlatformRuntime | undefined;
     let planCapability: ReturnType<typeof createPlanCapability> | undefined;
@@ -95,6 +101,11 @@ export function createPlatformExtension(
       event: unknown,
     ) => {
       const failures: unknown[] = [];
+      try {
+        current.unbindAgentServices?.();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await current.hooks?.stop(reason, event);
       } catch (error) {
@@ -153,11 +164,13 @@ export function createPlatformExtension(
         }
       }
 
-      const phase2Enabled =
+      const platformEnabled =
         configuration.flags.planMode ||
         configuration.flags.rules ||
-        configuration.flags.hooks;
-      if (!phase2Enabled || role !== "parent") return;
+        configuration.flags.hooks ||
+        configuration.flags.profiles ||
+        configuration.flags.workspaces;
+      if (!platformEnabled || role !== "parent") return;
 
       const resolved = await makeProjectIdentity().resolve(ctx.cwd);
       if (!resolved.ok) {
@@ -167,6 +180,83 @@ export function createPlatformExtension(
         return;
       }
       const project = resolved.value;
+
+      if (configuration.flags.profiles || configuration.flags.workspaces) {
+        const profiles = configuration.flags.profiles
+          ? createProfileCatalog({ agentDir })
+          : undefined;
+        if (profiles) {
+          const projectRoot =
+            project.kind === "git" && !project.bare
+              ? project.repositoryRoot
+              : project.canonicalCwd;
+          const snapshot = await profiles.reload({
+            projectRoot,
+            projectTrusted,
+          });
+          if (ctx.hasUI) {
+            for (const diagnostic of snapshot.diagnostics) {
+              if (diagnostic.severity === "error") {
+                ctx.ui.notify(
+                  `Agent profile ${diagnostic.path}: ${diagnostic.message}`,
+                  "warning",
+                );
+              }
+            }
+          }
+        }
+        let workspaces;
+        if (
+          configuration.flags.workspaces &&
+          projectTrusted &&
+          project.kind === "git" &&
+          !project.bare
+        ) {
+          const state = createSqliteStateStore({
+            path: path.join(agentDir, "state", "platform.sqlite"),
+          });
+          if (state.ok) {
+            const workspaceBase =
+              process.platform === "win32"
+                ? path.join(
+                    process.env.LOCALAPPDATA ?? agentDir,
+                    "pi-agent",
+                    "workspaces",
+                  )
+                : path.join(agentDir, "workspaces");
+            workspaces = createWorkspaceManager({
+              project,
+              projectTrusted,
+              workspaceRoot: path.join(
+                workspaceBase,
+                project.projectId
+                  .slice(project.projectId.indexOf(":") + 1)
+                  .slice(0, 16),
+              ),
+              stateStore: state.value,
+            });
+            const recovery = await workspaces.recover();
+            if (ctx.hasUI) {
+              if (!recovery.ok) {
+                ctx.ui.notify(recovery.error.message, "error");
+              } else {
+                for (const blocked of recovery.value.blocked) {
+                  ctx.ui.notify(
+                    `Workspace ${blocked.workspaceId} recovery blocked: ${blocked.reason}`,
+                    "warning",
+                  );
+                }
+              }
+            }
+          } else if (ctx.hasUI) {
+            ctx.ui.notify(state.error.message, "error");
+          }
+        }
+        current.unbindAgentServices = bindPlatformAgentServices(pi.events, {
+          ...(profiles ? { profiles } : {}),
+          ...(workspaces ? { workspaces } : {}),
+        });
+      }
 
       if (configuration.flags.planMode) {
         planCapability ??= createPlanCapability({

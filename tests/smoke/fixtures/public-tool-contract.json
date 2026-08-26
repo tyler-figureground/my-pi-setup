@@ -397,7 +397,7 @@
     "name": "subagent_spawn",
     "parameters": {
       "type": "object",
-      "required": ["prompt", "name", "harness"],
+      "required": ["prompt", "name"],
       "properties": {
         "prompt": {
           "type": "string",
@@ -411,6 +411,10 @@
           "type": "string",
           "enum": ["pi", "claude", "codex"],
           "description": "Harness to run the subagent on: \"pi\" (in-process pi session; inherits this environment), \"claude\" (Claude Code), or \"codex\" (Codex CLI). Choose deliberately per task."
+        },
+        "profile": {
+          "type": "string",
+          "description": "Persistent agent profile name. Supplies backend, restrictions, instructions, limits, role, and workspace policy."
         },
         "working_dir": {
           "type": "string",
@@ -464,6 +468,13 @@
           "description": "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress)."
         }
       }
+    }
+  },
+  {
+    "name": "workspace_list",
+    "parameters": {
+      "type": "object",
+      "properties": {}
     }
   }
 ]

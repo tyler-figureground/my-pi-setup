@@ -79,6 +79,8 @@ interface MutableSnapshot {
   title: string;
   prompt: string;
   cwd: string;
+  profile?: SubagentSnapshot["profile"];
+  workspace?: SubagentSnapshot["workspace"];
   status: SubagentStatus;
   createdAt: number;
   settledAt?: number;
@@ -95,10 +97,16 @@ interface MutableSnapshot {
 
 interface Entry {
   snapshot: MutableSnapshot;
+  task: SpawnTask;
   session: SubagentSession;
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  profileTimer?: ReturnType<typeof setTimeout>;
+  workspaceTimer?: ReturnType<typeof setTimeout>;
+  workspacePreserving?: boolean;
+  workspacePreserved?: boolean;
+  interruptionReason?: string;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
    * so concurrent restarts cannot race past the cap. */
   restarting?: boolean;
@@ -272,6 +280,10 @@ const makeManager = Effect.gen(function* () {
     entry.restarting = false;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
+    if (entry.profileTimer) clearTimeout(entry.profileTimer);
+    if (entry.workspaceTimer) clearTimeout(entry.workspaceTimer);
+    entry.profileTimer = undefined;
+    entry.workspaceTimer = undefined;
     switch (outcome._tag) {
       case "Completed":
         s.status = "done";
@@ -289,7 +301,8 @@ const makeManager = Effect.gen(function* () {
         break;
       case "Interrupted":
         s.status = "error";
-        s.errorText = "Run was aborted";
+        s.errorText = entry.interruptionReason ?? "Run was aborted";
+        entry.interruptionReason = undefined;
         s.finalText = (outcome.partialText ?? "").slice(
           0,
           FINAL_TEXT_MAX_LENGTH,
@@ -301,6 +314,37 @@ const makeManager = Effect.gen(function* () {
     s.liveTools = [];
     s.queued = [];
     const consumed = (waitInterest.get(s.id) ?? 0) > 0;
+    if (
+      entry.task.workspaceControl &&
+      !entry.workspacePreserved &&
+      !entry.workspacePreserving
+    ) {
+      entry.workspacePreserving = true;
+      const preservation = runDetached(
+        Effect.tryPromise(() => entry.task.workspaceControl!.preserve()).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              entry.workspacePreserving = false;
+              entry.workspacePreserved = true;
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              entry.workspacePreserving = false;
+              s.status = "error";
+              s.errorText =
+                `Workspace preservation failed: ${error instanceof Error ? error.message : String(error)}`.slice(
+                  0,
+                  ERROR_TEXT_MAX_LENGTH,
+                );
+              notify(s.id);
+            }),
+          ),
+        ),
+      );
+      cleanups.add(preservation);
+      preservation.addObserver(() => cleanups.delete(preservation));
+    }
     notify(s.id);
     try {
       // During teardown, don't queue results into a shutting-down session.
@@ -319,6 +363,7 @@ const makeManager = Effect.gen(function* () {
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
+        armProfileTimeout(entry);
         break;
       case "RunSettled":
         settle(entry, event.outcome);
@@ -363,6 +408,19 @@ const makeManager = Effect.gen(function* () {
         });
         s.liveAssistant = undefined;
         s.turns++;
+        if (
+          s.status === "running" &&
+          entry.task.execution?.limits.maxTurns !== undefined &&
+          s.turns >= entry.task.execution.limits.maxTurns
+        ) {
+          const maximum = entry.task.execution.limits.maxTurns;
+          runDetached(
+            abortEntry(
+              entry,
+              `Profile maximum of ${maximum} turn${maximum === 1 ? "" : "s"} reached.`,
+            ).pipe(Effect.ignore),
+          );
+        }
         break;
       case "ToolStart":
         entry.liveToolMap.set(event.toolId, {
@@ -419,6 +477,46 @@ const makeManager = Effect.gen(function* () {
     notify(s.id);
   };
 
+  const armWorkspaceRenewal = (entry: Entry) => {
+    if (entry.workspaceTimer) clearTimeout(entry.workspaceTimer);
+    entry.workspaceTimer = undefined;
+    if (!entry.task.workspaceControl || !entry.snapshot.workspace) return;
+    const remaining = entry.snapshot.workspace.expiresAt - Date.now();
+    const delay = Math.max(1_000, Math.min(60_000, Math.floor(remaining / 3)));
+    entry.workspaceTimer = setTimeout(() => {
+      void entry.task
+        .workspaceControl!.renew()
+        .then((workspace) => {
+          entry.snapshot.workspace = workspace;
+          if (entry.snapshot.status === "running") armWorkspaceRenewal(entry);
+          notify(entry.snapshot.id);
+        })
+        .catch((error) => {
+          runDetached(
+            abortEntry(
+              entry,
+              `Workspace lease renewal failed: ${error instanceof Error ? error.message : String(error)}`,
+            ).pipe(Effect.ignore),
+          );
+        });
+    }, delay);
+  };
+
+  const armProfileTimeout = (entry: Entry) => {
+    if (entry.profileTimer) clearTimeout(entry.profileTimer);
+    entry.profileTimer = undefined;
+    const timeoutMs = entry.task.execution?.limits.timeoutMs;
+    if (!timeoutMs) return;
+    entry.profileTimer = setTimeout(() => {
+      runDetached(
+        abortEntry(
+          entry,
+          `Profile timeout exceeded after ${timeoutMs} ms.`,
+        ).pipe(Effect.ignore),
+      );
+    }, timeoutMs);
+  };
+
   const spawn = (backendName: BackendName, task: SpawnTask) =>
     Effect.gen(function* () {
       // Reserve synchronously (before the first yield inside doSpawn) so
@@ -468,8 +566,14 @@ const makeManager = Effect.gen(function* () {
         const origin = task.origin ?? "model";
         const id =
           origin === "btw" ? `btw-${++btwCounter}` : `sa-${++modelCounter}`;
-        const meta = yield* session.meta;
+        const backendMeta = yield* session.meta;
+        const meta: SubagentMeta = {
+          ...backendMeta,
+          ...(task.profile ? { profile: task.profile } : {}),
+          ...(task.workspace ? { workspace: task.workspace } : {}),
+        };
         const entry: Entry = {
+          task,
           snapshot: {
             id,
             origin,
@@ -477,6 +581,8 @@ const makeManager = Effect.gen(function* () {
             title: task.title,
             prompt: task.prompt,
             cwd: task.cwd,
+            ...(task.profile ? { profile: task.profile } : {}),
+            ...(task.workspace ? { workspace: task.workspace } : {}),
             status: "running",
             createdAt: Date.now(),
             meta,
@@ -492,6 +598,8 @@ const makeManager = Effect.gen(function* () {
           liveToolMap: new Map(),
         };
         entries.set(id, entry);
+        armProfileTimeout(entry);
+        armWorkspaceRenewal(entry);
 
         // Pump: fold the event stream into the snapshot. Tied to the entry
         // scope, so closing the scope stops it. If the stream ends while the
@@ -554,9 +662,10 @@ const makeManager = Effect.gen(function* () {
     });
 
   /** Interrupt one running entry, force-closing its scope after 5s. */
-  const abortEntry = (entry: Entry) =>
+  const abortEntry = (entry: Entry, reason?: string) =>
     Effect.gen(function* () {
       if (entry.snapshot.status !== "running") return;
+      entry.interruptionReason = reason;
       const graceful = yield* entry.session.interrupt.pipe(
         Effect.timeout(STOP_TIMEOUT_MS),
         Effect.result,
@@ -567,8 +676,9 @@ const makeManager = Effect.gen(function* () {
         // the race and report the wrong terminal reason.
         yield* Effect.sync(() => {
           settle(entry, { _tag: "Interrupted" });
-          entry.snapshot.errorText =
-            "Abort deadline exceeded; session was force-disposed";
+          entry.snapshot.errorText = reason
+            ? `${reason} Abort deadline exceeded; session was force-disposed.`
+            : "Abort deadline exceeded; session was force-disposed";
           notify(entry.snapshot.id);
         });
         // Bound the close like disposeAll does: a stuck backend finalizer
@@ -593,7 +703,7 @@ const makeManager = Effect.gen(function* () {
       // enqueue duplicate automatic result messages into the parent.
       addInterest(runningIds);
       const work = Effect.gen(function* () {
-        yield* Effect.forEach(running, abortEntry, {
+        yield* Effect.forEach(running, (entry) => abortEntry(entry), {
           concurrency: "unbounded",
         });
         while (running.some((entry) => entry.snapshot.status === "running")) {
@@ -629,6 +739,11 @@ const makeManager = Effect.gen(function* () {
           message: `Subagent "${id}" is no longer tracked.`,
         });
       }
+      if (entry.workspacePreserved || entry.workspacePreserving) {
+        return new SendError({
+          message: `Subagent ${JSON.stringify(id)} workspace was preserved after settlement; spawn a new profiled agent to continue.`,
+        });
+      }
       // Restarting a settled subagent occupies a running slot again, so it
       // must respect the same cap as spawn. Steering an already-running one
       // does not consume additional capacity.
@@ -657,6 +772,12 @@ const makeManager = Effect.gen(function* () {
   const disposeAll = Effect.gen(function* () {
     disposed = true;
     const all = [...entries.values()];
+    for (const entry of all) {
+      if (entry.profileTimer) clearTimeout(entry.profileTimer);
+      if (entry.workspaceTimer) clearTimeout(entry.workspaceTimer);
+      entry.profileTimer = undefined;
+      entry.workspaceTimer = undefined;
+    }
     entries.clear();
     yield* Effect.forEach(
       all,
