@@ -33,7 +33,7 @@ Do not begin Phase 5.
 - [x] Implement F06 review model, execution, artifacts, TUI/RPC, immutable evidence, and disposable tests in vertical red-green slices.
 - [x] Run iterative security/architecture/acceptance reviews; fix all reproduced blocker/high findings with regressions.
 - [x] Complete acceptance evidence, documentation, performance evidence, smoke contract, and tracker.
-- [ ] Re-fetch, publish, fast-forward live `main`, and verify without disturbing dirty state.
+- [x] Re-fetch, publish, fast-forward live `main`, install platform dependencies, and verify without disturbing dirty state.
 - [x] Stop before Phase 5.
 
 ## Constraints

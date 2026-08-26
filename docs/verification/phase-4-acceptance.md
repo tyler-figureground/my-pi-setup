@@ -63,6 +63,7 @@ Safety and behavior verified:
 - This repository: `/review commit HEAD` completed with explicit no-findings, artifact ID, and unchanged dirty state.
 - Managed Pi reviewer transport reached real subagent backend. Standalone CLI inherited no selected provider key in two attempts; Node live Pi backend test passed 1/1 with authenticated runtime.
 - Codex backend live completion/interrupt passed 2/2 after shared policy changes.
+- Live checkout after fast-forward: dependency audit zero vulnerabilities; check/format pass; 200-unit run pass; focused Phase 4 suite 77 pass plus one opt-in Ruff skip; separate Ruff pass; smoke pass; Pi 1/1 and Codex 2/2.
 
 ## Manual limit
 

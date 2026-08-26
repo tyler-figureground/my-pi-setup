@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 4 implementation, hardening, documentation, benchmark, deterministic verification, and isolated live command verification complete. Publication and live fast-forward integration pending. Do not begin Phase 5.
+Phase 4 implementation, hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 5 pending explicit approval.
 
 ## Completed this phase
 
@@ -48,10 +48,10 @@ Authoritative details: `docs/verification/phase-4-acceptance.md`.
 - Base: `7b7654c`
 - Branch: `pi-capabilities-phase-4`
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-4`
-- Publication commits pending.
+- Phase 4 branch published through `c362c4f`; live `main` fast-forwarded and verified.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
 - Preserve DLL backup at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-After final verification settles green: re-fetch, commit/push Phase 4 branch, fast-forward live `main`, install updated platform dependencies, run live deterministic/smoke/backend verification, record live evidence, and push `main`. Do not begin Phase 5.
+Do not begin Phase 5 until explicitly requested.
