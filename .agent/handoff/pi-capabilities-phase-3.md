@@ -43,7 +43,7 @@ Tyler approved these seams before tests:
 - [x] 10. Bind isolated profiles to verified workspace leases and surface dispositions.
 - [x] 11. Run adversarial security/architecture/backend reviews and fix reproduced findings. Final independent blocker check reports none.
 - [x] 12. Complete acceptance, recovery runbook, backend matrix, documentation, measurements, and tracker evidence. Deterministic 167 unit, 145 integration plus 22 delegated, 4 skips, smoke pass; Pi profile 1/1 and Codex 2/2 live pass; Claude final rerun externally quota-blocked after Phase 3 baseline 2/2.
-- [ ] 13. Re-fetch, publish branch, fast-forward live `main`, install dependencies, and verify live checkout without disturbing dirty state.
+- [x] 13. Re-fetch, publish branch, fast-forward live `main`, and verify live checkout without disturbing dirty state. No dependency additions required.
 
 ## Hard gates
 

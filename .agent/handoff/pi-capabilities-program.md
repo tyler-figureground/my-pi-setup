@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 3 implementation, adversarial hardening, documentation, isolated deterministic verification, and available live verification complete. Publication and live integration pending. Do not begin Phase 4.
+Phase 3 implementation, adversarial hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 4 pending Tyler approval.
 
 ## Completed this phase
 
@@ -51,10 +51,10 @@ Phase 3 implementation, adversarial hardening, documentation, isolated determini
 - Base: `dc1a964`
 - Branch: `pi-capabilities-phase-3`
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-3`
-- Publication commits pending.
+- Phase 3 branch published at `7a95fd6`; live `main` fast-forwarded and verified.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
 - Preserve `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-Re-fetch, commit/push Phase 3 branch, fast-forward live `main`, install changed extension dependencies if needed, and run live-checkout deterministic/smoke/Pi/Codex verification while preserving dirty state. Do not begin Phase 4.
+Do not begin Phase 4 until explicitly requested.
