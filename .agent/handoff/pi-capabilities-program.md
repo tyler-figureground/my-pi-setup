@@ -1,6 +1,6 @@
 # Pi capabilities program handoff
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 
 ## Objective
 
@@ -8,53 +8,50 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 3 implementation, adversarial hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 4 pending Tyler approval.
+Phase 4 implementation, hardening, documentation, benchmark, deterministic verification, and isolated live command verification complete. Publication and live fast-forward integration pending. Do not begin Phase 5.
 
 ## Completed this phase
 
-- [x] F09 persistent named profiles: managed/user/trusted-project precedence, bounded YAML and material resolution, collisions, immutable digest/generation, provenance, `/agents`, reload, override matrix, backend policy compilers, host limits, snapshot/transcript metadata.
-- [x] F02 guarded workspaces: exact explicit/current/fresh bases, durable states/events, fenced lease/renew/rebind, operation guards, inspection, `.worktreeinclude`, preserve/review/integrate/abandon, recovery, Windows link detachment, shared-target verification, no recursive deletion.
-- [x] Isolated profile preparation for Pi/Claude/Codex with explicit ad hoc `unisolated` compatibility.
-- [x] Pi write/edit containment and project-resource exclusion; Claude fail-closed sandbox plus unconditional PreToolUse containment; Codex workspace-write and native multi-agent disable.
-- [x] Package trial rejected `@narumitw/pi-worktree@0.51.5` after native Windows false-success cleanup reproduction. ADR 0004 and research report recorded.
-- [x] Three adversarial review rounds closed lease expiry/races, path tampering, Claude native writes, reviewed-commit drift, Codex restriction/delegation gaps, Git hooks, cleanup postconditions, result-path leaks, and dirty-parent coverage.
-- [x] Final independent blocker check reports no unresolved code blockers.
+- [x] F04 `LanguageIntelligence`: lazy discovery, persistent synchronized LSP slots, diagnostics and semantic navigation, canonical worktree mapping, crash/restart, frame/traffic/result bounds, deferred tools, TypeScript/Ruff adapters.
+- [x] Exact `@narumitw/pi-lsp@0.49.6` trial and audit. Transient package runtime rejected; maintained Microsoft protocol libraries retained.
+- [x] Three-repository paired benchmark confirms warm semantic value while native checks remain authoritative.
+- [x] F06 `LocalReview`: four exact targets, fetch-first base, raw HEAD/index/worktree capture, strict finding validation/dedup, immutable evidence/artifacts, optional second reviewer and disposable tests, `/review` TUI/RPC command and cancellation.
+- [x] Review path excludes tools/project context, rejects Git configured code, preserves source fingerprint, and stores artifacts outside repository.
+- [x] Multiple adversarial review rounds closed environment leakage, process descendants, frame bounds, stale diagnostics, filters/upload-pack, mutable evidence, coordinate collapse, binary corruption, source races, prompt/artifact bounds, and dependency-link mutation.
 
 ## Verification
 
-- Definitive isolated deterministic run: 167 unit; 145 integration; 4 POSIX-only skips; 22 delegated file-search.
-- Smoke: repository extensions, print, JSON, RPC, reload, shutdown, no leaks.
-- Live: Pi profiled 1/1; Codex 2/2.
-- Claude: Phase 3 baseline completion/interrupt 2/2 passed before account quota exhaustion. Final rerun returned session-limit text; external account state, not code failure.
-- Native Windows: successful and failed junction cleanup preserve shared target; dirty parent byte-for-byte fixture; lease collision/recovery; path identity; operation guards; `.worktreeinclude`; expected-target integration.
-- Performance: warm startup median 3271.6 ms, 136.8 ms faster than Phase 2 median.
-- Manual TUI checklist: `docs/verification/phase-3-tui-smoke.md`.
+Authoritative details: `docs/verification/phase-4-acceptance.md`.
 
-## Key files
+- 200 unit pass.
+- 174 integration pass; 5 POSIX/opt-in skips.
+- 22 delegated file-search pass.
+- Real TypeScript and Ruff pass.
+- Smoke public contract, print, JSON, RPC, reload, shutdown, and leaks pass.
+- Live `/review` fixture finding and repository no-findings command pass with unchanged source.
+- Pi live 1/1; Codex live 2/2.
+- Standalone managed-review CLI attempts reached reviewer transport but lacked selected provider key. Scripted live command evidence and authenticated runtime backend evidence cover command/backend separately.
 
-- `extensions/platform/src/profiles/`
-- `extensions/platform/src/workspaces/`
-- `extensions/platform/src/agents/services.ts`
-- `extensions/shared/agent-profile.ts`
-- `extensions/shared/guarded-workspace.ts`
-- `extensions/shared/child-session.ts`
-- `extensions/subagents/`
-- `docs/architecture/phase-3-profiles-workspaces.md`
-- `docs/phase-3-configuration.md`
-- `docs/security/phase-3-threat-model.md`
-- `docs/runbooks/phase-3-workspace-recovery.md`
-- `docs/research/pi-worktree-audit.md`
-- `docs/verification/phase-3-acceptance.md`
+## Key references
 
-## Repo state
+- `docs/architecture/phase-4-language-review.md`
+- `docs/adr/0005-build-persistent-language-intelligence.md`
+- `docs/research/pi-lsp-audit.md`
+- `docs/phase-4-configuration.md`
+- `docs/security/phase-4-threat-model.md`
+- `docs/verification/phase-4-language-benchmark.md`
+- `docs/verification/phase-4-performance.md`
+- `docs/verification/phase-4-acceptance.md`
 
-- Base: `dc1a964`
-- Branch: `pi-capabilities-phase-3`
-- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-3`
-- Phase 3 branch published at `7a95fd6`; live `main` at `ece1639`, ahead 0 / behind 0 from `fork/main`, verified.
+## Repository state
+
+- Base: `7b7654c`
+- Branch: `pi-capabilities-phase-4`
+- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-4`
+- Publication commits pending.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
-- Preserve `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
+- Preserve DLL backup at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-Do not begin Phase 4 until explicitly requested.
+After final verification settles green: re-fetch, commit/push Phase 4 branch, fast-forward live `main`, install updated platform dependencies, run live deterministic/smoke/backend verification, record live evidence, and push `main`. Do not begin Phase 5.

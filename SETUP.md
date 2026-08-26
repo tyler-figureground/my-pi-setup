@@ -37,7 +37,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables read-only plan mode, path-scoped lazy rules, declarative hooks, named profiles, and guarded workspaces:
+`platform.json` enables plan mode, lazy rules, hooks, profiles, guarded workspaces, language intelligence, and local review:
 
 ```json
 {
@@ -46,6 +46,8 @@ When changing Effect, update every extension manifest in the same change, regene
   "rules": true,
   "profiles": true,
   "workspaces": true,
+  "languageIntelligence": true,
+  "review": true,
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",
@@ -66,8 +68,9 @@ Configuration locations:
 - trusted-project profiles: `<project>/.pi/agents/*.yaml`
 - guarded workspace state: `~/.pi/agent/state/platform.sqlite`
 - guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
+- language/review artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md) and [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md) for formats, commands, security limits, rollback, and workspace recovery.
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), and [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md).
 
 ## Firecrawl
 

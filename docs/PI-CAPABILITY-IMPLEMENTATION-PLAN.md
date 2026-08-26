@@ -639,73 +639,73 @@ Features: F04, F06.
 
 ### Trial and measurement
 
-- [ ] Trial exact pinned `@narumitw/pi-lsp` version
-- [ ] Benchmark targeted diagnostics against native typecheck/lint on at least three representative repos
-- [ ] Record latency, context bytes, tool calls, defect detection, startup cost
-- [ ] Decide retain package diagnostics, wrap it, or build persistent client
-- [ ] Preserve negative result if LSP adds no measurable value
+- [x] Trial exact pinned `@narumitw/pi-lsp` version
+- [x] Benchmark targeted diagnostics against native typecheck/lint on at least three representative repos
+- [x] Record latency, context bytes, tool calls, defect detection, startup cost
+- [x] Decide retain package diagnostics, wrap it, or build persistent client
+- [x] Preserve negative result if LSP adds no measurable value
 
 ### `LanguageIntelligence`
 
-- [ ] Implement lazy server discovery/config
-- [ ] Support persistent server lifecycle under `LifecycleSupervisor`
-- [ ] Synchronize open/change/close documents
-- [ ] Expose diagnostics, file symbols, workspace symbols, definition, references, implementations, type hover, and call hierarchy where server supports them
-- [ ] Map worktree paths through `ProjectIdentity`
-- [ ] Cap files, responses, and startup/request time
-- [ ] Restart crashed server with bounded backoff
-- [ ] Shut down cleanly on reload/session switch
-- [ ] Register tools lazily to preserve prompt cache
-- [ ] Keep repository-native build/typecheck/test authoritative
+- [x] Implement lazy server discovery/config
+- [x] Support persistent server lifecycle under `LifecycleSupervisor`
+- [x] Synchronize open/change/close documents
+- [x] Expose diagnostics, file symbols, workspace symbols, definition, references, implementations, type hover, and call hierarchy where server supports them
+- [x] Map worktree paths through `ProjectIdentity`
+- [x] Cap files, responses, and startup/request time
+- [x] Restart crashed server with bounded backoff
+- [x] Shut down cleanly on reload/session switch
+- [x] Register tools lazily to preserve prompt cache
+- [x] Keep repository-native build/typecheck/test authoritative
 
 ### Acceptance
 
-- [ ] Fixture server protocol tests pass
-- [ ] TypeScript and one non-TypeScript real server pass
-- [ ] Crash/restart test passes
-- [ ] Worktree diagnostics map to correct source-relative path
-- [ ] Unsupported method returns clear capability error
-- [ ] Benchmark decision recorded
+- [x] Fixture server protocol tests pass
+- [x] TypeScript and one non-TypeScript real server pass
+- [x] Crash/restart test passes
+- [x] Worktree diagnostics map to correct source-relative path
+- [x] Unsupported method returns clear capability error
+- [x] Benchmark decision recorded
 
 ## F06 first-class local review
 
 ### Review model
 
-- [ ] Define targets: uncommitted, base branch, commit, custom range
-- [ ] Fetch before any remote/base assessment
-- [ ] Define finding schema: severity, confidence, file, line/range, summary, failure scenario, evidence, category
-- [ ] Validate finding paths/lines against reviewed diff
-- [ ] Deduplicate overlapping findings
-- [ ] Persist full review artifact outside main context
+- [x] Define targets: uncommitted, base branch, commit, custom range
+- [x] Fetch before any remote/base assessment
+- [x] Define finding schema: severity, confidence, file, line/range, summary, failure scenario, evidence, category
+- [x] Validate finding paths/lines against reviewed diff
+- [x] Deduplicate overlapping findings
+- [x] Persist full review artifact outside main context
 
 ### Execution
 
-- [ ] Add `/review` target picker
-- [ ] Add model-facing review tool only if needed
-- [ ] Run reviewer under read-only profile and role
-- [ ] Support optional second reviewer/verifier
-- [ ] Use Git diff, code reads, tests, and LSP evidence
-- [ ] Forbid source modification throughout review
-- [ ] Render structured findings in TUI
-- [ ] Emit machine-readable JSON artifact
-- [ ] Support cancellation and bounded output
+- [x] Add `/review` target picker
+- [x] Add model-facing review tool only if needed
+- [x] Run reviewer under read-only profile and role
+- [x] Support optional second reviewer/verifier
+- [x] Use Git diff, code reads, tests, and LSP evidence
+- [x] Forbid source modification throughout review
+- [x] Render structured findings in TUI
+- [x] Emit machine-readable JSON artifact
+- [x] Support cancellation and bounded output
 
 ### Acceptance
 
-- [ ] Fixture diff yields validated findings
-- [ ] False file/line finding rejected
-- [ ] Duplicate findings merged deterministically
-- [ ] Source tree hash unchanged before/after review
-- [ ] Untracked files included for uncommitted target
-- [ ] Base branch staleness shown explicitly
-- [ ] No-findings result distinct from review failure
+- [x] Fixture diff yields validated findings
+- [x] False file/line finding rejected
+- [x] Duplicate findings merged deterministically
+- [x] Source tree hash unchanged before/after review
+- [x] Untracked files included for uncommitted target
+- [x] Base branch staleness shown explicitly
+- [x] No-findings result distinct from review failure
 
 ## Phase 4 exit gate
 
-- [ ] F04 decision and acceptance complete
-- [ ] F06 acceptance complete
-- [ ] Review command live-tested on this repo and a fixture repo
-- [ ] No source mutations from review path
+- [x] F04 decision and acceptance complete
+- [x] F06 acceptance complete
+- [x] Review command live-tested on this repo and a fixture repo
+- [x] No source mutations from review path
 
 ---
 
@@ -1190,6 +1190,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-25 | Phase 2 live integration | `9f4c4da`, `276dfee`, `e88ad98` | platform dependency clean install/audit; live `npm run check`; format; unit/integration/delegated; repository smoke; Codex live | 163 unit; 115 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Codex 2/2 | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; test isolation corrected after live global flags exposed environment coupling |
 | 2026-08-25 | Phase 3 profiles and guarded workspaces | `3d3ba2a` | exact package trial; native Windows junction probes; three adversarial review rounds plus final blocker check; check/format/unit/integration/smoke; Pi/Codex live | 167 unit; 145 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Pi profile 1/1; Codex 2/2; Claude final rerun externally quota-blocked after baseline 2/2 | Pass with external Claude limit | F09 and F02 complete; package rejected after false-success cleanup reproduction; performance, recovery runbook, security model, and TUI checklist recorded |
 | 2026-08-25 | Phase 3 live integration | `3d3ba2a`, `7a95fd6` | fast-forward live main; live check/format/unit/integration/delegated/smoke; Pi and Codex live | 167 unit; 145 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Pi 1/1; Codex 2/2 | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; no dependency manifest additions required |
+| 2026-08-26 | Phase 4 language intelligence and local review | `ef10735` | exact package trial; three-repository benchmark; Windows process/frame/filter/fetch/junction probes; iterative architecture/security reviews; serialized deterministic suite; live command fixtures | 200 unit; 174 integration + 22 delegated; 5 POSIX/opt-in skips; real TypeScript and Ruff; smoke print/JSON/RPC/reload/shutdown/leaks; Pi 1/1; Codex 2/2 | Pass | F04 and F06 complete; transient package replaced by persistent internal module; native checks remain authoritative; artifacts remain outside source |
 
 # Decision log
 

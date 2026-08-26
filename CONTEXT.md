@@ -55,3 +55,19 @@ _Avoid_: Alternate cwd, temp clone
 **Workspace Disposition**:
 Explicit host decision to preserve, mark reviewed, integrate, or abandon a Guarded Workspace after revalidation.
 _Avoid_: Cleanup flag, auto-delete
+
+**Language Intelligence**:
+Project-bound advisory diagnostics and semantic navigation from lazily activated, synchronized language servers. Repository-native verification remains authoritative.
+_Avoid_: Compiler result, verification result, LSP wrapper
+
+**Review Target**:
+Immutable, exact source comparison captured for one Local Review: uncommitted state, base branch comparison, commit, or custom range.
+_Avoid_: Live diff, branch name
+
+**Local Review**:
+Read-only evaluation of one Review Target that yields validated structured findings or an explicit no-findings conclusion, with full evidence persisted as an Artifact.
+_Avoid_: Diff summary, workspace approval, review prompt
+
+**Review Finding**:
+Host-validated defect claim tied to a reviewed path and range, with severity, confidence, failure scenario, category, and evidence.
+_Avoid_: Comment, suggestion, model output

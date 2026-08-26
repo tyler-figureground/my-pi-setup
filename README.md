@@ -15,6 +15,8 @@ This setup is fairly opinionated, it:
 - runs bounded declarative hooks through shared policy and lifecycle controls
 - resolves persistent named agent profiles with backend-enforced restrictions
 - isolates profiled agents in leased, recoverable guarded Git worktrees
+- provides persistent advisory diagnostics and semantic symbol navigation
+- runs read-only local review with validated findings and immutable artifacts
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 
