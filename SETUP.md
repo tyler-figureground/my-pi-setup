@@ -37,13 +37,15 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables read-only plan mode, path-scoped lazy rules, and declarative hooks:
+`platform.json` enables read-only plan mode, path-scoped lazy rules, declarative hooks, named profiles, and guarded workspaces:
 
 ```json
 {
   "planMode": true,
   "hooks": true,
   "rules": true,
+  "profiles": true,
+  "workspaces": true,
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",
@@ -60,8 +62,12 @@ Configuration locations:
 - trusted-project hooks: `<project>/.pi/hooks.yaml`
 - user plans: `~/.pi/agent/plans/`
 - trusted-project plans: `<project>/.pi/plans/`
+- user profiles: `~/.pi/agent/agents/*.yaml`
+- trusted-project profiles: `<project>/.pi/agents/*.yaml`
+- guarded workspace state: `~/.pi/agent/state/platform.sqlite`
+- guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md) for formats, commands, security limits, and rollback.
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md) and [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md) for formats, commands, security limits, rollback, and workspace recovery.
 
 ## Firecrawl
 

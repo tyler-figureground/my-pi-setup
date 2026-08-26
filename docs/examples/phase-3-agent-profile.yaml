@@ -1,0 +1,23 @@
+name: security-reviewer
+description: Review changes in an isolated guarded workspace
+backend: pi
+model: openai-codex/gpt-5.6-sol
+effort: high
+instructions:
+  inline: >-
+    Review public behavior, trust boundaries, race safety, and Windows path
+    handling. Reproduce findings and report exact evidence.
+  files: []
+skills: []
+allowedTools:
+  - read
+  - rg
+  - fd
+  - write
+  - edit
+disallowedTools:
+  - bash
+maxTurns: 8
+timeoutMs: 600000
+workspacePolicy: isolated
+role: review

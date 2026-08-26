@@ -43,3 +43,15 @@ _Avoid_: Planning prompt, read-only suggestion
 **Declarative Hook**:
 Trusted, provenance-carrying event matcher and bounded action definition executed through `TriggerEngine` and still subordinate to `CapabilityPolicy`.
 _Avoid_: Shell snippet, callback
+
+**Agent Profile**:
+Immutable, generation-stamped named resolution of backend defaults and host execution policy from managed, user, or trusted-project configuration.
+_Avoid_: Agent preset, prompt template
+
+**Guarded Workspace**:
+Manager-created Git worktree with verified project identity, explicit base commit, durable state, and fenced ownership.
+_Avoid_: Alternate cwd, temp clone
+
+**Workspace Disposition**:
+Explicit host decision to preserve, mark reviewed, integrate, or abandon a Guarded Workspace after revalidation.
+_Avoid_: Cleanup flag, auto-delete

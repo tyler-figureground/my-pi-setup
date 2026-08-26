@@ -13,6 +13,8 @@ This setup is fairly opinionated, it:
 - adds host-enforced read-only agent plan mode with direct user approval
 - loads trusted path-scoped rules only when matching files become relevant
 - runs bounded declarative hooks through shared policy and lifecycle controls
+- resolves persistent named agent profiles with backend-enforced restrictions
+- isolates profiled agents in leased, recoverable guarded Git worktrees
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

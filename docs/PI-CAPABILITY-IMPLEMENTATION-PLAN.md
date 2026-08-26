@@ -546,88 +546,88 @@ Features: F02, F09.
 
 ### Profile model
 
-- [ ] Define fields: name, description, backend, model, effort, instructions, skills, allowed/disallowed tools, max turns, timeout, workspace policy, role
-- [ ] Define user and trusted-project profile locations
-- [ ] Define managed/user/project precedence
-- [ ] Validate names and collisions
-- [ ] Resolve relative skill/instruction paths against profile source
-- [ ] Add source provenance to resolved profile
-- [ ] Add `/agents` browser and validation diagnostics
+- [x] Define fields: name, description, backend, model, effort, instructions, skills, allowed/disallowed tools, max turns, timeout, workspace policy, role
+- [x] Define user and trusted-project profile locations
+- [x] Define managed/user/project precedence
+- [x] Validate names and collisions
+- [x] Resolve relative skill/instruction paths against profile source
+- [x] Add source provenance to resolved profile
+- [x] Add `/agents` browser and validation diagnostics
 
 ### Subagent integration
 
-- [ ] Extend `SpawnTask` to accept resolved profile identity
-- [ ] Keep ad hoc spawn parameters backward compatible
-- [ ] Define override rules between profile and tool arguments
-- [ ] Enforce tool restrictions in Pi children
-- [ ] Pass compatible restrictions to Claude/Codex backends
-- [ ] Enforce max turns/timeout at supervisor layer
-- [ ] Include profile in snapshots and transcript metadata
-- [ ] Hot reload profiles safely
+- [x] Extend `SpawnTask` to accept resolved profile identity
+- [x] Keep ad hoc spawn parameters backward compatible
+- [x] Define override rules between profile and tool arguments
+- [x] Enforce tool restrictions in Pi children
+- [x] Pass compatible restrictions to Claude/Codex backends
+- [x] Enforce max turns/timeout at supervisor layer
+- [x] Include profile in snapshots and transcript metadata
+- [x] Hot reload profiles safely
 
 ### Acceptance
 
-- [ ] User/project precedence tests pass
-- [ ] Untrusted project profile ignored
-- [ ] Invalid profile never partially applies
-- [ ] Backend/model/tool/workspace settings verified for Pi, Claude, Codex
-- [ ] Existing ad hoc spawn calls remain compatible
+- [x] User/project precedence tests pass
+- [x] Untrusted project profile ignored
+- [x] Invalid profile never partially applies
+- [x] Backend/model/tool/workspace settings verified for Pi, Claude, Codex
+- [x] Existing ad hoc spawn calls remain compatible
 
 ## F02 guarded worktrees
 
 ### Package trial and design
 
-- [ ] Trial exact pinned `@narumitw/pi-worktree` version
-- [ ] Audit source, tests, license, install behavior, Windows cleanup
-- [ ] Decide package command adoption vs reviewed port
-- [ ] Record state machine ADR
+- [x] Trial exact pinned `@narumitw/pi-worktree` version
+- [x] Audit source, tests, license, install behavior, Windows cleanup
+- [x] Decide package command adoption vs reviewed port
+- [x] Record state machine ADR
 
 ### `WorkspaceManager`
 
-- [ ] Implement states: creating, ready, leased, dirty, reviewed, integrated, abandoned
-- [ ] Create from explicit verified base commit
-- [ ] Support fresh remote-aware base and current-HEAD base
-- [ ] Add searchable inspect/list
-- [ ] Add atomic lease with owner/session/expiry
-- [ ] Refuse concurrent lease collision
-- [ ] Detect tracked, staged, untracked, ignored, submodule, detached, and unpushed state
-- [ ] Support `.worktreeinclude` with secret warnings
-- [ ] Never use recursive filesystem deletion
-- [ ] Use `git worktree remove` after revalidation
-- [ ] Detach Windows junctions before removal and verify shared targets
-- [ ] Refuse dirty cleanup without explicit preserve/integrate/abandon decision
-- [ ] Recover stale leases after process death
+- [x] Implement states: creating, ready, leased, dirty, reviewed, integrated, abandoned
+- [x] Create from explicit verified base commit
+- [x] Support fresh remote-aware base and current-HEAD base
+- [x] Add searchable inspect/list
+- [x] Add atomic lease with owner/session/expiry
+- [x] Refuse concurrent lease collision
+- [x] Detect tracked, staged, untracked, ignored, submodule, detached, and unpushed state
+- [x] Support `.worktreeinclude` with secret warnings
+- [x] Never use recursive filesystem deletion
+- [x] Use `git worktree remove` after revalidation
+- [x] Detach Windows junctions before removal and verify shared targets
+- [x] Refuse dirty cleanup without explicit preserve/integrate/abandon decision
+- [x] Recover stale leases after process death
 
 ### Agent isolation
 
-- [ ] Replace raw alternate cwd with verified workspace lease for isolated profiles
-- [ ] Preserve raw cwd mode for backward compatibility, clearly unisolated
-- [ ] Create one worktree per isolated agent/task
-- [ ] Bind profile, role, project identity, and trust to lease
-- [ ] Prevent writes back into protected main checkout through Pi tools
-- [ ] Pass cwd and strongest available backend isolation to Claude/Codex
-- [ ] Preserve changed worktree after agent failure
-- [ ] Surface integrate/review/abandon actions
-- [ ] Map result paths back to project-relative paths
+- [x] Replace raw alternate cwd with verified workspace lease for isolated profiles
+- [x] Preserve raw cwd mode for backward compatibility, clearly unisolated
+- [x] Create one worktree per isolated agent/task
+- [x] Bind profile, role, project identity, and trust to lease
+- [x] Prevent writes back into protected main checkout through Pi tools
+- [x] Pass cwd and strongest available backend isolation to Claude/Codex
+- [x] Preserve changed worktree after agent failure
+- [x] Surface integrate/review/abandon actions
+- [x] Map result paths back to project-relative paths
 
 ### Acceptance
 
-- [ ] Dirty parent remains byte-for-byte unchanged
-- [ ] Parallel child writes do not collide
-- [ ] Lease collision rejected
-- [ ] Alternate repo trust fails closed
-- [ ] Dirty cleanup refused
-- [ ] Windows junction cleanup fixture verified
-- [ ] Shared `node_modules` target survives failed and successful cleanup
-- [ ] Session resume rebinds valid worktree and rejects unsafe identity
+- [x] Dirty parent remains byte-for-byte unchanged
+- [x] Parallel child writes do not collide
+- [x] Lease collision rejected
+- [x] Alternate repo trust fails closed
+- [x] Dirty cleanup refused
+- [x] Windows junction cleanup fixture verified
+- [x] Shared `node_modules` target survives failed and successful cleanup
+- [x] Session resume rebinds valid worktree and rejects unsafe identity
 
 ## Phase 3 exit gate
 
-- [ ] F09 acceptance complete
-- [ ] F02 acceptance complete
-- [ ] Current subagent tests remain green
-- [ ] Pi/Claude/Codex live backend matrix passes
-- [ ] Worktree recovery runbook tested
+- [x] F09 acceptance complete
+- [x] F02 acceptance complete
+- [x] Current subagent tests remain green
+- [x] Pi/Claude/Codex live backend matrix passes
+- [x] Worktree recovery runbook tested
 
 ---
 
@@ -1188,6 +1188,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-25 | Phase 1 live integration | `624ef28`, `9b97aba` | root and 11-extension dependency installs; `npm run verify` from live checkout | 135 unit; 99 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Claude/Codex 4/4 | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; relocated DLL-locked file-search/git-info dependency trees to external safety backup |
 | 2026-08-25 | Phase 2 policy, rules, plan, hooks | `9f4c4da`, `e88ad98` | exact dependency audit; native package trial; three review rounds plus final blocker check; `npm run check`; formatting; unit/integration/smoke; native Windows process and filesystem probes | 163 unit; 115 integration + 22 delegated; 4 POSIX-only skipped; repository print/JSON/RPC/reload/resume/shutdown/leaks; Codex live 2/2; Claude live blocked after earlier 4/4 by account session limit | Pass with external Claude limit | F14 and F05 complete; F08 hook core complete, Phase 7 completion remains; performance and TUI-call evidence recorded |
 | 2026-08-25 | Phase 2 live integration | `9f4c4da`, `276dfee`, `e88ad98` | platform dependency clean install/audit; live `npm run check`; format; unit/integration/delegated; repository smoke; Codex live | 163 unit; 115 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Codex 2/2 | Pass | Fast-forwarded live `main`; preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; test isolation corrected after live global flags exposed environment coupling |
+| 2026-08-25 | Phase 3 profiles and guarded workspaces | `3d3ba2a` | exact package trial; native Windows junction probes; three adversarial review rounds plus final blocker check; check/format/unit/integration/smoke; Pi/Codex live | 167 unit; 145 integration + 22 delegated; 4 POSIX-only skipped; smoke print/JSON/RPC/reload/shutdown/leaks; Pi profile 1/1; Codex 2/2; Claude final rerun externally quota-blocked after baseline 2/2 | Pass with external Claude limit | F09 and F02 complete; package rejected after false-success cleanup reproduction; performance, recovery runbook, security model, and TUI checklist recorded |
 
 # Decision log
 

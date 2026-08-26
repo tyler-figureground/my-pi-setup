@@ -4,64 +4,57 @@ Updated: 2026-08-25
 
 ## Objective
 
-Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-checklist.md` through the durable tracker at `docs/PI-CAPABILITY-IMPLEMENTATION-PLAN.md`.
+Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-checklist.md` through `docs/PI-CAPABILITY-IMPLEMENTATION-PLAN.md`.
 
 ## Current phase
 
-Phase 2 implementation, adversarial hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 3 pending Tyler approval.
+Phase 3 implementation, adversarial hardening, documentation, isolated deterministic verification, and available live verification complete. Publication and live integration pending. Do not begin Phase 4.
 
 ## Completed this phase
 
-- [x] F14 path-scoped lazy rules: bounded frontmatter discovery, lazy bodies, include/exclude/priority, deterministic precedence, trust provenance, duplicate/conflict rejection, context epochs, stale-message filtering, prompt/tool/search-result activation, first-side-effect retry, inspectors, reload, Windows alias containment.
-- [x] F05 read-only agent plan mode: four states, direct-user authority, exact tool restoration, tool provenance fingerprints, dedicated hardened Git reads, dynamic/unknown denial, branch-aware persistence, configurable plan roots, hash-verified create-new plan files, resume/reload/tree verification, status/widget, headless rejection.
-- [x] F08 declarative hook core: bounded YAML, global/trusted-project sources, provenance, deterministic matching, command/notify/status/context/policy effects, explicit failure policy, plan-policy dominance, recursion and dispatch bounds, validation/reload/log commands.
-- [x] Built narrow no-shell process runner with minimal environment, memory/spill caps, global/per-hook concurrency, timeout/abort, native Windows tree termination, and bounded shutdown; used by hooks and Git reads.
-- [x] Trialed exact `pi-yaml-hooks@2026.8.11` in disposable Pi 0.84.3 RPC profile; startup/reload/shutdown worked only as documented Windows no-op. ADR 0003 selects build.
-- [x] Audited/pinned `yaml@2.9.0`, `minimatch@10.2.5`, and `typebox@1.3.7`; no install scripts executed; platform audit reports zero vulnerabilities.
-- [x] Added threat model, architecture, configuration guide, examples, rollback, performance evidence, and TUI checklist.
-- [x] Added exact public contracts for five read-only Git tools and real repository RPC command smoke.
-- [x] Independent architecture, compatibility, and security reviews reproduced and closed Git external-command execution, plan approval/restore races, stale tool sets, tool-identity drift, late rules, pathological globs, hook process leaks/output, payload truncation bypass, handler duplication, config/path identity, and shutdown hook failures.
-- [x] Published `9f4c4da`, `276dfee`, and `e88ad98`; fast-forwarded live `main` while preserving deleted `AGENTS.md` and untracked `skills/impeccable/`.
-- [x] Clean-installed/audited live platform dependencies and passed live check, format, deterministic suites, repository smoke, and Codex 2/2.
-
-## In progress
-
-- [ ] None. Phase 3 intentionally not started.
-
-## External/manual limits
-
-- Claude live backend passed 4/4 earlier this session during Phase 1. Final Phase 2 live run reached Claude account session limit (`resets 7:30pm America/Los_Angeles`); Codex live passed 2/2. No Phase 2 code touches provider backends.
-- Real visual TUI input is unavailable through this harness. `winpty` rejected redirected stdin as non-TTY. TUI status/widget calls and RPC UI behavior pass; manual checklist is `docs/verification/phase-2-tui-smoke.md`.
-
-## Files changed
-
-- `extensions/platform/src/rules/`, `rules*.test.ts` - F14 module and native adapter tests.
-- `extensions/platform/src/plan/`, `plan-mode*.test.ts` - F05 module, persistence, authority, restore tests.
-- `extensions/platform/src/automation/hooks/`, `hooks*.test.ts`, `hook-process.integration.test.ts` - F08 engine, parser, process runner.
-- `extensions/platform/src/wiring/`, `src/composition.ts`, `phase2-composition.test.ts` - one-root Pi integration.
-- `extensions/platform/src/core/policy/`, `src/config.ts`, `src/flags.ts` - policy classifications, config, Phase 2 flags.
-- `platform.json`, package manifest/lock, smoke contract/harness, test classifier.
-- `CONTEXT.md`, `README.md`, `SETUP.md`, `docs/adr/`, `docs/architecture/`, `docs/research/`, `docs/security/`, `docs/verification/`, `docs/examples/`.
+- [x] F09 persistent named profiles: managed/user/trusted-project precedence, bounded YAML and material resolution, collisions, immutable digest/generation, provenance, `/agents`, reload, override matrix, backend policy compilers, host limits, snapshot/transcript metadata.
+- [x] F02 guarded workspaces: exact explicit/current/fresh bases, durable states/events, fenced lease/renew/rebind, operation guards, inspection, `.worktreeinclude`, preserve/review/integrate/abandon, recovery, Windows link detachment, shared-target verification, no recursive deletion.
+- [x] Isolated profile preparation for Pi/Claude/Codex with explicit ad hoc `unisolated` compatibility.
+- [x] Pi write/edit containment and project-resource exclusion; Claude fail-closed sandbox plus unconditional PreToolUse containment; Codex workspace-write and native multi-agent disable.
+- [x] Package trial rejected `@narumitw/pi-worktree@0.51.5` after native Windows false-success cleanup reproduction. ADR 0004 and research report recorded.
+- [x] Three adversarial review rounds closed lease expiry/races, path tampering, Claude native writes, reviewed-commit drift, Codex restriction/delegation gaps, Git hooks, cleanup postconditions, result-path leaks, and dirty-parent coverage.
+- [x] Final independent blocker check reports no unresolved code blockers.
 
 ## Verification
 
-- Root/12-extension isolated installs - pass.
-- Platform package tests - pass.
-- Final isolated deterministic run - 163 unit; 115 integration; 4 POSIX-only skips; 22 delegated file-search.
-- Final live-checkout deterministic run - same counts, pass.
-- Smoke - repository extensions, print, JSON, repository RPC commands, reload, shutdown, no leaks.
-- Native Windows - hook spill cap, process-tree timeout/abort/shutdown, plan/rule/hook junction containment, plan hash/identity, Git external diff suppression.
-- Performance - 100-rule corpus reads zero bodies at startup/unrelated activation; matching injects one body. Final warm startup median 3408.4 ms, +1049.5 ms (+44.5%) over Phase 1.
-- Live - Codex 2/2; Claude externally blocked by account session limit after earlier same-session 4/4 pass.
+- Definitive isolated deterministic run: 167 unit; 145 integration; 4 POSIX-only skips; 22 delegated file-search.
+- Smoke: repository extensions, print, JSON, RPC, reload, shutdown, no leaks.
+- Live: Pi profiled 1/1; Codex 2/2.
+- Claude: Phase 3 baseline completion/interrupt 2/2 passed before account quota exhaustion. Final rerun returned session-limit text; external account state, not code failure.
+- Native Windows: successful and failed junction cleanup preserve shared target; dirty parent byte-for-byte fixture; lease collision/recovery; path identity; operation guards; `.worktreeinclude`; expected-target integration.
+- Performance: warm startup median 3271.6 ms, 136.8 ms faster than Phase 2 median.
+- Manual TUI checklist: `docs/verification/phase-3-tui-smoke.md`.
+
+## Key files
+
+- `extensions/platform/src/profiles/`
+- `extensions/platform/src/workspaces/`
+- `extensions/platform/src/agents/services.ts`
+- `extensions/shared/agent-profile.ts`
+- `extensions/shared/guarded-workspace.ts`
+- `extensions/shared/child-session.ts`
+- `extensions/subagents/`
+- `docs/architecture/phase-3-profiles-workspaces.md`
+- `docs/phase-3-configuration.md`
+- `docs/security/phase-3-threat-model.md`
+- `docs/runbooks/phase-3-workspace-recovery.md`
+- `docs/research/pi-worktree-audit.md`
+- `docs/verification/phase-3-acceptance.md`
 
 ## Repo state
 
-- Live checkout: `C:/Users/Tyler/.pi/agent`, `main` ahead 0 / behind 0 relative to `fork/main` after final push.
-- Phase 2 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-2`.
-- Branch: `pi-capabilities-phase-2`, tracking `fork/pi-capabilities-phase-2` at `e88ad98`.
+- Base: `dc1a964`
+- Branch: `pi-capabilities-phase-3`
+- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-3`
+- Publication commits pending.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
-- Phase 1 DLL backup remains at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
+- Preserve `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-Do not begin Phase 3 until explicitly requested.
+Re-fetch, commit/push Phase 3 branch, fast-forward live `main`, install changed extension dependencies if needed, and run live-checkout deterministic/smoke/Pi/Codex verification while preserving dirty state. Do not begin Phase 4.
