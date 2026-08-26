@@ -4,7 +4,7 @@ import {
   createEventBus,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import platformExtension, {
+import {
   canOwnPlatformDaemons,
   createPlatformExtension,
   decodePlatformFlags,
@@ -38,7 +38,7 @@ test("all platform feature flags default off", () => {
 
 test("flags off register only inert lifecycle hooks and no public surface", async () => {
   const { api, events, calls } = recordingApi();
-  platformExtension(api);
+  createPlatformExtension({ flags: defaultPlatformFlags })(api);
 
   assert.deepEqual([...events.keys()], ["session_start", "session_shutdown"]);
   assert.deepEqual(calls, []);
