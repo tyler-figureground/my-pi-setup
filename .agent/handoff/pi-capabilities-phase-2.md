@@ -35,9 +35,9 @@ Live checkout state is outside this worktree and must remain untouched:
 - [x] 8. Add adversarial Windows, junction, traversal, resume, reload, dynamic-tool, and policy-bypass coverage.
 - [x] 9. Record context/startup measurements and documentation examples/security limits.
 - [x] 10. Run full isolated verification, independent reviews, fixes, and re-verification.
-- [ ] 11. Re-fetch, publish branch, fast-forward live `main` while preserving dirty state, install dependencies, and run live verification.
+- [x] 11. Re-fetch, publish branch, fast-forward live `main` while preserving dirty state, install dependencies, and run live verification.
 - [x] 12. Update tracker, verification ledger, decision log, and handoff in phase commits.
 
 ## Current status
 
-Phase 2 implementation, documentation, adversarial hardening, and isolated verification complete. Final blocker check and live integration pending. Exact dependencies and package trial recorded; three review rounds closed reproduced authority, path, process, rule-ordering, and lifecycle failures. Do not begin Phase 3.
+Phase 2 implementation, documentation, adversarial hardening, final blocker check, publication, live integration, and live verification complete. Exact dependencies and package trial recorded; three review rounds closed reproduced authority, path, process, rule-ordering, and lifecycle failures. Do not begin Phase 3.

@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 2 implementation, three adversarial review rounds, final blocker check, and isolated deterministic verification complete. Final publication and live fast-forward integration pending. Do not begin Phase 3.
+Phase 2 implementation, adversarial hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 3 pending Tyler approval.
 
 ## Completed this phase
 
@@ -21,11 +21,12 @@ Phase 2 implementation, three adversarial review rounds, final blocker check, an
 - [x] Added threat model, architecture, configuration guide, examples, rollback, performance evidence, and TUI checklist.
 - [x] Added exact public contracts for five read-only Git tools and real repository RPC command smoke.
 - [x] Independent architecture, compatibility, and security reviews reproduced and closed Git external-command execution, plan approval/restore races, stale tool sets, tool-identity drift, late rules, pathological globs, hook process leaks/output, payload truncation bypass, handler duplication, config/path identity, and shutdown hook failures.
+- [x] Published `9f4c4da`, `276dfee`, and `e88ad98`; fast-forwarded live `main` while preserving deleted `AGENTS.md` and untracked `skills/impeccable/`.
+- [x] Clean-installed/audited live platform dependencies and passed live check, format, deterministic suites, repository smoke, and Codex 2/2.
 
 ## In progress
 
-- [x] Final current-tree deterministic verification and final blocker re-review.
-- [ ] Re-fetch, commit/push Phase 2 branch, fast-forward live `main`, install dependencies, and run live checkout verification while preserving dirty state.
+- [ ] None. Phase 3 intentionally not started.
 
 ## External/manual limits
 
@@ -46,7 +47,8 @@ Phase 2 implementation, three adversarial review rounds, final blocker check, an
 
 - Root/12-extension isolated installs - pass.
 - Platform package tests - pass.
-- Current recorded deterministic run - 163 unit; 115 integration; 4 POSIX-only skips; 22 delegated file-search.
+- Final isolated deterministic run - 163 unit; 115 integration; 4 POSIX-only skips; 22 delegated file-search.
+- Final live-checkout deterministic run - same counts, pass.
 - Smoke - repository extensions, print, JSON, repository RPC commands, reload, shutdown, no leaks.
 - Native Windows - hook spill cap, process-tree timeout/abort/shutdown, plan/rule/hook junction containment, plan hash/identity, Git external diff suppression.
 - Performance - 100-rule corpus reads zero bodies at startup/unrelated activation; matching injects one body. Final warm startup median 3408.4 ms, +1049.5 ms (+44.5%) over Phase 1.
@@ -54,12 +56,12 @@ Phase 2 implementation, three adversarial review rounds, final blocker check, an
 
 ## Repo state
 
-- Live checkout: `C:/Users/Tyler/.pi/agent`, `main` was ahead 0 / behind 0 before Phase 2.
+- Live checkout: `C:/Users/Tyler/.pi/agent`, `main` ahead 3 / behind 0 relative to `fork/main` before final evidence commit.
 - Phase 2 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-2`.
-- Branch: `pi-capabilities-phase-2`, based on `20a62d2`.
+- Branch: `pi-capabilities-phase-2`, tracking `fork/pi-capabilities-phase-2` at `e88ad98`.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
 - Phase 1 DLL backup remains at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-Final blocker check reports none and current-tree deterministic suite passes. Re-fetch before commit/push, then integrate live without starting Phase 3.
+Do not begin Phase 3 until explicitly requested.
