@@ -17,6 +17,7 @@ const unit = [
   "extensions/platform/hooks.test.ts",
   "extensions/platform/language-config.test.ts",
   "extensions/platform/language-intelligence.test.ts",
+  "extensions/platform/language-stdio.test.ts",
   "extensions/platform/language-versionless.test.ts",
   "extensions/platform/language-wiring.test.ts",
   "extensions/platform/lifecycle-supervisor.test.ts",

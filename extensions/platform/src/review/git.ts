@@ -121,6 +121,28 @@ function lineCount(content: Buffer) {
   return count;
 }
 
+function normalizeCrLf(content: Buffer) {
+  const normalized = Buffer.allocUnsafe(content.length);
+  let offset = 0;
+  for (let index = 0; index < content.length; index += 1) {
+    const byte = content[index]!;
+    if (byte === 13 && content[index + 1] === 10) continue;
+    normalized[offset++] = byte;
+  }
+  return normalized.subarray(0, offset);
+}
+
+function safelyEquivalentText(
+  indexBody: Buffer,
+  worktreeBody: Buffer,
+  normalizeEol: boolean,
+) {
+  if (indexBody.equals(worktreeBody)) return true;
+  if (!normalizeEol || indexBody.includes(0) || worktreeBody.includes(0))
+    return false;
+  return normalizeCrLf(indexBody).equals(normalizeCrLf(worktreeBody));
+}
+
 function changedRanges(diff: string) {
   const ranges: ReviewCapturedFile["changed"] extends readonly (infer T)[]
     ? T[]
@@ -228,10 +250,15 @@ export function createReviewGitAdapter(
     return output;
   };
 
-  const runBytes = (args: readonly string[], signal?: AbortSignal) =>
+  const runBytes = (
+    args: readonly string[],
+    signal?: AbortSignal,
+    maxBytes = MAX_FILE_BYTES,
+    input?: Buffer,
+  ) =>
     new Promise<Buffer>((resolve, reject) => {
       throwIfAborted(signal);
-      execFile(
+      const child = execFile(
         "git",
         gitArgs(args),
         {
@@ -240,7 +267,7 @@ export function createReviewGitAdapter(
           env: gitEnvironment(),
           windowsHide: true,
           timeout: GIT_TIMEOUT_MS,
-          maxBuffer: MAX_FILE_BYTES + 64 * 1024,
+          maxBuffer: maxBytes + 64 * 1024,
           signal,
         },
         (error, stdout) => {
@@ -256,7 +283,41 @@ export function createReviewGitAdapter(
           resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
         },
       );
+      if (input) child.stdin?.end(input);
     });
+
+  const textAttributes = async (
+    files: readonly string[],
+    signal?: AbortSignal,
+  ) => {
+    if (files.length === 0)
+      return new Map<string, { text: string; eol: string }>();
+    const output = await runBytes(
+      ["check-attr", "-z", "--stdin", "text", "eol"],
+      signal,
+      MAX_CAPTURE_MANIFEST_BYTES,
+      Buffer.from(`${files.join("\0")}\0`),
+    );
+    const tokens = output.toString("utf8").split("\0");
+    if (tokens.at(-1) === "") tokens.pop();
+    if (tokens.length !== files.length * 6)
+      throw new Error("Git returned malformed text attributes.");
+    const attributes = new Map<string, { text: string; eol: string }>();
+    for (let index = 0; index < tokens.length; index += 3) {
+      const file = canonicalRelative(tokens[index]!);
+      const name = tokens[index + 1];
+      const value = tokens[index + 2]!;
+      const current = attributes.get(file) ?? {
+        text: "unspecified",
+        eol: "unspecified",
+      };
+      if (name === "text") current.text = value;
+      else if (name === "eol") current.eol = value;
+      else throw new Error("Git returned an unexpected text attribute.");
+      attributes.set(file, current);
+    }
+    return attributes;
+  };
 
   const resolveCommit = async (revision: string, signal?: AbortSignal) =>
     (
@@ -467,6 +528,32 @@ export function createReviewGitAdapter(
       }
       return pending;
     };
+    const comparisonBlobCache = new Map<string, Promise<Buffer>>();
+    const comparisonBlob = (oid: string) => {
+      let pending = comparisonBlobCache.get(oid);
+      if (!pending) {
+        pending = runBytes(
+          ["cat-file", "blob", oid],
+          signal,
+          MAX_FINGERPRINT_FILE_BYTES,
+        );
+        comparisonBlobCache.set(oid, pending);
+      }
+      return pending;
+    };
+    const attributes = await textAttributes(candidates, signal);
+    const autocrlf = (
+      await runOptional(["config", "--get", "core.autocrlf"], signal, true)
+    )
+      ?.trim()
+      .toLowerCase();
+    const autocrlfNormalizes =
+      autocrlf === "" ||
+      autocrlf === "true" ||
+      autocrlf === "yes" ||
+      autocrlf === "on" ||
+      autocrlf === "1" ||
+      autocrlf === "input";
     const untrackedSet = new Set(untracked);
     const capturedFiles: ReviewCapturedFile[] = [];
     let capturedBytes = 0;
@@ -483,11 +570,33 @@ export function createReviewGitAdapter(
       const stagedChanged =
         headEntry?.oid !== indexEntry?.oid ||
         headEntry?.mode !== indexEntry?.mode;
-      const unstagedChanged =
+      let unstagedChanged =
         !isUntracked &&
         (worktreeIdentity.exists
           ? worktreeIdentity.oid !== indexEntry?.oid
           : indexEntry !== undefined);
+      if (
+        unstagedChanged &&
+        worktreeIdentity.exists &&
+        indexEntry !== undefined
+      ) {
+        const attribute = attributes.get(file);
+        const normalizeEol =
+          attribute?.text !== "unset" &&
+          (attribute?.text === "set" ||
+            attribute?.text === "auto" ||
+            attribute?.eol === "lf" ||
+            attribute?.eol === "crlf" ||
+            autocrlfNormalizes);
+        if (normalizeEol) {
+          const [indexBody, worktreeBody] = await Promise.all([
+            comparisonBlob(indexEntry.oid),
+            readWorkingFile(file, MAX_FINGERPRINT_FILE_BYTES),
+          ]);
+          if (safelyEquivalentText(indexBody, worktreeBody, true))
+            unstagedChanged = false;
+        }
+      }
       if (!stagedChanged && !unstagedChanged && !isUntracked) continue;
 
       const baseBody = await blob(headEntry?.oid);

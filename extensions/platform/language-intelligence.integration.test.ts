@@ -560,7 +560,7 @@ typescriptServerTest(
       );
     } finally {
       const report = await lifecycle.shutdown("quit");
-      assert.equal(report.status, "clean");
+      assert.equal(report.status, "clean", JSON.stringify(report));
       await rm(root, {
         recursive: true,
         force: true,

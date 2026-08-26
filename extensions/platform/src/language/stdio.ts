@@ -30,7 +30,6 @@ import type {
 
 const GRACEFUL_EXIT_MS = 500;
 const FORCE_EXIT_MS = 1_000;
-const TASKKILL_WAIT_MS = 1_000;
 const MAX_PROTOCOL_HEADER_BYTES = 8 * 1024;
 const MAX_PROTOCOL_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_PROTOCOL_TRAFFIC_BYTES = 64 * 1024 * 1024;
@@ -136,19 +135,31 @@ function signalPosixGroup(child: ChildProcess, signal: NodeJS.Signals) {
   signalDirectly(child, signal);
 }
 
+interface WindowsProcessIdentity {
+  readonly pid: number;
+  readonly startedAt: string;
+}
+
+interface WindowsTreeTermination {
+  readonly root?: WindowsProcessIdentity;
+  readonly remaining: readonly WindowsProcessIdentity[];
+}
+
 function terminateWindowsDescendants(rootPid: number) {
-  return new Promise<number[]>((resolve) => {
+  return new Promise<WindowsTreeTermination>((resolve) => {
     const script = [
       "$ErrorActionPreference='SilentlyContinue'",
       "$all=@(Get-CimInstance Win32_Process)",
+      `$root=@($all|Where-Object {$_.ProcessId -eq ${rootPid}}|Select-Object -First 1)`,
       `$frontier=@(${rootPid})`,
       "$targets=@()",
       "while($frontier.Count -gt 0){$next=@();foreach($parent in $frontier){$children=@($all|Where-Object {$_.ParentProcessId -eq $parent});$targets+=$children;$next+=@($children|ForEach-Object {$_.ProcessId})};$frontier=$next}",
       "$targets=@($targets|Sort-Object CreationDate -Descending)",
-      "foreach($target in $targets){Invoke-CimMethod -InputObject $target -MethodName Terminate|Out-Null}",
+      "foreach($target in $targets){$process=Get-Process -Id $target.ProcessId;$expected=[string][int64]([math]::Floor($target.CreationDate.ToFileTimeUtc()/10000));$actual=[string][int64]([math]::Floor($process.StartTime.ToUniversalTime().ToFileTimeUtc()/10000));if($process -and $actual -eq $expected){$process.Kill();$process.WaitForExit(1000)|Out-Null}}",
       "Start-Sleep -Milliseconds 200",
-      "$remaining=@($targets|Where-Object {$id=$_.ProcessId;$created=$_.CreationDate;@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$id)|Where-Object {$_.CreationDate -eq $created}).Count -gt 0}|ForEach-Object {$_.ProcessId})",
-      "$remaining -join ','",
+      "$remaining=@($targets|Where-Object {$id=$_.ProcessId;$created=$_.CreationDate;@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$id)|Where-Object {$_.CreationDate -eq $created}).Count -gt 0})",
+      "$root|ForEach-Object {'R|'+[string]$_.ProcessId+'|'+[string][int64]([math]::Floor($_.CreationDate.ToFileTimeUtc()/10000))}",
+      "$remaining|ForEach-Object {'D|'+[string]$_.ProcessId+'|'+[string][int64]([math]::Floor($_.CreationDate.ToFileTimeUtc()/10000))}",
     ].join(";");
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -157,14 +168,26 @@ function terminateWindowsDescendants(rootPid: number) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve(
-        stdout
-          .trim()
-          .split(",")
-          .filter(Boolean)
-          .map(Number)
-          .filter((pid) => Number.isSafeInteger(pid) && pid > 0),
-      );
+      const identities = stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => /^([RD])\|(\d+)\|(\d+)$/.exec(line.trim()))
+        .filter((match): match is RegExpExecArray => match !== null)
+        .map((match) => ({
+          kind: match[1]!,
+          pid: Number(match[2]),
+          startedAt: match[3]!,
+        }))
+        .filter(
+          (identity) => Number.isSafeInteger(identity.pid) && identity.pid > 0,
+        );
+      const root = identities.find((identity) => identity.kind === "R");
+      resolve({
+        ...(root ? { root: { pid: root.pid, startedAt: root.startedAt } } : {}),
+        remaining: identities
+          .filter((identity) => identity.kind === "D")
+          .map(({ pid, startedAt }) => ({ pid, startedAt })),
+      });
     };
     let process: ChildProcess;
     try {
@@ -182,7 +205,7 @@ function terminateWindowsDescendants(rootPid: number) {
         if (stdout.length < 16 * 1024) stdout += chunk;
       });
     } catch {
-      resolve([]);
+      resolve({ remaining: [] });
       return;
     }
     timer = setTimeout(() => {
@@ -194,35 +217,86 @@ function terminateWindowsDescendants(rootPid: number) {
   });
 }
 
-function runTaskkill(pid: number, force: boolean) {
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve();
-    };
+function forceKillWindowsProcess(identity: WindowsProcessIdentity) {
+  return new Promise<void>((resolve, reject) => {
+    const script = [
+      "$ErrorActionPreference='SilentlyContinue'",
+      `$process=Get-Process -Id ${identity.pid}`,
+      `$expected='${identity.startedAt}'`,
+      "if(-not $process){exit 0}",
+      "$actual=[string][int64]([math]::Floor($process.StartTime.ToUniversalTime().ToFileTimeUtc()/10000))",
+      "if(-not $actual){exit 1}",
+      "if($actual -ne $expected){exit 2}",
+      "$process.Kill()",
+      "$process.WaitForExit(1000)|Out-Null",
+      "if(-not $process.HasExited){exit 1}",
+    ].join(";");
     let killer: ChildProcess;
     try {
       killer = nativeSpawn(
-        "taskkill.exe",
-        ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])],
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
         { shell: false, stdio: "ignore", windowsHide: true },
       );
-    } catch {
-      resolve();
+    } catch (error) {
+      reject(error);
       return;
     }
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
     timer = setTimeout(() => {
       signalDirectly(killer, "SIGKILL");
-      finish();
-    }, TASKKILL_WAIT_MS);
-    killer.once("error", finish);
-    killer.once("close", finish);
+      finish(
+        new Error(`Timed out terminating Windows process ${identity.pid}.`),
+      );
+    }, 15_000);
+    killer.once("error", (error) => finish(error));
+    killer.once("close", (code) =>
+      finish(
+        code === 0
+          ? undefined
+          : code === 2
+            ? new Error(
+                `Windows process ${identity.pid} identity changed before termination.`,
+              )
+            : new Error(`Failed to terminate Windows process ${identity.pid}.`),
+      ),
+    );
   });
 }
+
+interface WindowsProcessTreeControl {
+  readonly terminateDescendants: (
+    rootPid: number,
+  ) => Promise<WindowsTreeTermination>;
+  readonly forceKill: (identity: WindowsProcessIdentity) => Promise<void>;
+  readonly waitForRootClose: () => Promise<void>;
+  readonly forceKillRoot: (identity: WindowsProcessIdentity) => Promise<void>;
+}
+
+async function terminateWindowsProcessTree(
+  rootPid: number,
+  rootClosed: () => boolean,
+  control: WindowsProcessTreeControl,
+) {
+  const snapshot = await control.terminateDescendants(rootPid);
+  for (const identity of snapshot.remaining) await control.forceKill(identity);
+  if (!rootClosed() && snapshot.root)
+    await control.forceKillRoot(snapshot.root);
+  await control.waitForRootClose();
+}
+
+export const languageStdioTestSeams = {
+  forceKillWindowsProcess,
+  terminateWindowsProcessTree,
+};
 
 const INHERITED_ENVIRONMENT = new Set(
   [
@@ -363,16 +437,49 @@ export function createStdioLanguageServerAdapter(
         }
       });
 
+      let termination: Promise<void> | undefined;
+      const terminate = () => {
+        if (termination) return termination;
+        termination = (async () => {
+          if (process.platform === "win32" && child.pid) {
+            await waitAtMost(processClosed.promise, GRACEFUL_EXIT_MS);
+            await terminateWindowsProcessTree(
+              child.pid,
+              () => processClosedObserved,
+              {
+                terminateDescendants: terminateWindowsDescendants,
+                forceKill: forceKillWindowsProcess,
+                waitForRootClose: () =>
+                  waitAtMost(processClosed.promise, FORCE_EXIT_MS),
+                forceKillRoot: forceKillWindowsProcess,
+              },
+            );
+            if (!processClosedObserved)
+              throw new Error(
+                `Windows language-server process ${child.pid} did not close after identity-validated termination.`,
+              );
+            return;
+          } else {
+            await waitAtMost(processClosed.promise, GRACEFUL_EXIT_MS);
+            if (processClosedObserved) return;
+            signalPosixGroup(child, "SIGTERM");
+            await waitAtMost(processClosed.promise, GRACEFUL_EXIT_MS);
+            if (!processClosedObserved) {
+              signalPosixGroup(child, "SIGKILL");
+              await waitAtMost(processClosed.promise, FORCE_EXIT_MS);
+            }
+          }
+          if (!processClosedObserved) signalDirectly(child, "SIGKILL");
+        })();
+        return termination;
+      };
+
       const protocolStream = new BoundedProtocolStream();
       child.stdout.pipe(protocolStream);
       protocolStream.once("error", () => {
-        if (process.platform === "win32" && child.pid) {
-          void terminateWindowsDescendants(child.pid).then(() =>
-            runTaskkill(child.pid!, true),
-          );
-        } else {
-          signalPosixGroup(child, "SIGKILL");
-        }
+        void terminate().catch(() => {
+          // The active RPC request or lifecycle closer observes the same failure.
+        });
       });
       const rpc = createMessageConnection(
         new StreamMessageReader(protocolStream),
@@ -418,24 +525,6 @@ export function createStdioLanguageServerAdapter(
       rpc.listen();
 
       let closing: Promise<void> | undefined;
-      const terminate = async () => {
-        if (process.platform === "win32" && child.pid) {
-          const remaining = await terminateWindowsDescendants(child.pid);
-          for (const pid of remaining) await runTaskkill(pid, true);
-          if (!processClosedObserved) await runTaskkill(child.pid, true);
-          await waitAtMost(processClosed.promise, FORCE_EXIT_MS);
-        } else {
-          await waitAtMost(processClosed.promise, GRACEFUL_EXIT_MS);
-          if (processClosedObserved) return;
-          signalPosixGroup(child, "SIGTERM");
-          await waitAtMost(processClosed.promise, GRACEFUL_EXIT_MS);
-          if (!processClosedObserved) {
-            signalPosixGroup(child, "SIGKILL");
-            await waitAtMost(processClosed.promise, FORCE_EXIT_MS);
-          }
-        }
-        if (!processClosedObserved) signalDirectly(child, "SIGKILL");
-      };
 
       const initialization: InitializeParams = {
         processId: process.pid,
@@ -505,8 +594,7 @@ export function createStdioLanguageServerAdapter(
                   closeSignal,
                   () => !closeNotified,
                 );
-                if (process.platform !== "win32")
-                  await rpc.sendNotification(ExitNotification.type);
+                await rpc.sendNotification(ExitNotification.type);
               } catch {
                 // A crashed or cancelled server still needs tree termination.
               }

@@ -279,6 +279,63 @@ test("real uncommitted capture includes tracked and untracked changes without mu
   }
 });
 
+test("core.autocrlf worktree bytes do not create false review changes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pi-review-autocrlf-"));
+  try {
+    const git = async (...args: string[]) =>
+      execFileAsync("git", args, { cwd: root, encoding: "utf8" });
+    await git("init");
+    await git("config", "user.email", "fixture@example.invalid");
+    await git("config", "user.name", "Fixture");
+    await git("config", "core.autocrlf", "yes");
+    const configPath = path.join(root, ".git", "config");
+    const config = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      config.replace(/autocrlf\s*=\s*yes/i, "autocrlf"),
+    );
+    await writeFile(path.join(root, "normalized.txt"), "one\r\ntwo\r\n");
+    await writeFile(path.join(root, "changed.txt"), "base\r\n");
+    await git("add", "normalized.txt", "changed.txt");
+    await git("commit", "-m", "base");
+    await writeFile(path.join(root, "changed.txt"), "changed\r\n");
+
+    const captured = await createReviewGitAdapter({
+      root,
+      projectId: "git:autocrlf",
+    }).capture({ kind: "uncommitted" }, { allowStaleBase: false });
+
+    assert.deepEqual(
+      captured.files.map(({ path: file }) => file),
+      ["changed.txt"],
+    );
+    assert.doesNotMatch(captured.diff, /normalized\.txt/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("empty committed repositories capture an empty uncommitted target", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pi-review-empty-"));
+  try {
+    const git = async (...args: string[]) =>
+      execFileAsync("git", args, { cwd: root, encoding: "utf8" });
+    await git("init");
+    await git("config", "user.email", "fixture@example.invalid");
+    await git("config", "user.name", "Fixture");
+    await git("commit", "--allow-empty", "-m", "empty");
+
+    const captured = await createReviewGitAdapter({
+      root,
+      projectId: "git:empty",
+    }).capture({ kind: "uncommitted" }, { allowStaleBase: false });
+
+    assert.deepEqual(captured.files, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("unchanged tracked files larger than capture limits do not block a tiny review", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-review-large-"));
   try {
