@@ -48,7 +48,7 @@ Authoritative details: `docs/verification/phase-4-acceptance.md`.
 - Base: `7b7654c`
 - Branch: `pi-capabilities-phase-4`
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-4`
-- Phase 4 branch published through `c362c4f`; live `main` fast-forwarded, verified, and tracks `fork/main`.
+- Phase 4 late sign-off hardening completed in `425145b`: autocrlf-safe review capture and creation-identity-safe Windows process cleanup. Final isolated verification and independent review passed; republishing and live reintegration pending.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
 - Preserve DLL backup at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 

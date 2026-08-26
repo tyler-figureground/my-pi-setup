@@ -34,6 +34,7 @@ Do not begin Phase 5.
 - [x] Run iterative security/architecture/acceptance reviews; fix all reproduced blocker/high findings with regressions.
 - [x] Complete acceptance evidence, documentation, performance evidence, smoke contract, and tracker.
 - [x] Re-fetch, publish, fast-forward live `main`, install platform dependencies, and verify without disturbing dirty state.
+- [x] Resolve late sign-off blockers: autocrlf false-positive review capture and protocol-error descendant cleanup; independently reviewed with no blockers and full verification green. Publication/integration follows in `425145b`.
 - [x] Stop before Phase 5.
 
 ## Constraints

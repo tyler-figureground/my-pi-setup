@@ -64,6 +64,9 @@ Safety and behavior verified:
 - Managed Pi reviewer transport reached real subagent backend. Standalone CLI inherited no selected provider key in two attempts; Node live Pi backend test passed 1/1 with authenticated runtime.
 - Codex backend live completion/interrupt passed 2/2 after shared policy changes.
 - Live checkout after fast-forward: dependency audit zero vulnerabilities; check/format pass; 200-unit run pass; focused Phase 4 suite 77 pass plus one opt-in Ruff skip; separate Ruff pass; smoke pass; Pi 1/1 and Codex 2/2.
+- Late sign-off hardening in `425145b`: Git-safe text attribute/EOL comparison prevents `core.autocrlf` aliases and valueless true config from creating false review changes without executing clean filters; empty repositories remain capturable.
+- Windows protocol-error cleanup now preserves root/descendant creation identity through discovery and termination, revalidates before every kill, sends the LSP exit notification, cleans detached descendants after graceful root exit, and has no reachable PID-only Windows fallback.
+- Final isolated `npm run verify`: 202 unit; 176 integration with 5 platform skips; 22 delegated; smoke pass; Claude 2/2, Codex 2/2, Pi 1/1. Final independent review: no blockers.
 
 ## Manual limit
 
