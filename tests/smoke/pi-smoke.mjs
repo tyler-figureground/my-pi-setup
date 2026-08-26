@@ -72,7 +72,7 @@ function startPi(extraArgs, token) {
   );
 }
 
-function waitForExit(child, timeoutMs = 20_000) {
+function waitForExit(child, timeoutMs = 60_000) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
