@@ -56,7 +56,7 @@ Phase 2 implementation, adversarial hardening, publication, live fast-forward in
 
 ## Repo state
 
-- Live checkout: `C:/Users/Tyler/.pi/agent`, `main` ahead 3 / behind 0 relative to `fork/main` before final evidence commit.
+- Live checkout: `C:/Users/Tyler/.pi/agent`, `main` ahead 0 / behind 0 relative to `fork/main` after final push.
 - Phase 2 worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-2`.
 - Branch: `pi-capabilities-phase-2`, tracking `fork/pi-capabilities-phase-2` at `e88ad98`.
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
