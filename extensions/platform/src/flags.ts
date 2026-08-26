@@ -19,18 +19,29 @@ export const defaultPlatformFlags = Object.freeze({
 export type PlatformFlagName = keyof typeof defaultPlatformFlags;
 export type PlatformFlags = Readonly<Record<PlatformFlagName, boolean>>;
 
+export const availablePlatformFlags = Object.freeze([
+  "planMode",
+  "hooks",
+  "rules",
+] as const satisfies readonly PlatformFlagName[]);
+
+const availablePlatformFlagSet = new Set<PlatformFlagName>(
+  availablePlatformFlags,
+);
+
 export interface PlatformDiagnostic {
   readonly path: string;
   readonly message: string;
 }
 
-export function decodePlatformFlags(input: unknown = undefined): {
+export function decodePlatformFlags(
+  input: unknown = undefined,
+  base: PlatformFlags = defaultPlatformFlags,
+): {
   readonly flags: PlatformFlags;
   readonly diagnostics: readonly PlatformDiagnostic[];
 } {
-  const flags: Record<PlatformFlagName, boolean> = {
-    ...defaultPlatformFlags,
-  };
+  const flags: Record<PlatformFlagName, boolean> = { ...base };
   if (input === undefined) return { flags, diagnostics: [] };
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return {
@@ -57,12 +68,15 @@ export function decodePlatformFlags(input: unknown = undefined): {
       });
       continue;
     }
-    if (value) {
+    const flagName = name as PlatformFlagName;
+    if (value && !availablePlatformFlagSet.has(flagName)) {
       diagnostics.push({
         path: name,
-        message: `Platform capability ${JSON.stringify(name)} is unavailable while Phase 1 flags remain disabled.`,
+        message: `Platform capability ${JSON.stringify(name)} is not implemented yet.`,
       });
+      continue;
     }
+    flags[flagName] = value;
   }
   return { flags, diagnostics };
 }

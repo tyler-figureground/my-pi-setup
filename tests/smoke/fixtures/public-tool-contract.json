@@ -195,6 +195,60 @@
     }
   },
   {
+    "name": "git_diff",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "git_list_files",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "git_log",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "git_show",
+    "parameters": {
+      "type": "object",
+      "required": ["revision"],
+      "properties": {
+        "revision": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "git_status",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "rg",
     "parameters": {
       "type": "object",

@@ -1,0 +1,10 @@
+{
+  "planMode": true,
+  "hooks": true,
+  "rules": true,
+  "plan": {
+    "defaultScope": "user",
+    "userDirectory": "plans",
+    "projectDirectory": ".pi/plans"
+  }
+}

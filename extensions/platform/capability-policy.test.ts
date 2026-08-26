@@ -93,6 +93,7 @@ test("unknown and source-mismatched tools default to side-effecting", () => {
   const tools = [
     { kind: "tool", name: "future_tool", source: "custom" },
     { kind: "tool", name: "read", source: "custom" },
+    { kind: "tool", name: "fd", source: "sdk" },
   ] as const;
 
   for (const tool of tools) {
@@ -310,6 +311,72 @@ test("deny rules dominate confirmation and allow rules", () => {
   );
   assert.equal(decision.kind, "deny");
   assert.equal(decision.reason, "deny wins");
+});
+
+test("Phase 2 dedicated inspection tools are read-only while execution tools deny in plan mode", () => {
+  const policy = createCapabilityPolicy();
+  const readOnlyTools = [
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_list_files",
+  ];
+
+  for (const name of readOnlyTools) {
+    const decision = policy.decide(
+      { kind: "tool", name, source: "custom" },
+      "parent",
+      { kind: "plan" },
+    );
+    assert.equal(decision.kind, "allow", name);
+    assert.equal(decision.operation, "read", name);
+    assert.equal(decision.sideEffecting, false, name);
+  }
+
+  for (const [source, name] of [
+    ["builtin", "edit"],
+    ["builtin", "write"],
+    ["builtin", "bash"],
+    ["builtin", "powershell"],
+    ["custom", "bg_start"],
+    ["custom", "bg_kill"],
+    ["custom", "search"],
+    ["custom", "subagent_spawn"],
+    ["custom", "workflow"],
+    ["custom", "path_search"],
+    ["custom", "lsp_diagnostics"],
+  ] as const) {
+    assert.equal(
+      policy.decide({ kind: "tool", name, source }, "parent", {
+        kind: "plan",
+      }).kind,
+      "deny",
+      `${source}:${name}`,
+    );
+  }
+});
+
+test("hook allow rules can never bypass plan-mode denial", () => {
+  const rules = createInMemoryRuleAdapter([
+    {
+      id: "hook-allow-every-write",
+      match: { modes: ["plan"], operations: ["local-write", "process"] },
+      decision: "allow",
+      reason: "Hook requested an allow.",
+      provenance: { source: "hook", reference: "before-tool-use" },
+    },
+  ]);
+  const policy = createCapabilityPolicy({ rules });
+
+  for (const operation of [
+    { kind: "tool", name: "edit", source: "builtin" },
+    { kind: "tool", name: "future_dynamic_tool", source: "custom" },
+  ] as const) {
+    const decision = policy.decide(operation, "parent", { kind: "plan" });
+    assert.equal(decision.kind, "deny");
+    assert.notEqual(decision.provenance.source, "hook");
+  }
 });
 
 test("an explicit role rule can permit child orchestration but not plan mutation", () => {

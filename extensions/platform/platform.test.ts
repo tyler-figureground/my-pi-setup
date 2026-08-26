@@ -82,7 +82,7 @@ test("composition root owns one lifecycle supervisor per session runtime", async
 
   await events.get("session_start")?.(
     { type: "session_start", reason: "startup" },
-    {},
+    { cwd: process.cwd(), isProjectTrusted: () => false },
   );
   for (const reason of ["reload", "new", "resume", "fork", "quit"] as const) {
     await events.get("session_shutdown")?.(
@@ -92,7 +92,7 @@ test("composition root owns one lifecycle supervisor per session runtime", async
     if (reason !== "quit") {
       await events.get("session_start")?.(
         { type: "session_start", reason },
-        {},
+        { cwd: process.cwd(), isProjectTrusted: () => false },
       );
     }
   }
@@ -114,24 +114,29 @@ test("only parent execution role can own platform daemons", () => {
   }
 });
 
-test("invalid and unavailable flags produce independent startup diagnostics", async () => {
+test("available Phase 2 flags enable while invalid and unavailable flags diagnose independently", async () => {
   const decoded = decodePlatformFlags({
     planMode: true,
+    rules: true,
     browser: "yes",
     futureCapability: false,
     hooks: false,
   });
-  assert.deepEqual(decoded.flags, defaultPlatformFlags);
+  assert.deepEqual(decoded.flags, {
+    ...defaultPlatformFlags,
+    planMode: true,
+    rules: true,
+  });
   assert.deepEqual(
     decoded.diagnostics.map((diagnostic) => diagnostic.path),
-    ["planMode", "browser", "futureCapability"],
+    ["browser", "futureCapability"],
   );
 
   const { api, events } = recordingApi();
   const notifications: string[] = [];
   createPlatformExtension({
     flags: {
-      planMode: true,
+      planMode: false,
       browser: "yes",
       futureCapability: false,
       hooks: false,
@@ -140,10 +145,12 @@ test("invalid and unavailable flags produce independent startup diagnostics", as
   await events.get("session_start")?.(
     { type: "session_start", reason: "startup" },
     {
+      cwd: process.cwd(),
       hasUI: true,
+      isProjectTrusted: () => false,
       ui: { notify: (message: string) => notifications.push(message) },
     },
   );
-  assert.equal(notifications.length, 3);
-  assert.match(notifications[0], /planMode/);
+  assert.equal(notifications.length, 2);
+  assert.match(notifications[0], /browser/);
 });

@@ -1,5 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   decodePlatformFlags,
@@ -8,39 +17,231 @@ import {
   type PlatformFlags,
 } from "./flags.ts";
 
+const PLATFORM_CONFIG_MAX_BYTES = 64 * 1024;
+
+export interface PlatformPlanConfiguration {
+  readonly defaultScope: "user" | "project";
+  readonly userDirectory: string;
+  readonly projectDirectory: string;
+}
+
+export const defaultPlatformPlanConfiguration: PlatformPlanConfiguration =
+  Object.freeze({
+    defaultScope: "user",
+    userDirectory: "plans",
+    projectDirectory: join(CONFIG_DIR_NAME, "plans"),
+  });
+
 export interface PlatformConfigLocation {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly agentDir?: string;
 }
 
+function findProjectConfig(cwd: string) {
+  const requested = resolve(cwd);
+  const local = join(requested, CONFIG_DIR_NAME, "platform.json");
+  if (existsSync(local)) return { path: local, root: requested };
+
+  let current = requested;
+  for (let depth = 0; depth < 64; depth++) {
+    if (existsSync(join(current, ".git"))) {
+      const candidate = join(current, CONFIG_DIR_NAME, "platform.json");
+      return existsSync(candidate)
+        ? { path: candidate, root: current }
+        : undefined;
+    }
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
+function normalizeComparisonPath(filePath: string) {
+  const normalized = resolve(filePath).replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isContained(root: string, candidate: string) {
+  const comparedRoot = normalizeComparisonPath(root).replace(/\/$/, "");
+  const comparedCandidate = normalizeComparisonPath(candidate);
+  return (
+    comparedCandidate === comparedRoot ||
+    comparedCandidate.startsWith(`${comparedRoot}/`)
+  );
+}
+
+function readTrustedConfig(source: string, root: string) {
+  const before = lstatSync(source);
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    before.size > PLATFORM_CONFIG_MAX_BYTES
+  ) {
+    throw new Error(
+      "Platform config must be a bounded regular file, not a link.",
+    );
+  }
+  const canonicalRoot = realpathSync(root);
+  const canonicalSource = realpathSync(source);
+  if (!isContained(canonicalRoot, canonicalSource)) {
+    throw new Error("Platform config resolves outside its trusted root.");
+  }
+  const descriptor = openSync(
+    canonicalSource,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = fstatSync(descriptor);
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size > PLATFORM_CONFIG_MAX_BYTES
+    ) {
+      throw new Error("Platform config identity changed before open.");
+    }
+    const text = readFileSync(descriptor, "utf8");
+    const after = lstatSync(source);
+    if (
+      after.isSymbolicLink() ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      realpathSync(source) !== canonicalSource
+    ) {
+      throw new Error("Platform config identity changed during read.");
+    }
+    return text;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function decodePlanConfiguration(
+  input: unknown,
+  base: PlatformPlanConfiguration,
+): { plan: PlatformPlanConfiguration; diagnostics: PlatformDiagnostic[] } {
+  if (input === undefined) return { plan: base, diagnostics: [] };
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {
+      plan: base,
+      diagnostics: [
+        { path: "plan", message: "Plan config must be an object." },
+      ],
+    };
+  }
+  const value = input as Record<string, unknown>;
+  const diagnostics: PlatformDiagnostic[] = [];
+  const unknown = Object.keys(value).filter(
+    (key) =>
+      !["defaultScope", "userDirectory", "projectDirectory"].includes(key),
+  );
+  for (const key of unknown) {
+    diagnostics.push({
+      path: `plan.${key}`,
+      message: `Unknown plan config field ${JSON.stringify(key)}.`,
+    });
+  }
+  const safeDirectory = (
+    field: string,
+    candidate: unknown,
+    fallback: string,
+  ) => {
+    if (candidate === undefined) return fallback;
+    if (
+      typeof candidate !== "string" ||
+      candidate.length === 0 ||
+      candidate.length > 4_096 ||
+      isAbsolute(candidate) ||
+      candidate.split(/[\\/]/).includes("..") ||
+      candidate.includes("\0")
+    ) {
+      diagnostics.push({
+        path: `plan.${field}`,
+        message: `${field} must be a bounded relative directory.`,
+      });
+      return fallback;
+    }
+    return candidate.split(/[\\/]/).join(sep);
+  };
+  const defaultScope =
+    value.defaultScope === undefined
+      ? base.defaultScope
+      : value.defaultScope === "user" || value.defaultScope === "project"
+        ? value.defaultScope
+        : (diagnostics.push({
+            path: "plan.defaultScope",
+            message: "defaultScope must be user or project.",
+          }),
+          base.defaultScope);
+  return {
+    plan: {
+      defaultScope,
+      userDirectory: safeDirectory(
+        "userDirectory",
+        value.userDirectory,
+        base.userDirectory,
+      ),
+      projectDirectory: safeDirectory(
+        "projectDirectory",
+        value.projectDirectory,
+        base.projectDirectory,
+      ),
+    },
+    diagnostics,
+  };
+}
+
 export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly flags: PlatformFlags;
+  readonly plan: PlatformPlanConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
-  const sources = [join(location.agentDir ?? getAgentDir(), "platform.json")];
+  const agentDir = resolve(location.agentDir ?? getAgentDir());
+  const sources = [{ path: join(agentDir, "platform.json"), root: agentDir }];
   if (location.projectTrusted) {
-    sources.push(join(location.cwd, CONFIG_DIR_NAME, "platform.json"));
+    const projectConfig = findProjectConfig(location.cwd);
+    if (projectConfig) sources.push(projectConfig);
   }
   const diagnostics: PlatformDiagnostic[] = [];
+  let flags: PlatformFlags = defaultPlatformFlags;
+  let plan = defaultPlatformPlanConfiguration;
   for (const source of sources) {
-    if (!existsSync(source)) continue;
+    if (!existsSync(source.path)) continue;
     try {
+      const parsed = JSON.parse(
+        readTrustedConfig(source.path, source.root),
+      ) as unknown;
+      const object =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : undefined;
       const decoded = decodePlatformFlags(
-        JSON.parse(readFileSync(source, "utf8")) as unknown,
+        object
+          ? Object.fromEntries(
+              Object.entries(object).filter(([key]) => key !== "plan"),
+            )
+          : parsed,
+        flags,
       );
+      const decodedPlan = decodePlanConfiguration(object?.plan, plan);
+      flags = decoded.flags;
+      plan = decodedPlan.plan;
       diagnostics.push(
-        ...decoded.diagnostics.map((diagnostic) => ({
-          path: `${source}:${diagnostic.path}`,
-          message: diagnostic.message,
-        })),
+        ...[...decoded.diagnostics, ...decodedPlan.diagnostics].map(
+          (diagnostic) => ({
+            path: `${source.path}:${diagnostic.path}`,
+            message: diagnostic.message,
+          }),
+        ),
       );
     } catch (error) {
       diagnostics.push({
-        path: source,
+        path: source.path,
         message: `Could not parse platform config: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }
-  return { flags: defaultPlatformFlags, diagnostics };
+  return { flags, plan, diagnostics };
 }

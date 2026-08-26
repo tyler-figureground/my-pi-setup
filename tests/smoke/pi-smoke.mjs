@@ -216,7 +216,7 @@ async function smokeRepositoryExtensions() {
     },
   );
   child.stdin.end();
-  const result = await waitForExit(child);
+  const result = await waitForExit(child, 60_000);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(
     result.stderr,
@@ -224,10 +224,14 @@ async function smokeRepositoryExtensions() {
     "repository extensions load without diagnostics",
   );
 
-  const start = readLog()
-    .slice(before)
-    .find((event) => event.event === "session_start");
+  const events = readLog().slice(before);
+  const start = events.find((event) => event.event === "session_start");
   assert.ok(start, "repository extension session started");
+  const surface = events.find(
+    (event) =>
+      event.event === "resources_discover" && event.reason === "startup",
+  );
+  assert.ok(surface, "repository extension discovery completed");
   for (const tool of [
     "ask_user",
     "search",
@@ -235,6 +239,11 @@ async function smokeRepositoryExtensions() {
     "crawl",
     "fd",
     "rg",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_list_files",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -247,11 +256,11 @@ async function smokeRepositoryExtensions() {
     "workflow",
   ]) {
     assert.ok(
-      start.tools.includes(tool),
-      `registered tool ${tool}; saw ${start.tools.join(", ")}`,
+      surface.tools.includes(tool),
+      `registered tool ${tool}; saw ${surface.tools.join(", ")}`,
     );
   }
-  const actualToolContract = start.toolContracts
+  const actualToolContract = surface.toolContracts
     .filter(
       (contract) =>
         contract.source !== "builtin" && contract.name !== "smoke_probe",
@@ -273,12 +282,84 @@ async function smokeRepositoryExtensions() {
     "subagents",
     "summary-model",
     "workflows",
+    "plan",
+    "rules",
+    "hooks",
   ]) {
     assert.ok(
-      start.commands.includes(command),
+      surface.commands.includes(command),
       `registered command ${command}`,
     );
   }
+  await assertNoLeak(token);
+}
+
+async function smokePlatformRpc() {
+  const token = `pi-smoke-platform-rpc-${process.pid}-${Date.now()}`;
+  const child = spawn(
+    process.execPath,
+    [
+      cli,
+      "--offline",
+      "--no-session",
+      "--extension",
+      fixture,
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-themes",
+      "--no-context-files",
+      "--no-approve",
+      "--name",
+      token,
+      "--mode",
+      "rpc",
+    ],
+    {
+      cwd: tempRoot,
+      env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
+  const reader = createJsonlReader(child.stdout);
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const send = (value) => child.stdin.write(`${JSON.stringify(value)}\n`);
+
+  send({ id: "commands", type: "get_commands" });
+  const commands = await reader.waitFor(
+    (record) => record.id === "commands",
+    60_000,
+  );
+  assert.equal(commands.success, true);
+  for (const name of ["plan", "rules", "hooks"]) {
+    assert.ok(
+      commands.data.commands.some((command) => command.name === name),
+      `platform RPC command ${name}`,
+    );
+  }
+
+  for (const [id, message] of [
+    ["plan-status", "/plan status"],
+    ["rules", "/rules"],
+    ["hooks", "/hooks validate"],
+  ]) {
+    send({ id, type: "prompt", message });
+    const response = await reader.waitFor((record) => record.id === id);
+    assert.equal(
+      response.success,
+      true,
+      `${message}: ${JSON.stringify(response)}`,
+    );
+  }
+
+  send({ id: "exit", type: "prompt", message: "/smoke-exit" });
+  const exitResponse = await reader.waitFor((record) => record.id === "exit");
+  assert.equal(exitResponse.success, true);
+  child.stdin.end();
+  const result = await waitForExit(child, 60_000);
+  assert.equal(result.code, 0, stderr || result.stderr);
   await assertNoLeak(token);
 }
 
@@ -334,6 +415,7 @@ async function smokeRpc() {
 
 try {
   await smokeRepositoryExtensions();
+  await smokePlatformRpc();
   await smokePrint();
   await smokeJson();
   await smokeRpc();

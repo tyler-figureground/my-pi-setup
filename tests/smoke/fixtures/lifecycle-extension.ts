@@ -61,7 +61,16 @@ export default function lifecycleSmoke(pi: ExtensionAPI) {
   });
 
   pi.on("resources_discover", (event) => {
-    record("resources_discover", { reason: event.reason });
+    record("resources_discover", {
+      reason: event.reason,
+      tools: pi.getAllTools().map((tool) => tool.name),
+      toolContracts: pi.getAllTools().map((tool) => ({
+        name: tool.name,
+        parameters: tool.parameters,
+        source: tool.sourceInfo.source,
+      })),
+      commands: pi.getCommands().map((command) => command.name),
+    });
   });
 
   pi.on("session_shutdown", (event, ctx) => {

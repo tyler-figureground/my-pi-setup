@@ -7,6 +7,9 @@ bin/
 # Pi runtime and private state
 sessions/
 /workflows/
+/plans/
+/state/
+/.pi/plans/
 auth.json
 settings.json
 trust.json

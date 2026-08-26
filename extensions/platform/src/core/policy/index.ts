@@ -15,6 +15,7 @@ export const operationKinds = [
 ] as const;
 
 export type OperationKind = (typeof operationKinds)[number];
+export type ToolSource = "builtin" | "custom" | "sdk";
 
 export const actorRoles = EXECUTION_ROLES;
 export type ActorRole = ExecutionRole;
@@ -24,7 +25,7 @@ export type CapabilityOperation =
   | {
       readonly kind: "tool";
       readonly name: string;
-      readonly source: "builtin" | "custom";
+      readonly source: ToolSource;
     };
 
 export interface PolicyMode {
@@ -61,7 +62,7 @@ export interface CapabilityRule {
     readonly modes?: readonly PolicyMode["kind"][];
     readonly tools?: readonly {
       readonly name: string;
-      readonly source: "builtin" | "custom";
+      readonly source: ToolSource;
     }[];
   };
   readonly decision: CapabilityDecision["kind"];
@@ -130,9 +131,15 @@ const toolOperations = {
     subagent_check: ["read"],
     subagent_list: ["read"],
     workflow: ["orchestration"],
+    git_status: ["read"],
+    git_diff: ["read"],
+    git_log: ["read"],
+    git_show: ["read"],
+    git_list_files: ["read"],
   },
+  sdk: {},
 } as const satisfies Record<
-  "builtin" | "custom",
+  ToolSource,
   Readonly<Record<string, readonly OperationKind[]>>
 >;
 
