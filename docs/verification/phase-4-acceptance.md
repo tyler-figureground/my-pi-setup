@@ -67,6 +67,7 @@ Safety and behavior verified:
 - Late sign-off hardening in `425145b`: Git-safe text attribute/EOL comparison prevents `core.autocrlf` aliases and valueless true config from creating false review changes without executing clean filters; empty repositories remain capturable.
 - Windows protocol-error cleanup now preserves root/descendant creation identity through discovery and termination, revalidates before every kill, sends the LSP exit notification, cleans detached descendants after graceful root exit, and has no reachable PID-only Windows fallback.
 - Final isolated `npm run verify`: 202 unit; 176 integration with 5 platform skips; 22 delegated; smoke pass; Claude 2/2, Codex 2/2, Pi 1/1. Final independent review: no blockers.
+- Live late-fix verification: check/format pass; focused Windows language/review suite 28 pass plus one opt-in Ruff skip; smoke pass with no leaks.
 
 ## Manual limit
 
