@@ -251,7 +251,14 @@ const makePiSession = (
             role: execution?.role ?? "subagent",
             cwd: task.cwd,
             projectTrusted: task.parent.projectTrusted,
-            ...(task.workspace ? { allowProjectResources: false } : {}),
+            ...(execution?.allowProjectResources !== undefined
+              ? { allowProjectResources: execution.allowProjectResources }
+              : task.workspace
+                ? { allowProjectResources: false }
+                : {}),
+            ...(execution?.allowContextFiles !== undefined
+              ? { allowContextFiles: execution.allowContextFiles }
+              : {}),
             ...(execution
               ? {
                   appendSystemPrompt: execution.appendSystemPrompt,

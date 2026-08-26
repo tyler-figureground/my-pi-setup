@@ -1,0 +1,35 @@
+export { createFixtureLanguageServerAdapter } from "./fixture.ts";
+export { createStdioLanguageServerAdapter } from "./stdio.ts";
+export {
+  createLanguageIntelligence,
+  DEFAULT_LANGUAGE_LIMITS,
+} from "./intelligence.ts";
+export type {
+  FixtureLanguageServerAdapter,
+  FixtureLanguageServerDefinition,
+  LanguageDocumentUpdate,
+  LanguageDiscovery,
+  LanguageError,
+  LanguageErrorCode,
+  LanguageIntelligence,
+  LanguageIntelligenceOptions,
+  LanguageLimits,
+  LanguageOutcome,
+  LanguageQuery,
+  LanguageQueryKind,
+  LanguageQueryResult,
+  LanguageSelector,
+  LanguageServerAdapter,
+  LanguageServerCommand,
+  LanguageServerConnection,
+  LanguageServerDefinition,
+  LanguageSynchronization,
+  MappedLanguagePath,
+  NormalizedCall,
+  NormalizedDiagnostic,
+  NormalizedHover,
+  NormalizedLanguageItem,
+  NormalizedLocation,
+  NormalizedSymbol,
+  StdioLanguageServerAdapterOptions,
+} from "./model.ts";

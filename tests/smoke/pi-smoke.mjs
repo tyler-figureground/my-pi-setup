@@ -244,6 +244,7 @@ async function smokeRepositoryExtensions() {
     "git_log",
     "git_show",
     "git_list_files",
+    "language_tools",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -285,6 +286,7 @@ async function smokeRepositoryExtensions() {
     "plan",
     "rules",
     "hooks",
+    "review",
   ]) {
     assert.ok(
       surface.commands.includes(command),

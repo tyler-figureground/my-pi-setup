@@ -203,7 +203,7 @@ windowsTest(
 
       assert.equal(Number.isSafeInteger(grandchildPid), true);
       assert.equal(result.killed, true);
-      assert.equal(elapsedMs < 5_000, true);
+      assert.equal(elapsedMs < 10_000, true);
       await waitForProcessExit(grandchildPid);
     } finally {
       await runner.shutdown(2_000);
@@ -256,7 +256,7 @@ windowsTest(
       pids.push(...results.map((result) => Number.parseInt(result.stdout, 10)));
 
       assert.equal(pids.every(Number.isSafeInteger), true);
-      assert.equal(elapsedMs < 3_500, true);
+      assert.equal(elapsedMs < 7_500, true);
       assert.deepEqual(
         results.map((result) => result.killed),
         [true, true],

@@ -29,6 +29,14 @@ test("platform config merges available flags from global and trusted-project sou
       planMode: false,
       rules: true,
       browser: "yes",
+      languageServers: [
+        {
+          id: "fixture",
+          command: { argv: ["fixture-server", "--stdio"] },
+          selectors: [{ languageId: "fixture", extensions: [".fixture"] }],
+          queries: ["diagnostics"],
+        },
+      ],
       plan: {
         defaultScope: "project",
         projectDirectory: ".pi/project-plans",
@@ -51,6 +59,7 @@ test("platform config merges available flags from global and trusted-project sou
       userDirectory: "my-plans",
       projectDirectory: path.join(".pi", "plans"),
     });
+    assert.deepEqual(untrusted.languageServers, []);
     assert.deepEqual(untrusted.diagnostics, []);
 
     const trusted = loadPlatformFlags({
@@ -69,6 +78,7 @@ test("platform config merges available flags from global and trusted-project sou
       userDirectory: "my-plans",
       projectDirectory: path.join(".pi", "project-plans"),
     });
+    assert.equal(trusted.languageServers[0]?.id, "fixture");
     assert.equal(trusted.diagnostics.length, 1);
     assert.match(
       trusted.diagnostics[0]?.path ?? "",

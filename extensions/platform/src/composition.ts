@@ -1,4 +1,6 @@
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -18,6 +20,7 @@ import {
   type PlatformPlanConfiguration,
 } from "./config.ts";
 import { bindPlatformAgentServices } from "./agents/services.ts";
+import { createFileSystemArtifactStore } from "./core/artifacts/index.ts";
 import { createCapabilityPolicy } from "./core/policy/index.ts";
 import { createSqliteStateStore } from "./core/persistence/index.ts";
 import {
@@ -28,11 +31,79 @@ import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
+import type {
+  LanguageIntelligence,
+  LanguageServerAdapter,
+  LanguageServerDefinition,
+} from "./language/model.ts";
 import { createProfileCatalog } from "./profiles/index.ts";
+import type { LocalReview, ReviewRequest } from "./review/index.ts";
+import { localReviewerFor } from "./review/reviewer-service.ts";
+import { createLanguageCapability } from "./wiring/language.ts";
+import { createReviewCapability } from "./wiring/review.ts";
 import { createWorkspaceManager } from "./workspaces/index.ts";
 
 export function canOwnPlatformDaemons(role: ExecutionRole) {
   return role === "parent";
+}
+
+export function platformArtifactRoot(agentDir: string) {
+  return process.platform === "win32"
+    ? path.join(
+        process.env.LOCALAPPDATA ?? os.tmpdir(),
+        "pi-agent",
+        "artifacts",
+      )
+    : path.join(
+        process.env.XDG_STATE_HOME ??
+          path.join(os.homedir(), ".local", "state"),
+        "pi-agent",
+        "artifacts",
+      );
+}
+
+export function builtInLanguageServers(): readonly LanguageServerDefinition[] {
+  const typescriptServer = fileURLToPath(
+    new URL(
+      "../node_modules/typescript-language-server/lib/cli.mjs",
+      import.meta.url,
+    ),
+  );
+  const tsserver = fileURLToPath(
+    new URL("../node_modules/typescript-v5/lib/tsserver.js", import.meta.url),
+  );
+  return [
+    {
+      id: "typescript",
+      command: {
+        executable: process.execPath,
+        args: [typescriptServer, "--stdio"],
+      },
+      selectors: [
+        {
+          languageId: "typescript",
+          extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"],
+        },
+      ],
+      queries: [
+        "diagnostics",
+        "documentSymbols",
+        "workspaceSymbols",
+        "definition",
+        "references",
+        "implementations",
+        "hover",
+        "callHierarchy",
+      ],
+      initializationOptions: { tsserver: { path: tsserver } },
+    },
+    {
+      id: "ruff",
+      command: { executable: "ruff", args: ["server"] },
+      selectors: [{ languageId: "python", extensions: [".py", ".pyi"] }],
+      queries: ["diagnostics"],
+    },
+  ];
 }
 
 function createDaemonAcquirer(
@@ -54,6 +125,7 @@ function createDaemonAcquirer(
 export interface PlatformExtensionOptions {
   flags?: unknown;
   plan?: Partial<PlatformPlanConfiguration>;
+  languageServers?: readonly LanguageServerDefinition[];
   agentDir?: string;
   createLifecycleSupervisor?: () => LifecycleSupervisor;
   createProjectIdentity?: () => ProjectIdentity;
@@ -71,6 +143,7 @@ export function createPlatformExtension(
             ...defaultPlatformPlanConfiguration,
             ...options.plan,
           },
+          languageServers: options.languageServers ?? [],
         };
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
@@ -88,12 +161,17 @@ export function createPlatformExtension(
       plan?: ReturnType<typeof createPlanCapability>;
       rules?: ReturnType<typeof createRulesCapability>;
       hooks?: ReturnType<typeof createHooksCapability>;
+      language?: ReturnType<typeof createLanguageCapability>;
+      review?: ReturnType<typeof createReviewCapability>;
       unbindAgentServices?: () => void;
     };
     let runtime: PlatformRuntime | undefined;
     let planCapability: ReturnType<typeof createPlanCapability> | undefined;
     let rulesCapability: ReturnType<typeof createRulesCapability> | undefined;
     let hooksCapability: ReturnType<typeof createHooksCapability> | undefined;
+    let languageCapability:
+      ReturnType<typeof createLanguageCapability> | undefined;
+    let reviewCapability: ReturnType<typeof createReviewCapability> | undefined;
 
     const teardown = async (
       current: PlatformRuntime,
@@ -101,6 +179,16 @@ export function createPlatformExtension(
       event: unknown,
     ) => {
       const failures: unknown[] = [];
+      try {
+        await current.language?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.review?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         current.unbindAgentServices?.();
       } catch (error) {
@@ -169,7 +257,9 @@ export function createPlatformExtension(
         configuration.flags.rules ||
         configuration.flags.hooks ||
         configuration.flags.profiles ||
-        configuration.flags.workspaces;
+        configuration.flags.workspaces ||
+        configuration.flags.languageIntelligence ||
+        configuration.flags.review;
       if (!platformEnabled || role !== "parent") return;
 
       const resolved = await makeProjectIdentity().resolve(ctx.cwd);
@@ -180,6 +270,12 @@ export function createPlatformExtension(
         return;
       }
       const project = resolved.value;
+      const artifacts =
+        configuration.flags.languageIntelligence || configuration.flags.review
+          ? createFileSystemArtifactStore({
+              root: platformArtifactRoot(agentDir),
+            })
+          : undefined;
 
       if (configuration.flags.profiles || configuration.flags.workspaces) {
         const profiles = configuration.flags.profiles
@@ -256,6 +352,102 @@ export function createPlatformExtension(
           ...(profiles ? { profiles } : {}),
           ...(workspaces ? { workspaces } : {}),
         });
+      }
+
+      let languageIntelligence: LanguageIntelligence | undefined;
+      if (configuration.flags.languageIntelligence) {
+        let actualLanguage: Promise<LanguageIntelligence> | undefined;
+        const getLanguage = () =>
+          (actualLanguage ??= import("./language/intelligence.ts").then(
+            ({ createLanguageIntelligence }) =>
+              createLanguageIntelligence({
+                lifecycle,
+                project,
+                servers:
+                  configuration.languageServers.length > 0
+                    ? configuration.languageServers
+                    : builtInLanguageServers(),
+                adapter: {
+                  async connect(request, signal) {
+                    const { createStdioLanguageServerAdapter } =
+                      await import("./language/stdio.ts");
+                    return createStdioLanguageServerAdapter().connect(
+                      request,
+                      signal,
+                    );
+                  },
+                } satisfies LanguageServerAdapter,
+                ...(artifacts ? { artifacts } : {}),
+              }),
+          ));
+        languageIntelligence = {
+          async discover() {
+            return (await getLanguage()).discover();
+          },
+          async synchronize(updates, signal) {
+            return (await getLanguage()).synchronize(updates, signal);
+          },
+          async query(request, signal) {
+            return (await getLanguage()).query(request, signal);
+          },
+        };
+        languageCapability ??= createLanguageCapability(pi);
+        languageCapability.start(languageIntelligence);
+        current.language = languageCapability;
+      }
+
+      if (configuration.flags.review) {
+        reviewCapability ??= createReviewCapability(pi, {});
+        current.review = reviewCapability;
+      }
+
+      if (
+        configuration.flags.review &&
+        projectTrusted &&
+        project.kind === "git" &&
+        !project.bare
+      ) {
+        const reviewer = {
+          review: (request: ReviewRequest) =>
+            localReviewerFor(pi.events).review(request),
+        };
+        let localReviewPromise: Promise<LocalReview> | undefined;
+        const localReview: LocalReview = {
+          async run(target, reviewOptions) {
+            localReviewPromise ??= Promise.all([
+              import("./review/index.ts"),
+              import("./review/git.ts"),
+              import("./review/language-evidence.ts"),
+              import("./review/test-evidence.ts"),
+            ]).then(
+              ([reviewModule, gitModule, languageEvidence, testEvidence]) =>
+                reviewModule.createLocalReview({
+                  projectId: project.projectId,
+                  artifacts: artifacts!,
+                  git: gitModule.createReviewGitAdapter({
+                    root: project.repositoryRoot,
+                    projectId: project.projectId,
+                  }),
+                  reviewer,
+                  secondReviewer: reviewer,
+                  evidence: [
+                    ...(languageIntelligence
+                      ? [
+                          languageEvidence.createLanguageReviewEvidence(
+                            languageIntelligence,
+                          ),
+                        ]
+                      : []),
+                    testEvidence.createDisposableTestEvidence(
+                      project.repositoryRoot,
+                    ),
+                  ],
+                }),
+            );
+            return (await localReviewPromise).run(target, reviewOptions);
+          },
+        };
+        reviewCapability!.start(localReview);
       }
 
       if (configuration.flags.planMode) {

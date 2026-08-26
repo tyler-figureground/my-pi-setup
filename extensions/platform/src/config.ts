@@ -10,6 +10,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { decodeLanguageServerConfiguration } from "./language/config.ts";
+import type { LanguageServerDefinition } from "./language/model.ts";
 import {
   decodePlatformFlags,
   defaultPlatformFlags,
@@ -196,6 +198,7 @@ function decodePlanConfiguration(
 export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly flags: PlatformFlags;
   readonly plan: PlatformPlanConfiguration;
+  readonly languageServers: readonly LanguageServerDefinition[];
   readonly diagnostics: PlatformDiagnostic[];
 } {
   const agentDir = resolve(location.agentDir ?? getAgentDir());
@@ -207,6 +210,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   const diagnostics: PlatformDiagnostic[] = [];
   let flags: PlatformFlags = defaultPlatformFlags;
   let plan = defaultPlatformPlanConfiguration;
+  let languageServers: readonly LanguageServerDefinition[] = [];
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
     try {
@@ -220,21 +224,30 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       const decoded = decodePlatformFlags(
         object
           ? Object.fromEntries(
-              Object.entries(object).filter(([key]) => key !== "plan"),
+              Object.entries(object).filter(
+                ([key]) => key !== "plan" && key !== "languageServers",
+              ),
             )
           : parsed,
         flags,
       );
       const decodedPlan = decodePlanConfiguration(object?.plan, plan);
+      const decodedLanguage = decodeLanguageServerConfiguration(
+        object?.languageServers,
+        languageServers,
+      );
       flags = decoded.flags;
       plan = decodedPlan.plan;
+      languageServers = decodedLanguage.servers;
       diagnostics.push(
-        ...[...decoded.diagnostics, ...decodedPlan.diagnostics].map(
-          (diagnostic) => ({
-            path: `${source.path}:${diagnostic.path}`,
-            message: diagnostic.message,
-          }),
-        ),
+        ...[
+          ...decoded.diagnostics,
+          ...decodedPlan.diagnostics,
+          ...decodedLanguage.diagnostics,
+        ].map((diagnostic) => ({
+          path: `${source.path}:${diagnostic.path}`,
+          message: diagnostic.message,
+        })),
       );
     } catch (error) {
       diagnostics.push({
@@ -243,5 +256,5 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       });
     }
   }
-  return { flags, plan, diagnostics };
+  return { flags, plan, languageServers, diagnostics };
 }

@@ -75,10 +75,12 @@ import {
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
+import { createManagedLocalReviewer } from "./src/local-review.ts";
 import { resolveStandaloneChildProjectContext } from "../shared/child-session.ts";
 import type { ProfileCatalog } from "../platform/src/profiles/index.ts";
 import { platformAgentServices } from "../platform/src/agents/services.ts";
 import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
+import { bindLocalReviewer } from "../platform/src/review/reviewer-service.ts";
 import type {
   WorkspaceInventory,
   WorkspaceLease,
@@ -166,6 +168,7 @@ export default function subagentsExtension(
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  let unbindLocalReviewer: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -266,6 +269,46 @@ export default function subagentsExtension(
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    unbindLocalReviewer?.();
+    unbindLocalReviewer = bindLocalReviewer(
+      pi.events,
+      createManagedLocalReviewer({
+        parent: () => {
+          const current = sessionContext;
+          if (!current)
+            throw new Error(
+              "Local reviewer is unavailable outside an active session.",
+            );
+          return {
+            parentCwd: current.cwd,
+            projectTrusted: current.isProjectTrusted(),
+            inheritedModel: current.model
+              ? { provider: current.model.provider, id: current.model.id }
+              : undefined,
+            inheritedThinkingLevel: pi.getThinkingLevel(),
+            modelRegistry: current.modelRegistry,
+          };
+        },
+        run: async (task, signal) => {
+          const manager = await getManager();
+          const started = await runTool(
+            getRuntime(),
+            manager.spawn("pi", task),
+            { signal, interruptMessage: "Local review cancelled." },
+          );
+          await runTool(getRuntime(), manager.waitFor([started.id]), {
+            signal,
+            interruptMessage: "Local review cancelled.",
+          });
+          const settled = await runTool(getRuntime(), manager.get(started.id));
+          if (!settled)
+            throw new Error("Local reviewer disappeared before settlement.");
+          if (settled.status !== "done")
+            throw new Error(settled.errorText ?? "Local reviewer failed.");
+          return settled;
+        },
+      }),
+    );
     const manager = platformAgentServices(pi.events)?.workspaces;
     if (!manager) return;
     const bindings = ctx.sessionManager
@@ -312,6 +355,8 @@ export default function subagentsExtension(
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
+    unbindLocalReviewer?.();
+    unbindLocalReviewer = undefined;
     sessionContext = undefined;
     resultDelivery.clear();
     unsubStatus?.();

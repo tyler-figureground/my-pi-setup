@@ -156,6 +156,7 @@ export interface ChildResourceOptions {
   cwd: string;
   projectTrusted: boolean;
   allowProjectResources?: boolean;
+  allowContextFiles?: boolean;
   appendSystemPrompt?: string[];
   allowedTools?: readonly string[];
   disallowedTools?: readonly string[];
@@ -178,6 +179,7 @@ export async function createChildResources(options: ChildResourceOptions) {
     agentDir,
     settingsManager,
     eventBus,
+    ...(options.allowContextFiles === false ? { noContextFiles: true } : {}),
     extensionsOverride: (base) => filterChildExtensions(base, options.role),
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }

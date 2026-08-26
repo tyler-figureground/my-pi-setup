@@ -82,6 +82,14 @@ export function compilePiExecutionPolicy(policy: ResolvedExecutionPolicy) {
       ...policy.instructions,
       ...policy.skills.map((skill) => skill.content),
     ],
+    ...(policy.resources
+      ? {
+          allowProjectResources: policy.resources.project,
+          ...(policy.resources.contextFiles === undefined
+            ? {}
+            : { allowContextFiles: policy.resources.contextFiles }),
+        }
+      : {}),
     role: policy.role,
   };
 }

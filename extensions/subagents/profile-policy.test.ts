@@ -38,6 +38,28 @@ test("Pi compiler rejects unconfined isolated tools and forces shell denial", ()
   );
 });
 
+test("Pi compiler can exclude project resources for host-managed reviewers", () => {
+  assert.deepEqual(
+    compilePiExecutionPolicy(
+      policy({
+        workspace: "current",
+        resources: { project: false },
+        tools: { allowed: [], denied: ["bash", "write", "edit"] },
+      }),
+    ),
+    {
+      allowedTools: [],
+      disallowedTools: ["bash", "write", "edit"],
+      appendSystemPrompt: [
+        "Review trust boundaries.",
+        "Use adversarial tests.",
+      ],
+      allowProjectResources: false,
+      role: "review",
+    },
+  );
+});
+
 test("Claude reasoning uses current adaptive effort options", () => {
   assert.deepEqual(claudeReasoningOptions(undefined), {});
   assert.deepEqual(claudeReasoningOptions("off"), {

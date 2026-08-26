@@ -33,6 +33,11 @@ export interface ResolvedExecutionPolicy {
     readonly maxTurns?: number;
     readonly timeoutMs?: number;
   };
+  /** Host resource policy. Omitted preserves profile compatibility. */
+  readonly resources?: {
+    readonly project: boolean;
+    readonly contextFiles?: boolean;
+  };
   readonly workspace: WorkspacePolicy;
 }
 

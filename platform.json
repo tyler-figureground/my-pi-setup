@@ -4,6 +4,8 @@
   "rules": true,
   "profiles": true,
   "workspaces": true,
+  "languageIntelligence": true,
+  "review": true,
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",

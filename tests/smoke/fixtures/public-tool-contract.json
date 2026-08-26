@@ -249,6 +249,149 @@
     }
   },
   {
+    "name": "language_tools",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Language or semantic operation needed, used only for display and discovery context.",
+          "maxLength": 200
+        }
+      }
+    }
+  },
+  {
+    "name": "lsp_call_hierarchy",
+    "parameters": {
+      "type": "object",
+      "required": ["direction", "path", "position"],
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": ["incoming", "outgoing"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Project file path."
+        },
+        "position": {
+          "type": "object",
+          "required": ["line", "character"],
+          "properties": {
+            "line": {
+              "type": "integer",
+              "description": "Zero-based line.",
+              "minimum": 0
+            },
+            "character": {
+              "type": "integer",
+              "description": "Zero-based UTF-16 character.",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "lsp_diagnostics",
+    "parameters": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Project file path to synchronize and diagnose."
+        }
+      }
+    }
+  },
+  {
+    "name": "lsp_hover",
+    "parameters": {
+      "type": "object",
+      "required": ["path", "position"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Project file path."
+        },
+        "position": {
+          "type": "object",
+          "required": ["line", "character"],
+          "properties": {
+            "line": {
+              "type": "integer",
+              "description": "Zero-based line.",
+              "minimum": 0
+            },
+            "character": {
+              "type": "integer",
+              "description": "Zero-based UTF-16 character.",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "lsp_navigate",
+    "parameters": {
+      "type": "object",
+      "required": ["operation", "path", "position"],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["definition", "references", "implementations"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Project file path."
+        },
+        "position": {
+          "type": "object",
+          "required": ["line", "character"],
+          "properties": {
+            "line": {
+              "type": "integer",
+              "description": "Zero-based line.",
+              "minimum": 0
+            },
+            "character": {
+              "type": "integer",
+              "description": "Zero-based UTF-16 character.",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "lsp_symbols",
+    "parameters": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["document", "workspace"],
+          "description": "Document symbols require path; workspace symbols require query."
+        },
+        "path": {
+          "type": "string",
+          "description": "Project file path for document symbols."
+        },
+        "query": {
+          "type": "string",
+          "description": "Workspace symbol name query."
+        }
+      }
+    }
+  },
+  {
     "name": "rg",
     "parameters": {
       "type": "object",
