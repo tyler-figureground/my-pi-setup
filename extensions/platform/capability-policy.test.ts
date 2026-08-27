@@ -53,6 +53,9 @@ test("current built-in and custom tools classify by both name and source", () =>
     ["custom", "subagent_check", "read"],
     ["custom", "subagent_list", "read"],
     ["custom", "workflow", "orchestration"],
+    ["custom", "session_list", "read"],
+    ["custom", "session_send", "orchestration"],
+    ["custom", "memory_search", "read"],
   ] as const;
 
   for (const [source, name, operation] of expected) {

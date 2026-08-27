@@ -115,7 +115,12 @@ function validateRegularCanonicalFile(candidate: string, volatile = false) {
   try {
     entry = lstatSync(candidate);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" ||
+        (volatile && process.platform === "win32" && error.code === "EPERM"))
+    )
       return undefined;
     throw error;
   }

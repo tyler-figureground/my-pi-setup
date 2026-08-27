@@ -141,6 +141,9 @@ const toolOperations = {
     browser_observe: ["read"],
     browser_action: arbitraryProcessCapabilities,
     mcp_tools: ["process", "network-read", "credential-use"],
+    session_list: ["read"],
+    session_send: ["orchestration"],
+    memory_search: ["read"],
   },
   sdk: {},
 } as const satisfies Record<
