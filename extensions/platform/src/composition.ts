@@ -25,6 +25,14 @@ import {
   defaultPlatformBrowserConfiguration,
   type PlatformBrowserConfiguration,
 } from "./browser/config.ts";
+import {
+  defaultPlatformMemoryConfiguration,
+  type PlatformMemoryConfiguration,
+} from "./memory/config.ts";
+import {
+  defaultPlatformMessagingConfiguration,
+  type PlatformMessagingConfiguration,
+} from "./messaging/config.ts";
 import type { BrowserAdapter } from "./browser/index.ts";
 import type { CredentialVault } from "./external/credentials.ts";
 import { createExternalIntegrationControls } from "./external/index.ts";
@@ -36,6 +44,7 @@ import { createSqliteStateStore } from "./core/persistence/index.ts";
 import {
   createProjectIdentity,
   type ProjectIdentity,
+  type ResolvedProjectIdentity,
 } from "./core/projects/index.ts";
 import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
@@ -53,7 +62,30 @@ import { createLanguageCapability } from "./wiring/language.ts";
 import { createReviewCapability } from "./wiring/review.ts";
 import { createBrowserCapability } from "./wiring/browser.ts";
 import { createMcpCapability } from "./wiring/mcp.ts";
+import { createMemoryCapability } from "./wiring/memory.ts";
+import { createMessagingCapability } from "./wiring/messaging.ts";
 import { createWorkspaceManager } from "./workspaces/index.ts";
+import {
+  createHostMemoryBindingFactory,
+  createMemoryStoreModule,
+} from "./memory/index.ts";
+import type {
+  MemoryPersistenceAdapter,
+  MemoryPersistenceError,
+} from "./memory/memory-persistence.ts";
+import {
+  createSqliteMemoryPersistenceAdapter,
+  type SqliteMemoryPersistenceOptions,
+} from "./memory/sqlite-memory-persistence.ts";
+import type { Outcome } from "./core/result.ts";
+import {
+  createSessionBrokerModule,
+  issueHostSessionProof,
+} from "./messaging/index.ts";
+import {
+  createPiSessionDeliveryAdapter,
+  type PiSessionDeliveryAdapter,
+} from "./messaging/pi-delivery.ts";
 
 export function canOwnPlatformDaemons(role: ExecutionRole) {
   return role === "parent";
@@ -107,6 +139,47 @@ function createLazyCredentialVault(): CredentialVault {
     async remove(reference, binding) {
       return (await vault()).remove(reference, binding);
     },
+  };
+}
+
+function createLazyMemoryPersistenceAdapter(
+  create: () => Outcome<MemoryPersistenceAdapter, MemoryPersistenceError>,
+): MemoryPersistenceAdapter {
+  let pending:
+    | Promise<Outcome<MemoryPersistenceAdapter, MemoryPersistenceError>>
+    | undefined;
+  const initialize = () => (pending ??= Promise.resolve().then(create));
+  const use = async <T>(
+    operation: (
+      adapter: MemoryPersistenceAdapter,
+    ) => Promise<Outcome<T, MemoryPersistenceError>>,
+  ) => {
+    const initialized = await initialize();
+    if (!initialized.ok) return initialized;
+    return operation(initialized.value);
+  };
+  return {
+    purgeExpired: (now) => use((adapter) => adapter.purgeExpired(now)),
+    create: (entry, receipt, contradictionIds) =>
+      use((adapter) => adapter.create(entry, receipt, contradictionIds)),
+    get: (id) => use((adapter) => adapter.get(id)),
+    getReceipt: (requestId) => use((adapter) => adapter.getReceipt(requestId)),
+    findCandidates: (scope, kind, limit) =>
+      use((adapter) => adapter.findCandidates(scope, kind, limit)),
+    saveReceipt: (receipt) => use((adapter) => adapter.saveReceipt(receipt)),
+    update: (entry, expectedRevision, receipt, contradictionIds) =>
+      use((adapter) =>
+        adapter.update(entry, expectedRevision, receipt, contradictionIds),
+      ),
+    forget: (id, expectedRevision, receipt) =>
+      use((adapter) => adapter.forget(id, expectedRevision, receipt)),
+    list: (input) => use((adapter) => adapter.list(input)),
+    savePreview: (preview, receipt, limits) =>
+      use((adapter) => adapter.savePreview(preview, receipt, limits)),
+    getPreview: (id, now) => use((adapter) => adapter.getPreview(id, now)),
+    commitImport: (previewId, entries, receipt) =>
+      use((adapter) => adapter.commitImport(previewId, entries, receipt)),
+    search: (input) => use((adapter) => adapter.search(input)),
   };
 }
 
@@ -201,12 +274,19 @@ export interface PlatformExtensionOptions {
   languageServers?: readonly LanguageServerDefinition[];
   mcpServers?: readonly McpServerDefinition[];
   browser?: PlatformBrowserConfiguration;
+  messaging?: PlatformMessagingConfiguration;
+  memory?: PlatformMemoryConfiguration;
   mcpAdapter?: McpTransportAdapter;
   browserAdapter?: BrowserAdapter;
   credentialVault?: CredentialVault;
   agentDir?: string;
   createLifecycleSupervisor?: () => LifecycleSupervisor;
   createProjectIdentity?: () => ProjectIdentity;
+  createMemoryPersistenceAdapter?: (
+    options: SqliteMemoryPersistenceOptions,
+  ) => Outcome<MemoryPersistenceAdapter, MemoryPersistenceError>;
+  createSessionBrokerModule?: typeof createSessionBrokerModule;
+  createSessionDeliveryAdapter?: typeof createPiSessionDeliveryAdapter;
 }
 
 export function createPlatformExtension(
@@ -224,6 +304,8 @@ export function createPlatformExtension(
           languageServers: options.languageServers ?? [],
           mcpServers: options.mcpServers ?? [],
           browser: options.browser ?? defaultPlatformBrowserConfiguration,
+          messaging: options.messaging ?? defaultPlatformMessagingConfiguration,
+          memory: options.memory ?? defaultPlatformMemoryConfiguration,
         };
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
@@ -246,6 +328,9 @@ export function createPlatformExtension(
       review?: ReturnType<typeof createReviewCapability>;
       mcp?: ReturnType<typeof createMcpCapability>;
       browser?: ReturnType<typeof createBrowserCapability>;
+      memory?: ReturnType<typeof createMemoryCapability>;
+      messaging?: ReturnType<typeof createMessagingCapability>;
+      messagingDelivery?: PiSessionDeliveryAdapter;
       unbindAgentServices?: () => void;
     };
     let runtime: PlatformRuntime | undefined;
@@ -258,6 +343,16 @@ export function createPlatformExtension(
     let mcpCapability: ReturnType<typeof createMcpCapability> | undefined;
     let browserCapability:
       ReturnType<typeof createBrowserCapability> | undefined;
+    let memoryCapability: ReturnType<typeof createMemoryCapability> | undefined;
+    let messagingCapability:
+      ReturnType<typeof createMessagingCapability> | undefined;
+    let memoryAuthority:
+      | {
+          readonly runtime: PlatformRuntime;
+          readonly project: ResolvedProjectIdentity;
+          readonly sessionId: string;
+        }
+      | undefined;
 
     const teardown = async (
       current: PlatformRuntime,
@@ -265,6 +360,22 @@ export function createPlatformExtension(
       event: unknown,
     ) => {
       const failures: unknown[] = [];
+      memoryAuthority = undefined;
+      try {
+        current.messagingDelivery?.handleEvent({ type: "session_shutdown" });
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.messaging?.stop(reason);
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.memory?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await current.browser?.stop();
       } catch (error) {
@@ -357,7 +468,9 @@ export function createPlatformExtension(
         configuration.flags.languageIntelligence ||
         configuration.flags.review ||
         configuration.flags.mcp ||
-        configuration.flags.browser;
+        configuration.flags.browser ||
+        configuration.flags.messaging ||
+        configuration.flags.memory;
       if (!platformEnabled || role !== "parent") return;
 
       const resolved = await makeProjectIdentity().resolve(ctx.cwd);
@@ -372,7 +485,9 @@ export function createPlatformExtension(
         configuration.flags.languageIntelligence ||
         configuration.flags.review ||
         configuration.flags.mcp ||
-        configuration.flags.browser
+        configuration.flags.browser ||
+        configuration.flags.messaging ||
+        configuration.flags.memory
           ? createFileSystemArtifactStore({
               root: platformArtifactRoot(agentDir),
             })
@@ -391,6 +506,48 @@ export function createPlatformExtension(
       });
       const credentialVault =
         options.credentialVault ?? createLazyCredentialVault();
+
+      if (configuration.flags.memory) {
+        const bindings = createHostMemoryBindingFactory({
+          revalidate(assertion) {
+            const authority = memoryAuthority;
+            if (
+              !authority ||
+              runtime !== authority.runtime ||
+              assertion.executionRole !== role ||
+              assertion.project?.projectId !== authority.project.projectId ||
+              assertion.project.canonicalCwd !==
+                authority.project.canonicalCwd ||
+              (assertion.sessionId !== undefined &&
+                assertion.sessionId !== authority.sessionId)
+            ) {
+              return undefined;
+            }
+            return assertion;
+          },
+        });
+        memoryCapability ??= createMemoryCapability(pi, {
+          role,
+          policy,
+          mode: () => ({ kind: platformMode() }),
+          bindings,
+        });
+        current.memory = memoryCapability;
+        memoryAuthority = {
+          runtime: current,
+          project,
+          sessionId: ctx.sessionManager.getSessionId(),
+        };
+      }
+
+      if (configuration.flags.messaging) {
+        messagingCapability ??= createMessagingCapability({
+          pi,
+          policy,
+          mode: platformMode,
+        });
+        current.messaging = messagingCapability;
+      }
 
       if (configuration.flags.mcp) {
         const oauthServers = configuration.mcpServers.flatMap((server) =>
@@ -814,6 +971,74 @@ export function createPlatformExtension(
         });
         current.hooks = hooksCapability;
         await current.hooks.start({ project, projectTrusted, ctx }, event);
+      }
+      if (configuration.flags.memory) {
+        if (configuration.memory.defaultScope === "workspace" && ctx.hasUI) {
+          ctx.ui.notify(
+            "Workspace Memory is unavailable without a verified current workspace lease. Choose user or project scope explicitly.",
+            "warning",
+          );
+        }
+        const createPersistence =
+          options.createMemoryPersistenceAdapter ??
+          createSqliteMemoryPersistenceAdapter;
+        current.memory!.start({
+          module: createMemoryStoreModule({
+            persistence: createLazyMemoryPersistenceAdapter(() =>
+              createPersistence({
+                path: path.join(agentDir, "state", "memory.sqlite"),
+              }),
+            ),
+            artifacts: artifacts!,
+          }),
+          project,
+          defaultScope: configuration.memory.defaultScope,
+        });
+      }
+      if (configuration.flags.messaging) {
+        const state = createSqliteStateStore({
+          path: path.join(agentDir, "state", "platform.sqlite"),
+        });
+        if (!state.ok) {
+          if (ctx.hasUI) ctx.ui.notify(state.error.message, "error");
+        } else {
+          try {
+            const delivery = (
+              options.createSessionDeliveryAdapter ??
+              createPiSessionDeliveryAdapter
+            )(pi, ctx);
+            current.messagingDelivery = delivery;
+            await current.messaging!.start({
+              brokerModule: (
+                options.createSessionBrokerModule ?? createSessionBrokerModule
+              )({
+                state: state.value,
+                artifacts: artifacts!,
+                lifecycle,
+              }),
+              binding: {
+                piSessionId: ctx.sessionManager.getSessionId(),
+                proof: issueHostSessionProof(),
+                executionRole: role,
+                project,
+                cwd: ctx.cwd,
+                exposure: configuration.messaging,
+              },
+              delivery,
+            });
+          } catch (error) {
+            current.messagingDelivery?.handleEvent({
+              type: "session_shutdown",
+            });
+            current.messagingDelivery = undefined;
+            if (ctx.hasUI) {
+              ctx.ui.notify(
+                error instanceof Error ? error.message : String(error),
+                "error",
+              );
+            }
+          }
+        }
       }
     });
     pi.on("session_shutdown", async (event) => {
