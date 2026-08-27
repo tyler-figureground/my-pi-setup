@@ -22,7 +22,7 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 - [x] Public test seams confirmed: `ExternalIntegrationControls`, `ToolFederation`, `BrowserControl`, platform wiring, and real adapters.
 - [x] Define shared external-integration policy, credential, redaction, allowlist, approval, offline, status, and lazy-activation contracts.
 - [x] Define `ToolFederation` and browser module interfaces and domain language.
-- [ ] Record architecture and threat model.
+- [x] Record architecture and threat model.
 
 ### 2. Package and adapter research
 
@@ -30,7 +30,7 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 - [x] Reproduce/falsify native argument and lifecycle-hang reports with disposable probes.
 - [x] Audit all three named browser wrappers and run the selected Playwright path against a disposable fixture.
 - [x] Audit exact versions, source, licenses, scripts, dependencies, network/credential behavior, Windows cleanup, and abandonment evidence.
-- [ ] Record adopt/wrap/build ADRs before production dependency choice.
+- [x] Record adopt/wrap/build ADRs before production dependency choice.
 
 ### 3. Shared controls, test-first
 
@@ -39,20 +39,20 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 
 ### 4. F07 ToolFederation, test-first
 
-- [ ] Implement trusted config, HTTP, untrusted instructions, bounded reconnect, official OAuth protocol adapter, and `/mcp` UI. Core namespaces, lazy schemas, per-tool policy, STDIO, PKCE/state, OS credential storage, refresh, and revoke are green.
-- [ ] Verify mock servers, argument fidelity, collisions, auth failure paths, package/print exit, secret canaries, cancellation, reload, and shutdown.
+- [x] Implement trusted config, HTTP, untrusted instructions, bounded reconnect, official OAuth protocol adapter, and `/mcp` UI. Core namespaces, lazy schemas, per-tool policy, STDIO, PKCE/state, OS credential storage, refresh, and revoke are green.
+- [x] Verify mock servers, argument fidelity, collisions, auth failure paths, package/print exit, secret canaries, cancellation, reload, and shutdown.
 
 ### 5. F03 browser module, test-first
 
-- [ ] Implement remaining actions, Impeccable coexistence detection, platform wiring, and visual workflow. Dedicated profile, owned pages, AI refs, click/fill policy, screenshots, console/errors/network evidence, origin/private-target policy, bounded artifacts, cancellation primitives, and real Chrome cleanup are green.
-- [ ] Add reusable visual-verification skill integrated with background terminals, review, and artifacts.
-- [ ] Verify local fixture flow, blocked operations, isolation, plan mode, and native Windows cleanup.
+- [x] Implement remaining actions, Impeccable coexistence detection, platform wiring, and visual workflow. Dedicated profile, owned pages, AI refs, click/fill policy, screenshots, console/errors/network evidence, origin/private-target policy, bounded artifacts, cancellation primitives, and real Chrome cleanup are green.
+- [x] Add reusable visual-verification skill integrated with background terminals, review, and artifacts.
+- [x] Verify local fixture flow, blocked operations, isolation, plan mode, and native Windows cleanup.
 
 ### 6. Hardening and acceptance
 
-- [ ] Run adversarial architecture/security reviews and resolve every material finding with regression coverage.
-- [ ] Run full isolated verification, secret scan, performance/startup/schema measurements, TUI checklist, live fixture verification, and rollback drill.
-- [ ] Update tracker, configuration/setup docs, architecture, ADRs, threat model, acceptance ledger, and program continuity.
+- [x] Run adversarial architecture/security reviews and resolve every material finding with regression coverage.
+- [x] Run full isolated verification, secret scan, performance/startup/schema measurements, TUI checklist, live fixture verification, and rollback drill.
+- [ ] Update tracker and program continuity after final sign-off; configuration/setup docs, architecture, ADRs, threat model, and acceptance ledger are drafted.
 
 ### 7. Publication and live integration
 
@@ -69,4 +69,9 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 - Public seams confirmed.
 - Isolated dependencies installed. Baseline deterministic suite passed: 202 unit, 176 integration with 5 skips, 22 delegated, smoke. Focused Claude rerun passed 2/2 after the first live interrupt run lacked a pre-cancel text fragment.
 - Research selects exact official MCP v2 client/core and `playwright-core@1.62.1`; broad third-party adapters are rejected as production abstractions. Reports under `docs/research/`.
-- Foundation passes typecheck and 219 unit tests. Real Windows keyring, official MCP STDIO, and real Playwright Chrome fixtures pass. Full integration suite is running.
+- Final pre-publication `npm run verify` passed: 239 unit, 188 integration with 5 platform skips, 22 delegated, repository smoke, Claude 2/2, Codex 2/2, Pi 1/1. A post-sign-off rerun is active after the last browser review fixes.
+- Real MCP STDIO/HTTP/OAuth, keyring, Chrome profile/network/action/evidence, detached-process, and repository visual acceptance fixtures pass.
+- Startup median is 4,170.4 ms versus matched Phase 4 control 4,061.4 ms (+2.7%). Audit reports zero vulnerabilities.
+- Repeated adversarial review drove fixes for address pinning/proxy bypass, one-shot page-bound mutation authority, prepared target identity, exact secret canaries, schema publication, OAuth/logout races, ambiguous replay, profile leases/page caps, and identity-only Windows cleanup.
+- Final MCP sign-off `sa-64` and final browser/security sign-off `sa-66` reported no blockers.
+- Publication/live integration remains. Phase 6 has not started.

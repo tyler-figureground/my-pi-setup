@@ -37,7 +37,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables plan mode, lazy rules, hooks, profiles, guarded workspaces, language intelligence, and local review:
+`platform.json` enables plan mode, lazy rules, hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, and dedicated browser control:
 
 ```json
 {
@@ -48,6 +48,15 @@ When changing Effect, update every extension manifest in the same change, regene
   "workspaces": true,
   "languageIntelligence": true,
   "review": true,
+  "mcp": true,
+  "browser": true,
+  "mcpServers": [],
+  "browserSettings": {
+    "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "profileName": "phase5",
+    "allowedOrigins": [],
+    "allowLoopback": false
+  },
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",
@@ -68,9 +77,13 @@ Configuration locations:
 - trusted-project profiles: `<project>/.pi/agents/*.yaml`
 - guarded workspace state: `~/.pi/agent/state/platform.sqlite`
 - guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
-- language/review artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
+- language/review/MCP/browser artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
+- dedicated browser profiles: platform-managed project/profile-specific directories under `%LOCALAPPDATA%/pi-agent/browser-profiles/` on Windows
+- OAuth and browser credentials: OS credential store, referenced by opaque ids in state/config
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), and [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md).
+Empty MCP servers and browser origins start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser.
+
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), and [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md).
 
 ## Firecrawl
 

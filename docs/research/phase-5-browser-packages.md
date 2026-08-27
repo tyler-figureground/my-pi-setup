@@ -86,6 +86,13 @@ Scope: `pi-agent-browser-native`, `pi-browser-harness`, `betterwright`, and `pla
 - [HIGH | Primary] No abandonment evidence. Microsoft maintains monthly stable releases and current prereleases. Element handles are de-emphasized in favor of locators, but this is API evolution inside Playwright, not migration away from the core package. [releases](https://api.github.com/repos/microsoft/playwright/releases?per_page=10)
 - [MEDIUM | Secondary] Agent projects sometimes move from raw Playwright to higher-level semantic or anti-bot wrappers; Microsoft Aspire reported better agent results moving from Playwright MCP to Playwright CLI. These are adapter-surface migrations on top of browser automation, not evidence that `playwright-core` is abandoned. [Strix issue](https://github.com/usestrix/strix/issues/194) [Aspire issue](https://github.com/microsoft/aspire/issues/14430)
 
+## Disposable Windows trial results
+
+- [HIGH | Primary] `pi-agent-browser-native@0.5.0` doctor failed before fixture launch because exact required `agent-browser@0.34.0` was absent. The wrapper does not bundle it; installing that engine would run the unverified native-binary download path rejected above.
+- [HIGH | Primary] `pi-browser-harness@0.11.0` loaded in disposable Pi RPC mode and `/browser-status` exited cleanly, reporting disconnected. A safe same-fixture run was not attempted because exact npm production startup can invoke missing `tsx` through unpinned `npx`, and setup intentionally attaches to the user's real debug-enabled profile.
+- [HIGH | Primary] `betterwright@1.10.2` installed with scripts disabled and completed the local fixture using host Chrome, a disposable home/profile, vault disabled, loopback-only policy, title read, and accessibility snapshot.
+- [HIGH | Primary] The selected `playwright-core@1.62.1` adapter completed local navigate, AI refs, click, upload, download, screenshot, console, page-error, failed-request, profile-collision, separate-profile coexistence, host pinning, persistence, and identity-isolation fixtures without a browser download.
+
 ## Contradictions and hidden variables
 
 - [HIGH | Primary] npm version and repository version diverge for both Pi wrappers. Decisions must target npm `pi-agent-browser-native@0.5.0` and `pi-browser-harness@0.11.0`, not fixes/features visible only on repository main.

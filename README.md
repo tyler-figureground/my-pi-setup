@@ -17,6 +17,8 @@ This setup is fairly opinionated, it:
 - isolates profiled agents in leased, recoverable guarded Git worktrees
 - provides persistent advisory diagnostics and semantic symbol navigation
 - runs read-only local review with validated findings and immutable artifacts
+- federates trusted MCP tools with lazy schemas, scoped OAuth, and protected side effects
+- verifies live web interfaces in a dedicated, allowlisted browser profile with artifact evidence
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

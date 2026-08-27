@@ -77,6 +77,12 @@ Observed 2026-08-26 in America/Los_Angeles. "Current" below means npm's stable `
 - **[HIGH | Primary] Migration is happening below the adapter.** Official TypeScript SDK v2 replaced the monolithic package with role-specific packages, and adapter `2.29.0` has migrated its client implementation to exact v2 `client` and `core`. That is strong evidence against starting new client work on `@modelcontextprotocol/sdk` v1. [official migration guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/upgrade-to-v2.md), [adapter manifest](https://github.com/nicobailon/pi-mcp-adapter/blob/66c6c526344ceb7c2e8d22e36b7981a21e600433/package.json)
 - **[LOW | Discovery] No broad downstream migration away from the adapter was found.** Exact GitHub searches for variants of "migrated away from pi-mcp-adapter", "replace pi-mcp-adapter", and "remove pi-mcp-adapter" found one small-project issue title proposing replacement with the official client, but no indexed body or wider pattern adequate for a decision. Negative search evidence is weak because private repositories, unindexed code, and silent removals are invisible.
 
+## Disposable Windows trial results
+
+- [HIGH | Primary] `pi-mcp-adapter@2.29.0` installed with lifecycle scripts disabled and zero audit findings. Disposable RPC `get_commands` and `/mcp status` exited cleanly with no configured server.
+- [HIGH | Primary] A deliberately unresponsive eager STDIO server made disposable RPC startup take about seven seconds but still exit within the watchdog and leave no child process. `--list-models` did not load/start the configured extension process. Current package-command hang was not reproduced; the load-time source path remains an ownership mismatch for this platform.
+- [HIGH | Primary] The selected official v2 adapter preserves native number/boolean/array/object arguments through a real STDIO fixture, passes Streamable HTTP fixture calls through address-pinned transport, and cleans root plus detached Windows descendants on normal close and aborted connect.
+
 ## Contradictions and hidden variables
 
 - **[HIGH | Primary] "Official SDK latest" has two correct answers.** `@modelcontextprotocol/sdk@1.30.0` is latest under the requested package name; `@modelcontextprotocol/client@2.0.0` plus `core@2.0.0` is the current official client architecture. Recording only one would either miss exact package identity or recommend a legacy architecture.

@@ -2,7 +2,7 @@
 
 ## Security boundary
 
-Phase 5 provides host policy, trust gates, dedicated credentials/profiles, bounded lifecycle, and evidence controls. It does **not** provide an OS sandbox or network namespace. STDIO MCP servers and browser processes run with user privileges.
+Phase 5 provides host policy, trust gates, dedicated credentials/profiles, bounded lifecycle, pinned destinations, and evidence controls. It does **not** provide an OS sandbox or network namespace. STDIO MCP servers and browser processes run with user privileges.
 
 ## Assets
 
@@ -21,29 +21,35 @@ Phase 5 provides host policy, trust gates, dedicated credentials/profiles, bound
 
 ## Threats and controls
 
-| Threat | Control | Residual risk / acceptance evidence |
+| Threat | Control | Evidence / residual risk |
 |---|---|---|
-| SSRF to metadata, loopback, RFC1918, link-local, IPv6-local, rebinding, redirect | Canonical `OriginPolicy`, DNS/IP checks, exact allowlists, per-request browser routing, service workers blocked, redirects revalidated or rejected | Browser/MCP origin fixtures; no claim of OS containment |
-| Agent performs submission, purchase, upload/download, account change, or unknown MCP mutation | Host-side effect classification; unknown MCP and ambiguous clicks protected; direct user authority verifier; plan mode denies first | Policy and forged-authority tests; TUI approval tests pending |
-| OAuth CSRF, mix-up, replay, verifier theft | Random flow-local state/verifier, S256 PKCE, exact redirect/server fingerprint, issuer/origin checks, one-shot state consumption, bounded expiry | Mismatch/replay tests green; local protocol fixture pending |
-| Token/cookie/form/header leakage | Opaque credential references; OS keyring chunking; bounded structural redaction; no raw credentials in status/results; password fill resolves after approval inside host | Secret-canary scan and session/artifact tests pending |
-| Credential store size/partial-update corruption | Chunked OS entries, digest, generation-switched replacement, exact server/origin binding, fail closed | Native Windows store/rotate/revoke fixture green |
-| MCP tool/schema collision or prompt injection | Deterministic server namespace, collision rejection, server text marked/treated as untrusted, lazy generic tool descriptions, bounded schema/catalog | Catalog and dynamic wiring tests pending |
-| Malformed/oversized protocol/schema/result exhausts context or process | SDK framing cap, catalog/schema/input bounds, AJV validation, artifact spill, result redaction/truncation, request/startup deadlines | STDIO/result boundary tests pending |
-| MCP/browser process survives cancellation/reload/shutdown | `LifecycleSupervisor`, abort propagation, context/client close, identity-safe Windows tree fallback, leak checks | Browser close and direct MCP close green; descendant adversarial tests pending |
-| Browser controls unrelated user/Impeccable pages | Dedicated platform profile directory, single-writer lock, owned page IDs only, no attach/CDP surface | Profile isolation/coexistence tests pending |
-| Page bypasses route through service worker/WebSocket/popup | Service workers blocked, WebSockets fail closed, every owned page/redirect rechecked, popup ownership policy | Route/popup/WebSocket fixtures pending |
-| File upload/download escapes or overwrites | No raw paths in model interface; explicit approval; canonical bounded artifact destinations; create-new semantics | Feature tests pending |
-| Project config launches command or changes origins without trust | Project layer read only when Pi reports trust; bounded regular-file/canonical identity checks; malformed source atomic rejection | Config/junction/trust tests pending |
-| Package/list/print command hangs from load-time resources | No resource startup in extension factory; lazy session/tool startup; bounded shutdown | Disposable package/print/RPC tests pending |
+| SSRF, metadata/private access, DNS rebinding, redirect, proxy bypass | Exact canonical origins; DNS/IP class checks; address-pinned MCP/OAuth; Chromium host resolver rules plus `--no-proxy-server`; request/redirect recheck | Pinned-fetch and real-browser host fixtures. No OS network namespace claim |
+| Browser mutation outside approved action | Every method except GET needs adapter permit; permit binds one page and one request, expires, and clears on action settlement | Real concurrent background-page POST and HEAD fixture |
+| Target changes during direct approval | Scope binds URL, document/accessibility/body state, event-listener generation, handler properties, action inputs, and prepared `ElementHandle`; replacement fails | Unit same-origin drift regression plus Playwright implementation review |
+| Agent performs unknown MCP/browser mutation | Conservative effect default, host-issued scope-bound authority, plan-mode denial first | Forged-authority, unknown-effect, plan, approval-retry tests |
+| OAuth CSRF, mix-up, replay, stale resurrection | Random state/verifier, S256, exact callback/fingerprint/issuer, one-shot state, bounded expiry, per-server operation serialization and current-token reload | Official fixture, state replay, issuer, refresh/logout race regression |
+| Ambiguous MCP call executes twice | Federation never retries calls; HTTP auth transport has no `onUnauthorized` replay callback | Failure/reconnect regression and SDK behavior review |
+| Token/cookie/form/header leakage | Opaque references; OS keyring; field/pattern and exact-canary redaction; safe base environments; no secrets in status/results | Stringified token variants and browser echo artifact regressions |
+| Secret appears in pixels or downloaded bytes | Screenshots and downloads fail closed after any browser credential use; controls remain masked before credential use | Credential screenshot/download policy tests and review |
+| Credential canary eviction | At most 32 distinct browser canaries; 33rd credential use fails before adapter invocation | Capacity implementation; no oldest-secret eviction |
+| Credential store partial transition | New generation chunks stage first, index changes durably before old cleanup; remove deletes discoverable index before chunks; exact binding/digest | Native Windows store/replace/remove fixture; ordering review |
+| MCP schema/tool prompt injection or collision | Official schema compile; annotation-only publication stripping with schema-map awareness; generic host descriptions; max-64 hashed names; existing Pi collision refusal | Nested property-name regression, namespace and wiring tests |
+| Malformed/oversized protocol/schema/result exhausts host/context | Frame, catalog, schema, input, output, recursion, node, string, artifact, request, and startup bounds | Boundary and artifact-spill fixtures |
+| MCP/browser process survives cancellation/reload/shutdown | Lifecycle owner, abort fencing, late-start close, browser context timeout, profile lease retention on degraded close, PID plus creation identity, retained descendant snapshots | Full shutdown smoke, aborted MCP detached descendant, browser failed-launch fixtures |
+| Browser controls unrelated user/Impeccable pages | Project/profile-specific persistent directory, atomic single-writer lease, no CDP attach, owned ids, opener lineage, serialized/control and adapter page caps | Isolation, coexistence, stale lease, concurrent 40-open regressions |
+| Page bypasses routing via service worker/WebSocket/WebRTC | Service workers blocked, WebSockets closed, WebRTC APIs/UDP restricted, every request routed | Real launch/network fixture; no arbitrary extension loading |
+| File upload/download escapes or overwrites | No model paths; project-bound upload artifact id; bounded bytes; content-addressed create-new evidence | Upload/download unit and real fixture |
+| Project config launches command or changes secrets without trust | Project layer read only with Pi trust; user-only environment/OAuth/executable/profile fields; canonical regular-file checks; atomic source decode | Config trust and malformed-source tests |
+| Load-time package/print hangs | No external resource startup in extension factory; dynamic imports on first use; bounded shutdown | Startup benchmark and print/JSON/RPC smoke |
 
 ## Secret canaries
 
-Acceptance seeds unique synthetic values into authorization headers, cookies, OAuth code/state/verifier, access/refresh tokens, MCP arguments/results/errors, form values, browser console/network/page errors, and credential-store records. Scan session JSONL, tool results/details, logs, statuses, artifacts, config, and child prompts. Credential-store test namespaces are disposable and removed.
+Acceptance seeds synthetic values into authorization headers, OAuth fields, tokens, MCP errors, form values, console/network/page errors, and credential-store records. Sanitization recognizes structured keys and stringified camel/snake/kebab variants including access, refresh, session, bearer, ID, OAuth code, API key, password/passwd, secret, verifier, and authorization code. Browser-resolved credential values additionally become exact canaries.
 
 ## Failure policy
 
-- Unknown effect, tool, origin, credential binding, callback state, schema, page/ref, or resumed identity fails closed.
+- Unknown effect, tool, origin, credential binding, callback state, schema, page/ref, or process identity fails closed.
 - Offline mode denies external network operations.
 - Approval cannot come from model/session messages or tool input.
-- Cleanup failure is visible and retains enough non-secret identity for recovery.
+- Cleanup failure is visible; browser profile lease remains when ownership may still be live.
+- No Windows PID-only fallback is permitted.
