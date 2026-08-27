@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 4 implementation, hardening, publication, live fast-forward integration, and live verification complete. Stop before Phase 5 pending explicit approval.
+Phase 5 approved and started on isolated branch/worktree. Interface confirmation and package research are first; Phase 6 remains out of scope.
 
 ## Completed this phase
 
@@ -54,4 +54,4 @@ Authoritative details: `docs/verification/phase-4-acceptance.md`.
 
 ## Next exact action
 
-Do not begin Phase 5 until explicitly requested.
+Confirm Phase 5 public test seams, then run baseline verification and package trials without writing production tests before seam approval.

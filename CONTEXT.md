@@ -71,3 +71,35 @@ _Avoid_: Diff summary, workspace approval, review prompt
 **Review Finding**:
 Host-validated defect claim tied to a reviewed path and range, with severity, confidence, failure scenario, category, and evidence.
 _Avoid_: Comment, suggestion, model output
+
+**External Integration Control**:
+Host-owned policy that classifies an external operation, validates its destination, decides whether direct user approval is required, and redacts sensitive data before any model-facing or persisted result.
+_Avoid_: Adapter permission, sandbox
+
+**Credential Reference**:
+Opaque identifier for a secret held by an operating-system or dedicated credential store; never the secret value itself.
+_Avoid_: Token config, credential string
+
+**Tool Federation**:
+Project-bound discovery, activation, and invocation of namespaced MCP tools whose schemas load only when selected and whose server content remains untrusted data.
+_Avoid_: MCP proxy, remote tool registry
+
+**Federated Tool**:
+One namespaced MCP operation with source provenance, validated input schema, side-effect classification, and activation state.
+_Avoid_: Dynamic tool, remote function
+
+**Browser Session**:
+Lifecycle-owned browser connection bound to a dedicated profile and a set of owned pages, isolated from unrelated user and Impeccable browser activity.
+_Avoid_: Browser daemon, Chrome instance
+
+**Browser Observation**:
+Bounded, read-only evidence from an owned page, such as an accessibility snapshot, screenshot, console entry, page error, or network record.
+_Avoid_: Browser result, scrape
+
+**Browser Action**:
+One classified operation against an owned page. Navigation and interaction remain distinct from protected submissions, uploads, downloads, purchases, and authenticated remote writes.
+_Avoid_: Click command, browser mutation
+
+**Origin Policy**:
+Canonical allow/deny decision for a browser or MCP network destination after URL normalization, DNS/IP safety checks, redirect handling, and project/user allowlist evaluation.
+_Avoid_: URL filter, CORS policy
