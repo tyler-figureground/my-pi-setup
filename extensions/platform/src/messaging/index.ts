@@ -182,24 +182,28 @@ export interface SessionBroker {
   ): Promise<SessionBrokerResult<void>>;
 }
 
-interface RuntimeDelivery {
+/** @internal Delivery boundary shared with host adapters. */
+export interface RuntimeDelivery {
   readonly envelope: MessageEnvelope;
   readonly renderedContent: string;
 }
 
-interface DeliveryReceipt {
+/** @internal Delivery boundary shared with host adapters. */
+export interface DeliveryReceipt {
   readonly state: "accepted" | "already-present";
   readonly durableReceipt: string;
 }
 
-type SessionDeliveryError = ModuleError<
+/** @internal Delivery boundary shared with host adapters. */
+export type SessionDeliveryError = ModuleError<
   | "unsupported_mode"
   | "temporarily_unavailable"
   | "permanently_unavailable"
   | "cancelled"
 >;
 
-interface SessionDeliveryAdapter {
+/** @internal Delivery boundary shared with host adapters. */
+export interface SessionDeliveryAdapter {
   snapshot(): SessionRuntimeSnapshot;
   subscribe(listener: (snapshot: SessionRuntimeSnapshot) => void): () => void;
   deliverOnce(
