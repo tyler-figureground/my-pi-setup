@@ -324,6 +324,9 @@ test("compaction suspends delivery until a documented terminal event", async (t)
   adapter.handleEvent({ type: "session_compact_failed" });
   assert.deepEqual(adapter.snapshot().capabilities, [
     { id: "pi.delivery/inbox", version: 1 },
+    { id: "pi.delivery/when-idle", version: 1 },
+    { id: "pi.delivery/follow-up", version: 1 },
+    { id: "pi.delivery/steer", version: 1 },
   ]);
 });
 
@@ -348,7 +351,7 @@ test("tree suspension and generation shutdown fail closed", async (t) => {
   assert.deepEqual(adapter.snapshot().capabilities, []);
 
   adapter.handleEvent({ type: "session_tree" });
-  assert.equal(adapter.snapshot().capabilities.length, 1);
+  assert.equal(adapter.snapshot().capabilities.length, 4);
 
   adapter.handleEvent({ type: "session_shutdown" });
   adapter.handleEvent({ type: "session_tree" });
@@ -381,7 +384,7 @@ test("overlapping structural signals cannot reopen an unmatched tree gate", (t) 
 
   assert.deepEqual(adapter.snapshot().capabilities, []);
   adapter.handleEvent({ type: "session_tree" });
-  assert.equal(adapter.snapshot().capabilities.length, 1);
+  assert.equal(adapter.snapshot().capabilities.length, 4);
 });
 
 test("an already-aborted delivery creates no transcript effect", async (t) => {
@@ -470,7 +473,7 @@ test("publishes capability changes across structural lifecycle events", (t) => {
   unsubscribe();
   adapter.handleEvent({ type: "session_before_tree" });
 
-  assert.deepEqual(capabilities, [0, 1]);
+  assert.deepEqual(capabilities, [0, 4]);
 });
 
 test("serializes reentrant deliveries before creating transcript effects", async (t) => {
@@ -729,34 +732,155 @@ test("in-memory and unmaterialized sessions never inject delivery", async (t) =>
   assert.equal(sendCount, 0);
 });
 
-test("steer follow-up and when-idle directives cannot be enqueue receipts", async (t) => {
+test("follow-up and steer notify only after durable inbox readback", async (t) => {
   const sessionFile = materializedSession(t);
-  let sendCount = 0;
+  const entries: SessionEntry[] = [];
+  const calls: Array<{ message: unknown; options: unknown }> = [];
   const adapter = createPiSessionDeliveryAdapter(
-    { sendMessage: () => void (sendCount += 1) },
+    {
+      sendMessage(message, options) {
+        calls.push({ message, options });
+        if (isRecord(message) && message.display === true) {
+          const entry: SessionEntry = {
+            type: "custom_message",
+            id: `entry-${calls.length}`,
+            parentId: null,
+            timestamp: "2026-08-27T00:00:01.000Z",
+            ...message,
+          };
+          entries.push(entry);
+          appendFileSync(sessionFile, `${JSON.stringify(entry)}\n`);
+        }
+      },
+    },
     {
       sessionManager: {
         getSessionFile: () => sessionFile,
         getSessionId: () => "recipient-session",
         getSessionName: () => "Recipient",
-        getEntries: () => [],
+        getEntries: () => [...entries],
       },
       isIdle: () => false,
     },
   );
 
-  for (const mode of ["pi/steer", "pi/follow-up", "pi/when-idle"]) {
+  for (const mode of ["pi/steer", "pi/follow-up"] as const) {
     const result = await adapter.deliverOnce({
-      ...delivery(),
+      ...delivery(`mail-${mode}`),
       envelope: {
-        ...delivery().envelope,
+        ...delivery(`mail-${mode}`).envelope,
         delivery: { mode, version: 1 },
       },
     });
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.error.code, "unsupported_mode");
+    assert.equal(result.ok, true);
   }
+  assert.equal(calls.length, 4);
+  assert.deepEqual(
+    calls.map(({ message }) =>
+      isRecord(message) ? message.display : undefined,
+    ),
+    [true, false, true, false],
+  );
+  assert.deepEqual(calls[1]?.options, {
+    deliverAs: "steer",
+    triggerTurn: true,
+  });
+  assert.deepEqual(calls[3]?.options, {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
+});
+
+test("when-idle records durably only after session becomes idle", async (t) => {
+  const sessionFile = materializedSession(t);
+  const entries: SessionEntry[] = [];
+  let idle = false;
+  let sendCount = 0;
+  const adapter = createPiSessionDeliveryAdapter(
+    {
+      sendMessage(message) {
+        sendCount += 1;
+        const entry: SessionEntry = {
+          type: "custom_message",
+          id: "idle-entry",
+          parentId: null,
+          timestamp: "2026-08-27T00:00:01.000Z",
+          ...message,
+        };
+        entries.push(entry);
+        appendFileSync(sessionFile, `${JSON.stringify(entry)}\n`);
+      },
+    },
+    {
+      sessionManager: {
+        getSessionFile: () => sessionFile,
+        getSessionId: () => "recipient-session",
+        getSessionName: () => "Recipient",
+        getEntries: () => [...entries],
+      },
+      isIdle: () => idle,
+    },
+  );
+  const idleDelivery = {
+    ...delivery("mail-idle"),
+    envelope: {
+      ...delivery("mail-idle").envelope,
+      delivery: { mode: "pi/when-idle", version: 1 },
+    },
+  };
+
+  const waiting = await adapter.deliverOnce(idleDelivery);
+  assert.equal(waiting.ok, false);
   assert.equal(sendCount, 0);
+  idle = true;
+  adapter.handleEvent({ type: "agent_settled" });
+  const accepted = await adapter.deliverOnce(idleDelivery);
+  assert.equal(accepted.ok, true);
+  assert.equal(sendCount, 1);
+});
+
+test("queued notification can never substitute for durable receipt", async (t) => {
+  const sessionFile = materializedSession(t);
+  const entries: SessionEntry[] = [];
+  const calls: Array<{ message: unknown; options: unknown }> = [];
+  const adapter = createPiSessionDeliveryAdapter(
+    {
+      sendMessage(message, options) {
+        calls.push({ message, options });
+        if (isRecord(message)) {
+          entries.push({
+            type: "custom_message",
+            id: "memory-only",
+            parentId: null,
+            timestamp: "2026-08-27T00:00:01.000Z",
+            ...message,
+          });
+        }
+      },
+    },
+    {
+      sessionManager: {
+        getSessionFile: () => sessionFile,
+        getSessionId: () => "recipient-session",
+        getSessionName: () => "Recipient",
+        getEntries: () => [...entries],
+      },
+      isIdle: () => false,
+    },
+  );
+  const followUp = {
+    ...delivery("mail-no-receipt"),
+    envelope: {
+      ...delivery("mail-no-receipt").envelope,
+      delivery: { mode: "pi/follow-up", version: 1 },
+    },
+  };
+
+  const result = await adapter.deliverOnce(followUp);
+
+  assert.equal(result.ok, false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]?.options, { triggerTurn: false });
 });
 
 test("live-only append/readback failure never returns success or duplicates", async (t) => {
@@ -802,6 +926,38 @@ test("bounded scanner rejects an oversized JSONL line", async (t) => {
   appendFileSync(
     sessionFile,
     `${JSON.stringify({ type: "custom", id: "large", data: "x".repeat(1024 * 1024) })}\n`,
+  );
+  let sendCount = 0;
+  const adapter = createPiSessionDeliveryAdapter(
+    { sendMessage: () => void (sendCount += 1) },
+    {
+      sessionManager: {
+        getSessionFile: () => sessionFile,
+        getSessionId: () => "recipient-session",
+        getSessionName: () => "Recipient",
+        getEntries: () => [],
+      },
+      isIdle: () => true,
+    },
+  );
+
+  const result = await adapter.deliverOnce(delivery());
+
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "permanently_unavailable");
+  assert.equal(sendCount, 0);
+});
+
+test("fatal UTF-8 validation rejects malformed complete JSONL before append", async (t) => {
+  const sessionFile = materializedSession(t);
+  appendFileSync(
+    sessionFile,
+    Buffer.from([
+      ...Buffer.from('{"type":"custom","id":"bad","data":"'),
+      0xc3,
+      0x28,
+      ...Buffer.from('"}\n'),
+    ]),
   );
   let sendCount = 0;
   const adapter = createPiSessionDeliveryAdapter(

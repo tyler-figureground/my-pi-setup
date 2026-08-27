@@ -9,6 +9,10 @@ import type {
   SessionBroker,
   SessionBrokerModule,
 } from "../messaging/index.ts";
+import {
+  SESSION_DELIVERY_MODES,
+  type SessionDeliveryMode,
+} from "../messaging/index.ts";
 import type {
   PiSessionDeliveryAdapter,
   PiSessionDeliveryEvent,
@@ -245,14 +249,24 @@ export function createMessagingCapability(
       await ctx.waitForIdle();
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       if (tokens[0] === "send") {
+        const requestedMode =
+          tokens[3] ??
+          (SESSION_DELIVERY_MODES.includes(tokens[2] as SessionDeliveryMode)
+            ? tokens[2]
+            : undefined);
+        const deliveryMode = requestedMode ?? "pi/inbox";
+        const expectedIncarnation =
+          tokens[2] === requestedMode ? undefined : tokens[2];
         if (
-          (tokens.length !== 2 && tokens.length !== 3) ||
+          tokens.length < 2 ||
+          tokens.length > 4 ||
           tokens[1] === "*" ||
           tokens[1]!.length > 512 ||
-          (tokens[2]?.length ?? 0) > 512
+          (expectedIncarnation?.length ?? 0) > 512 ||
+          !SESSION_DELIVERY_MODES.includes(deliveryMode as SessionDeliveryMode)
         ) {
           throw new Error(
-            "Usage: /messages send <session-id> [expected-incarnation]",
+            `Usage: /messages send <session-id> [expected-incarnation] [${SESSION_DELIVERY_MODES.join("|")}]`,
           );
         }
         const runtime = authorizeOperation("orchestration");
@@ -271,7 +285,6 @@ export function createMessagingCapability(
           throw new Error("Message body exceeds 1,048,576 bytes.");
         }
         const recipient = tokens[1]!;
-        const expectedIncarnation = tokens[2];
         const confirmed = await ctx.ui.confirm(
           "Send cross-session message?",
           [
@@ -281,7 +294,7 @@ export function createMessagingCapability(
               : [`Expected incarnation: ${sanitize(expectedIncarnation)}`]),
             `Summary: ${sanitize(summary)}`,
             `Body: ${bodyBytes} bytes`,
-            "Delivery: pi/inbox v1 - untrusted, authority none",
+            `Delivery: ${deliveryMode} v1 - untrusted, authority none`,
           ].join("\n"),
         );
         ensureCurrent(runtime);
@@ -299,7 +312,7 @@ export function createMessagingCapability(
             ],
             summary,
             body: { kind: "text", text: message },
-            delivery: { mode: "pi/inbox", version: 1 },
+            delivery: { mode: deliveryMode, version: 1 },
           },
           runtime.controller.signal,
         );
@@ -458,6 +471,7 @@ export function createMessagingCapability(
         ),
         summary: Type.String({ minLength: 1, maxLength: 512 }),
         message: Type.String({ minLength: 1, maxLength: 1_048_576 }),
+        deliveryMode: Type.Optional(StringEnum(SESSION_DELIVERY_MODES)),
       },
       { additionalProperties: false },
     ),
@@ -511,7 +525,7 @@ export function createMessagingCapability(
           })),
           summary: params.summary,
           body: { kind: "text", text: params.message },
-          delivery: { mode: "pi/inbox", version: 1 },
+          delivery: { mode: params.deliveryMode ?? "pi/inbox", version: 1 },
         },
         operationSignal,
       );

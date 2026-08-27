@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createInMemoryArtifactStore } from "./src/core/artifacts/index.ts";
+import {
+  createFileSystemArtifactStore,
+  createInMemoryArtifactStore,
+} from "./src/core/artifacts/index.ts";
 import { createLifecycleSupervisor } from "./src/core/lifecycle/supervisor.ts";
 import {
   createMemoryStateStore,
@@ -801,6 +806,81 @@ test("discovery defaults to opted-in same-project visibility", async () => {
   await lifecycle.shutdown("quit");
 });
 
+test("discovery pages beyond one thousand nonmatching presence records", async () => {
+  const lifecycle = createLifecycleSupervisor();
+  const state = createMemoryStateStore();
+  const module = createSessionBrokerModule({
+    state,
+    artifacts: createInMemoryArtifactStore(),
+    lifecycle,
+  });
+  const requester = await module.attach(
+    {
+      piSessionId: "requester",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("project-one"),
+      cwd: "C:/project-one",
+      exposure: { discoverableBy: "same-project", acceptsFrom: "same-project" },
+    },
+    delivery("Requester"),
+  );
+  assert.equal(requester.ok, true);
+  if (!requester.ok) return;
+  const now = Date.now();
+  for (let start = 0; start <= 1_000; start += 100) {
+    const operations = Array.from(
+      { length: Math.min(100, 1_001 - start) },
+      (_, offset) => {
+        const index = start + offset;
+        return {
+          type: "put-record" as const,
+          collection: "session-broker.presence",
+          key: `session-${index.toString().padStart(4, "0")}`,
+          metadata: {
+            incarnation: `incarnation-${index}`,
+            proofVerifier: `proof-${index}`,
+            executionRole: "parent",
+            projectId: "project-one",
+            cwd: "C:/project-one",
+            exposure: {
+              discoverableBy: "same-project",
+              acceptsFrom: "same-project",
+            },
+            snapshot: {
+              name: `Session ${index}`,
+              status: "idle",
+              capabilities:
+                index === 1_000
+                  ? [{ id: "fixture/rare", version: 1 }]
+                  : [{ id: "fixture/common", version: 1 }],
+            },
+            lastHeartbeatAt: now,
+            online: true,
+          },
+          expectedVersion: null,
+        };
+      },
+    );
+    const seeded = await state.transact({
+      transactionId: `seed-presence-${start}`,
+      operations,
+    });
+    assert.equal(seeded.ok, true);
+  }
+
+  const discovered = await requester.value.discover({
+    capability: "fixture/rare",
+    limit: 1,
+  });
+
+  assert.equal(discovered.ok, true);
+  if (discovered.ok) {
+    assert.equal(discovered.value[0]?.address.piSessionId, "session-1000");
+  }
+  await lifecycle.shutdown("quit");
+});
+
 test("process proof and lease fence reject forged or stale session handles", async () => {
   let now = 0;
   const lifecycle = createLifecycleSupervisor();
@@ -1042,7 +1122,137 @@ test("send sanitizes secret canaries before durable persistence", async () => {
   const lifecycle = createLifecycleSupervisor();
   const state = createMemoryStateStore();
   const artifacts = createInMemoryArtifactStore();
+  const rendered: string[] = [];
   const module = createSessionBrokerModule({ state, artifacts, lifecycle });
+  const canary = "Q7vK9mP2xR8sT4wY6zB3cD5fG1hJ0nL";
+  const attach = (piSessionId: string, secretBearing = false) =>
+    module.attach(
+      {
+        piSessionId,
+        proof: issueHostSessionProof(),
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      secretBearing
+        ? {
+            snapshot: () => ({
+              name: `Tracker ${canary}`,
+              status: "idle" as const,
+              capabilities: [
+                {
+                  id: `pi.delivery/inbox/${canary}`,
+                  version: 1,
+                  parameters: {
+                    callback: `https://user:${canary}@example.test/cb?code=${canary}`,
+                  },
+                },
+                { id: "pi.delivery/inbox", version: 1 },
+              ],
+            }),
+            subscribe: () => () => {},
+            async deliverOnce(item: { renderedContent: string }) {
+              rendered.push(item.renderedContent);
+              return {
+                ok: true as const,
+                value: {
+                  state: "accepted" as const,
+                  durableReceipt: `adapter-receipt-${canary}`,
+                },
+              };
+            },
+          }
+        : delivery(piSessionId),
+    );
+  const sender = await attach("sanitized-sender");
+  const recipient = await attach("sanitized-recipient", true);
+  assert.equal(sender.ok, true);
+  assert.equal(recipient.ok, true);
+  if (!sender.ok || !recipient.ok) return;
+
+  const sent = await sender.value.send({
+    requestId: "sanitized-send",
+    recipients: [{ piSessionId: "sanitized-recipient" }],
+    summary: `authorization: Bearer ${canary}`,
+    body: {
+      kind: "text",
+      text: `callback=https://client:${canary}@example.test/cb?code=${canary}`,
+      mediaType: `text/${canary}`,
+    },
+    delivery: {
+      mode: "pi/inbox",
+      version: 1,
+      options: { nested: { password: canary } },
+    },
+  });
+  assert.equal(sent.ok, true);
+  if (!sent.ok) return;
+  const rejectedBinary = await sender.value.send({
+    requestId: "sanitized-binary",
+    recipients: [{ piSessionId: "sanitized-recipient" }],
+    summary: "binary",
+    body: {
+      kind: "bytes",
+      bytes: Buffer.from(canary),
+      mediaType: "application/octet-stream",
+    },
+  });
+  assert.equal(rejectedBinary.ok, false);
+
+  const stored = await artifacts.get(sent.value.body.id);
+  assert.equal(stored.ok, true);
+  if (stored.ok) {
+    const body = Buffer.from(stored.value.body).toString("utf8");
+    assert.equal(body.includes(canary), false);
+    assert.equal(stored.value.metadata.metadata?.classification, "sanitized");
+  }
+  let outbound = await sender.value.messages({ direction: "outbound" });
+  const deliveryDeadline = Date.now() + 1_000;
+  while (
+    outbound.ok &&
+    outbound.value[0]?.state !== "delivered" &&
+    Date.now() < deliveryDeadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    outbound = await sender.value.messages({ direction: "outbound" });
+  }
+  const exported = await state.export({ format: "snapshot" });
+  assert.equal(exported.ok, true);
+  if (exported.ok && exported.value.format === "snapshot") {
+    assert.equal(
+      JSON.stringify(exported.value.snapshot).includes(canary),
+      false,
+    );
+  }
+  const discovered = await sender.value.discover({ status: "all" });
+  assert.equal(discovered.ok, true);
+  if (discovered.ok) {
+    assert.equal(JSON.stringify(discovered.value).includes(canary), false);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(rendered.join("\n").includes(canary), false);
+
+  await lifecycle.shutdown("quit");
+});
+
+test("concurrent distinct sends retry one native SQLite mailbox commit", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "session-broker-distinct-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const opened = createSqliteStateStore({
+    path: join(directory, "state.sqlite"),
+  });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state: opened.value,
+    artifacts: createInMemoryArtifactStore(),
+    lifecycle,
+  });
   const attach = (piSessionId: string) =>
     module.attach(
       {
@@ -1058,43 +1268,338 @@ test("send sanitizes secret canaries before durable persistence", async () => {
       },
       delivery(piSessionId),
     );
-  const sender = await attach("sanitized-sender");
-  const recipient = await attach("sanitized-recipient");
+  const firstSender = await attach("distinct-sender-a");
+  const secondSender = await attach("distinct-sender-b");
+  const recipient = await attach("distinct-recipient");
+  assert.equal(firstSender.ok, true);
+  assert.equal(secondSender.ok, true);
+  assert.equal(recipient.ok, true);
+  if (!firstSender.ok || !secondSender.ok || !recipient.ok) return;
+  await recipient.value.close("quit");
+
+  const [first, second] = await Promise.all([
+    firstSender.value.send({
+      requestId: "distinct-a",
+      recipients: [{ piSessionId: "distinct-recipient" }],
+      summary: "A",
+      body: { kind: "text", text: "A" },
+    }),
+    secondSender.value.send({
+      requestId: "distinct-b",
+      recipients: [{ piSessionId: "distinct-recipient" }],
+      summary: "B",
+      body: { kind: "text", text: "B" },
+    }),
+  ]);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (first.ok && second.ok) {
+    assert.notEqual(
+      first.value.deliveries[0]?.mailboxPosition,
+      second.value.deliveries[0]?.mailboxPosition,
+    );
+  }
+  await lifecycle.shutdown("quit");
+});
+
+test("expired orphan body artifacts are reclaimed before a later send", async () => {
+  let now = 0;
+  let failCommits = true;
+  const baseState = createMemoryStateStore({ now: () => now });
+  const state = {
+    ...baseState,
+    transact(input: Parameters<typeof baseState.transact>[0]) {
+      if (
+        failCommits &&
+        input.transactionId.startsWith("session-broker.send:")
+      ) {
+        return Promise.resolve({
+          ok: false as const,
+          error: {
+            code: "VERSION_CONFLICT" as const,
+            message: "fixture conflict",
+            retryable: true,
+          },
+        });
+      }
+      return baseState.transact(input);
+    },
+  };
+  const artifacts = createInMemoryArtifactStore({ clock: () => now });
+  const storedIds: string[] = [];
+  const artifactStore = {
+    ...artifacts,
+    async put(input: Parameters<typeof artifacts.put>[0]) {
+      const result = await artifacts.put(input);
+      if (result.ok) storedIds.push(result.value.id);
+      return result;
+    },
+  };
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state,
+    artifacts: artifactStore,
+    lifecycle,
+    clock: () => now,
+    limits: { sessionTtlMs: 90 * 24 * 60 * 60 * 1_000 },
+  });
+  const attach = (piSessionId: string) =>
+    module.attach(
+      {
+        piSessionId,
+        proof: issueHostSessionProof(),
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      delivery(piSessionId),
+    );
+  const sender = await attach("orphan-sender");
+  const recipient = await attach("orphan-recipient");
   assert.equal(sender.ok, true);
   assert.equal(recipient.ok, true);
   if (!sender.ok || !recipient.ok) return;
+  await recipient.value.close("quit");
 
-  const canary = "sk-abcdefghijklmnopqrstuvwxyz123456";
-  const sent = await sender.value.send({
-    requestId: "sanitized-send",
-    recipients: [{ piSessionId: "sanitized-recipient" }],
-    summary: `authorization: Bearer ${canary}`,
-    body: { kind: "text", text: `api_key=${canary}` },
-    delivery: {
-      mode: "pi/inbox",
-      version: 1,
-      options: { nested: { password: canary } },
-    },
+  const failed = await sender.value.send({
+    requestId: "orphan-failed",
+    recipients: [{ piSessionId: "orphan-recipient" }],
+    summary: "orphan",
+    body: { kind: "text", text: "first body" },
   });
-  assert.equal(sent.ok, true);
-  if (!sent.ok) return;
+  assert.equal(failed.ok, false);
+  assert.equal(storedIds.length, 1);
+  assert.equal((await artifacts.get(storedIds[0]!)).ok, true);
 
-  const stored = await artifacts.get(sent.value.body.id);
-  assert.equal(stored.ok, true);
-  if (stored.ok) {
-    const body = Buffer.from(stored.value.body).toString("utf8");
-    assert.equal(body.includes(canary), false);
-    assert.equal(stored.value.metadata.metadata?.classification, "sanitized");
+  now = 30 * 24 * 60 * 60 * 1_000 + 1;
+  failCommits = false;
+  const sent = await sender.value.send({
+    requestId: "orphan-success",
+    recipients: [{ piSessionId: "orphan-recipient" }],
+    summary: "success",
+    body: { kind: "text", text: "second body" },
+  });
+
+  assert.equal(sent.ok, true);
+  const reclaimed = await artifacts.get(storedIds[0]!);
+  assert.equal(reclaimed.ok, false);
+  if (!reclaimed.ok) assert.equal(reclaimed.error.code, "artifact_not_found");
+  await lifecycle.shutdown("quit");
+});
+
+test("two Node processes durably send through one native SQLite mailbox", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "session-broker-processes-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const databasePath = join(directory, "state.sqlite");
+  const artifactRoot = join(directory, "artifacts");
+  const opened = createSqliteStateStore({ path: databasePath });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state: opened.value,
+    artifacts: createFileSystemArtifactStore({ root: artifactRoot }),
+    lifecycle,
+  });
+  const recipient = await module.attach(
+    {
+      piSessionId: "process-recipient",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("process-project"),
+      cwd: "C:/process-project",
+      exposure: { discoverableBy: "same-project", acceptsFrom: "same-project" },
+    },
+    delivery("Process recipient"),
+  );
+  assert.equal(recipient.ok, true);
+  if (!recipient.ok) return;
+  await recipient.value.close("quit");
+
+  const fixture = fileURLToPath(
+    new URL("./fixtures/session-broker-process.ts", import.meta.url),
+  );
+  const start = (senderId: string, requestId: string) => {
+    const child = fork(
+      fixture,
+      [databasePath, artifactRoot, senderId, "process-recipient", requestId],
+      {
+        execArgv: ["--experimental-strip-types"],
+        silent: true,
+      },
+    );
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    t.after(() => {
+      if (!child.killed) child.kill();
+    });
+    return { child, stderr: () => stderr };
+  };
+  const nextMessage = <T>(child: ChildProcess) =>
+    new Promise<T>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("message", (message) => resolve(message as T));
+    });
+  const first = start("process-sender-a", "process-request-a");
+  const second = start("process-sender-b", "process-request-b");
+  const ready = await Promise.all([
+    nextMessage<{ type: string }>(first.child),
+    nextMessage<{ type: string }>(second.child),
+  ]);
+  assert.deepEqual(ready, [{ type: "ready" }, { type: "ready" }]);
+  first.child.send({ type: "send" });
+  second.child.send({ type: "send" });
+  const results = await Promise.all([
+    nextMessage<{ type: string; result: SessionBrokerResult<unknown> }>(
+      first.child,
+    ),
+    nextMessage<{ type: string; result: SessionBrokerResult<unknown> }>(
+      second.child,
+    ),
+  ]);
+
+  assert.equal(results[0]?.result.ok, true, first.stderr());
+  assert.equal(results[1]?.result.ok, true, second.stderr());
+  const mailbox = await module.attach(
+    {
+      piSessionId: "process-recipient",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("process-project"),
+      cwd: "C:/process-project",
+      exposure: { discoverableBy: "same-project", acceptsFrom: "same-project" },
+    },
+    {
+      ...delivery("Process replacement"),
+      async deliverOnce() {
+        return {
+          ok: false as const,
+          error: {
+            code: "temporarily_unavailable" as const,
+            message: "fixture hold",
+            retryable: true,
+          },
+        };
+      },
+    },
+  );
+  assert.equal(mailbox.ok, true);
+  if (mailbox.ok) {
+    let messages = await mailbox.value.messages({ limit: 10 });
+    const deadline = Date.now() + 1_000;
+    while (messages.ok && messages.value.length < 2 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      messages = await mailbox.value.messages({ limit: 10 });
+    }
+    assert.equal(messages.ok, true);
+    if (messages.ok) assert.equal(messages.value.length, 2);
   }
-  const exported = await state.export({ format: "snapshot" });
-  assert.equal(exported.ok, true);
-  if (exported.ok && exported.value.format === "snapshot") {
+  await lifecycle.shutdown("quit");
+});
+
+test("inbound state filtering pages until it fills the requested limit", async () => {
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state: createMemoryStateStore(),
+    artifacts: createInMemoryArtifactStore(),
+    lifecycle,
+  });
+  const attach = (piSessionId: string) =>
+    module.attach(
+      {
+        piSessionId,
+        proof: issueHostSessionProof(),
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      delivery(piSessionId),
+    );
+  const sender = await attach("filter-sender");
+  const recipient = await attach("filter-recipient");
+  assert.equal(sender.ok, true);
+  assert.equal(recipient.ok, true);
+  if (!sender.ok || !recipient.ok) return;
+  for (let index = 0; index < 5; index += 1) {
     assert.equal(
-      JSON.stringify(exported.value.snapshot).includes(canary),
-      false,
+      (
+        await sender.value.send({
+          requestId: `delivered-${index}`,
+          recipients: [{ piSessionId: "filter-recipient" }],
+          summary: "delivered",
+          body: { kind: "text", text: "body" },
+        })
+      ).ok,
+      true,
+    );
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await recipient.value.close("quit");
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(
+      (
+        await sender.value.send({
+          requestId: `queued-${index}`,
+          recipients: [{ piSessionId: "filter-recipient" }],
+          summary: `queued-${index}`,
+          body: { kind: "text", text: "body" },
+        })
+      ).ok,
+      true,
     );
   }
 
+  const queued = await recipient.value.messages({ state: "queued", limit: 3 });
+  assert.equal(queued.ok, false, "closed broker must stay fenced");
+  const replacement = await module.attach(
+    {
+      piSessionId: "filter-recipient",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("project-one"),
+      cwd: "C:/project-one",
+      exposure: { discoverableBy: "same-project", acceptsFrom: "same-project" },
+    },
+    {
+      ...delivery("filter-recipient"),
+      async deliverOnce() {
+        return {
+          ok: false as const,
+          error: {
+            code: "temporarily_unavailable" as const,
+            message: "fixture offline",
+            retryable: true,
+          },
+        };
+      },
+    },
+  );
+  assert.equal(replacement.ok, true);
+  if (replacement.ok) {
+    let matches = await replacement.value.messages({
+      state: "queued",
+      limit: 3,
+    });
+    const deadline = Date.now() + 1_000;
+    while (matches.ok && matches.value.length < 3 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      matches = await replacement.value.messages({ state: "queued", limit: 3 });
+    }
+    assert.equal(matches.ok, true);
+    if (matches.ok) assert.equal(matches.value.length, 3);
+  }
   await lifecycle.shutdown("quit");
 });
 
@@ -1503,6 +2008,88 @@ test("close is bounded and fences an abort-ignoring delivery completion", async 
   }
 
   await lifecycle.shutdown("quit");
+});
+
+test("close hard deadline bounds refresh, final presence query, and lease release", async () => {
+  for (const phase of ["refresh", "query", "release"] as const) {
+    const base = createMemoryStateStore();
+    let stall = false;
+    let listener:
+      | ((
+          snapshot: ReturnType<ReturnType<typeof delivery>["snapshot"]>,
+        ) => void)
+      | undefined;
+    const state = {
+      ...base,
+      query(input: Parameters<typeof base.query>[0]) {
+        if (
+          stall &&
+          phase !== "release" &&
+          input.type === "record" &&
+          input.collection === "session-broker.presence"
+        ) {
+          return new Promise<never>(() => {});
+        }
+        return base.query(input);
+      },
+      transact(input: Parameters<typeof base.transact>[0]) {
+        if (
+          stall &&
+          phase === "release" &&
+          input.operations.some(
+            (operation) => operation.type === "release-lease",
+          )
+        ) {
+          return new Promise<never>(() => {});
+        }
+        return base.transact(input);
+      },
+    };
+    const lifecycle = createLifecycleSupervisor();
+    const module = createSessionBrokerModule({
+      state,
+      artifacts: createInMemoryArtifactStore(),
+      lifecycle,
+      limits: { heartbeatMs: 1_000_000 },
+    });
+    const attached = await module.attach(
+      {
+        piSessionId: `deadline-${phase}`,
+        proof: issueHostSessionProof(),
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      {
+        ...delivery(`Deadline ${phase}`),
+        subscribe(next) {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+      },
+    );
+    assert.equal(attached.ok, true, phase);
+    if (!attached.ok) continue;
+    stall = true;
+    if (phase === "refresh") {
+      listener?.(delivery("refresh").snapshot());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
+    const startedAt = Date.now();
+    const result = await attached.value.close("quit");
+    const elapsed = Date.now() - startedAt;
+
+    assert.equal(result.ok, false, phase);
+    if (!result.ok) assert.equal(result.error.code, "storage_failed", phase);
+    assert.ok(elapsed < 750, `${phase} close took ${elapsed}ms`);
+  }
 });
 
 test("outbound fanout pagination has a stable cursor beyond one thousand messages", async () => {

@@ -161,7 +161,15 @@ function readSessionFile(path: string, sessionId: string) {
     if (fstatSync(handle).size !== offset) {
       throw new Error("Pi session JSONL changed during bounded readback.");
     }
-    text = buffer.subarray(0, offset).toString("utf8");
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(
+        buffer.subarray(0, offset),
+      );
+    } catch {
+      throw new SessionFileStructureError(
+        "Pi session JSONL contains malformed UTF-8.",
+      );
+    }
   } finally {
     closeSync(handle);
   }
@@ -246,6 +254,7 @@ export function createPiSessionDeliveryAdapter(
   let navigatingTree = false;
   let stopping = false;
   let deliveryTail = Promise.resolve();
+  const notificationAttempts = new Set<string>();
   const listeners = new Set<
     Parameters<SessionDeliveryAdapter["subscribe"]>[0]
   >();
@@ -274,7 +283,12 @@ export function createPiSessionDeliveryAdapter(
         ...(name === undefined ? {} : { name }),
         status,
         capabilities: available
-          ? [{ id: "pi.delivery/inbox", version: 1 }]
+          ? [
+              { id: "pi.delivery/inbox", version: 1 },
+              { id: "pi.delivery/when-idle", version: 1 },
+              { id: "pi.delivery/follow-up", version: 1 },
+              { id: "pi.delivery/steer", version: 1 },
+            ]
           : [],
       };
     } catch {
@@ -311,8 +325,11 @@ export function createPiSessionDeliveryAdapter(
     deliverOnce(delivery, signal) {
       const pending = deliveryTail.then(() => {
         try {
+          const mode = delivery.envelope.delivery.mode;
           if (
-            delivery.envelope.delivery.mode !== "pi/inbox" ||
+            !["pi/inbox", "pi/when-idle", "pi/follow-up", "pi/steer"].includes(
+              mode,
+            ) ||
             delivery.envelope.delivery.version !== 1
           ) {
             return failure({
@@ -336,6 +353,11 @@ export function createPiSessionDeliveryAdapter(
               retryable: false,
             });
           }
+          if (mode === "pi/when-idle" && !context.isIdle()) {
+            return unavailable(
+              "Pi delivery is waiting for the session to become idle.",
+            );
+          }
           const sessionFile = context.sessionManager.getSessionFile();
           if (sessionFile === undefined) {
             return failure({
@@ -355,6 +377,35 @@ export function createPiSessionDeliveryAdapter(
             return readFailure(error);
           }
           const payloadSha256 = payloadHash(delivery);
+          const notifyBestEffort = (durableReceipt: string) => {
+            if (mode !== "pi/follow-up" && mode !== "pi/steer") return;
+            const notificationKey = `${mode}\0${delivery.envelope.id}\0${payloadSha256}`;
+            if (notificationAttempts.has(notificationKey)) return;
+            notificationAttempts.add(notificationKey);
+            try {
+              const result = pi.sendMessage(
+                {
+                  customType: "platform-session-mailbox-notification",
+                  content: `Durable mailbox message ${delivery.envelope.id} is available.`,
+                  display: false,
+                  details: {
+                    version: 1,
+                    mailboxMessageId: delivery.envelope.id,
+                    durableReceipt,
+                    authority: "none",
+                    residual: "best-effort-adapter-generation",
+                  },
+                },
+                {
+                  deliverAs: mode === "pi/steer" ? "steer" : "followUp",
+                  triggerTurn: true,
+                },
+              );
+              void Promise.resolve(result).catch(() => undefined);
+            } catch {
+              // Durable inbox/readback remains the only receipt authority.
+            }
+          };
           const priorLive = matchingEntries(
             context.sessionManager.getEntries(),
             delivery.envelope.id,
@@ -393,9 +444,11 @@ export function createPiSessionDeliveryAdapter(
                 "Pi session changed during delivery verification.",
               );
             }
+            const durableReceipt = `pi:${sessionId}:entry:${priorLive[0].id}:mail:${delivery.envelope.id}`;
+            notifyBestEffort(durableReceipt);
             return success({
               state: "already-present" as const,
-              durableReceipt: `pi:${sessionId}:entry:${priorLive[0].id}:mail:${delivery.envelope.id}`,
+              durableReceipt,
             });
           }
           if (priorLive.length > 1 || priorDisk.length > 1) {
@@ -493,9 +546,11 @@ export function createPiSessionDeliveryAdapter(
               "Pi session changed during delivery verification.",
             );
           }
+          const durableReceipt = `pi:${sessionId}:entry:${live.id}:mail:${delivery.envelope.id}`;
+          notifyBestEffort(durableReceipt);
           return success({
             state: "accepted" as const,
-            durableReceipt: `pi:${sessionId}:entry:${live.id}:mail:${delivery.envelope.id}`,
+            durableReceipt,
           });
         } catch (error) {
           if (error instanceof SessionFileStructureError) {

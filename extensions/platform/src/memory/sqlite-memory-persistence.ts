@@ -111,6 +111,10 @@ function sameFileIdentity(left: Stats, right: Stats) {
 }
 
 function validateRegularCanonicalFile(candidate: string, volatile = false) {
+  const isVolatileWindowsRace = (error: Error & { code?: unknown }) =>
+    volatile &&
+    process.platform === "win32" &&
+    ["EPERM", "EACCES", "EBADF"].includes(String(error.code));
   let entry: Stats;
   try {
     entry = lstatSync(candidate);
@@ -118,8 +122,7 @@ function validateRegularCanonicalFile(candidate: string, volatile = false) {
     if (
       error instanceof Error &&
       "code" in error &&
-      (error.code === "ENOENT" ||
-        (volatile && process.platform === "win32" && error.code === "EPERM"))
+      (error.code === "ENOENT" || isVolatileWindowsRace(error))
     )
       return undefined;
     throw error;
@@ -133,15 +136,19 @@ function validateRegularCanonicalFile(candidate: string, volatile = false) {
     if (
       error instanceof Error &&
       "code" in error &&
-      (error.code === "ENOENT" ||
-        (volatile && process.platform === "win32" && error.code === "EPERM"))
+      (error.code === "ENOENT" || isVolatileWindowsRace(error))
     )
       return error.code === "ENOENT" ? undefined : entry;
     throw error;
   }
+  const normalizedCanonical = normalizedFileSystemPath(canonical);
   if (
-    normalizedFileSystemPath(canonical) !== normalizedFileSystemPath(candidate)
+    volatile &&
+    process.platform === "win32" &&
+    normalizedCanonical.includes("/$extend/$deleted/")
   )
+    return undefined;
+  if (normalizedCanonical !== normalizedFileSystemPath(candidate))
     throw new Error("Memory database path is not canonical");
   return entry;
 }

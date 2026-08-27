@@ -163,6 +163,7 @@ test("messaging wiring registers only exact commands, tools, and closed schemas"
     "recipients",
     "summary",
     "message",
+    "deliveryMode",
   ]);
   const recipients = send.parameters.properties?.recipients;
   assert.equal(recipients?.minItems, 1);
@@ -339,6 +340,47 @@ test("session_send fixes host request identity and pi/inbox v1 without echoing b
       },
     ],
   });
+});
+
+test("session_send exposes fixed safe delivery mode selection", async () => {
+  const requests: SendMessageRequest[] = [];
+  const broker: SessionBroker = {
+    discover: async () => ({ ok: true, value: [] }),
+    async send(request) {
+      requests.push(request);
+      return {
+        ok: true,
+        value: {
+          requestId: request.requestId,
+          body: {
+            id: "a".repeat(64),
+            sha256: "a".repeat(64),
+            size: 1,
+            createdAt: 1,
+          },
+          deliveries: [],
+          replayed: false,
+        },
+      };
+    },
+    messages: async () => ({ ok: true, value: [] }),
+    close: async () => ({ ok: true, value: undefined }),
+  };
+  const { capability, tools } = createHarness();
+  await capability.start({
+    brokerModule: brokerModule(broker),
+    binding: parentBinding(),
+    delivery: delivery(),
+  });
+
+  await tools.get("session_send")!.execute("safe-mode", {
+    recipients: [{ sessionId: "recipient" }],
+    summary: "Coordinate",
+    message: "body",
+    deliveryMode: "pi/steer",
+  });
+
+  assert.equal(requests[0]?.delivery?.mode, "pi/steer");
 });
 
 test("session_list rechecks read policy and forwards only friendly discovery filters", async () => {
