@@ -24,7 +24,12 @@ Do not begin Phase 7 without explicit approval and accepted Phase 6 evidence.
 - [ ] Record Phase 6 domain language and threat model.
 - [x] Run isolated baseline verification: 239 unit passed; integration reached 187 pass/5 skip with one unrelated 60-second browser timeout under concurrent research load; isolated retry passed in 98.4 seconds; smoke passed.
 - [ ] Build F10 in vertical red-green slices through confirmed registry/mailbox interfaces.
-- [ ] Build F11 in vertical red-green slices through confirmed `MemoryStore` interface.
+- [x] Build F11 in vertical red-green slices through confirmed `MemoryStore` interface.
+  - [x] Slice 1: host-resolved typed remember/inspect with citations, provenance, confidence, expiry, and idempotency.
+  - [x] Slice 2: secret redaction/rejection, exact/conservative near dedupe, review ingress, and symmetric contradictions.
+  - [x] Slice 3: bounded scoped search, expiry exclusion, optimistic revisions, promotion, and complete managed-body forget.
+  - [x] Slice 4: versioned export plus digest-bound preview/commit import.
+  - [x] Slice 5: dedicated `node:sqlite` FTS5 adapter, restart/isolation/contention/deletion integration evidence.
 - [ ] Add Pi command/tool wiring while preserving project identity, role, trust, direct authority, and plan mode.
 - [ ] Run native Windows multi-process, crash/restart, contention, isolation, deletion, redaction, and prompt-injection fixtures.
 - [ ] Run repeated independent adversarial review; fix every material finding with regression coverage.
