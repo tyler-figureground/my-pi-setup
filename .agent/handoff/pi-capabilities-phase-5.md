@@ -52,15 +52,15 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 
 - [x] Run adversarial architecture/security reviews and resolve every material finding with regression coverage.
 - [x] Run full isolated verification, secret scan, performance/startup/schema measurements, TUI checklist, live fixture verification, and rollback drill.
-- [ ] Update tracker and program continuity after final sign-off; configuration/setup docs, architecture, ADRs, threat model, and acceptance ledger are drafted.
+- [x] Update tracker, program continuity, configuration/setup docs, architecture, ADRs, threat model, and acceptance ledger.
 
 ### 7. Publication and live integration
 
-- [ ] Fetch before publication and report ahead/behind.
-- [ ] Commit implementation and evidence separately where practical.
-- [ ] Push Phase 5 branch, re-fetch, fast-forward live `main`, install only approved dependencies, and verify live checkout.
-- [ ] Preserve live dirty user state.
-- [ ] Stop before Phase 6.
+- [x] Fetch before publication and report ahead/behind.
+- [x] Commit implementation and evidence separately where practical.
+- [x] Push Phase 5 branch, re-fetch, fast-forward live `main`, install only approved dependencies, and verify live checkout.
+- [x] Preserve live dirty user state.
+- [x] Stop before Phase 6.
 
 ## Current status
 
@@ -74,4 +74,5 @@ Complete Phase 5 only: F07 MCP client/OAuth and F03 live browser control/visual 
 - Startup median is 4,170.4 ms versus matched Phase 4 control 4,061.4 ms (+2.7%). Audit reports zero vulnerabilities.
 - Repeated adversarial review drove fixes for address pinning/proxy bypass, one-shot page-bound mutation authority, prepared target identity, exact secret canaries, schema publication, OAuth/logout races, ambiguous replay, profile leases/page caps, and identity-only Windows cleanup.
 - Final MCP sign-off `sa-64` and final browser/security sign-off `sa-66` reported no blockers.
-- Publication/live integration remains. Phase 6 has not started.
+- Published branch, fast-forwarded live `main`, installed/audited platform dependencies, and passed live check/format, 61/61 focused Phase 5 tests, and repository smoke.
+- Phase 5 complete. Phase 6 has not started.

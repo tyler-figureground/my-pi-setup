@@ -8,50 +8,50 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 5 approved and started on isolated branch/worktree. Interface confirmation and package research are first; Phase 6 remains out of scope.
+Phase 5 complete and live-integrated. F07 MCP client/OAuth and F03 browser control/visual verification accepted. Phase 6 remains out of scope until Tyler explicitly approves it.
 
 ## Completed this phase
 
-- [x] F04 `LanguageIntelligence`: lazy discovery, persistent synchronized LSP slots, diagnostics and semantic navigation, canonical worktree mapping, crash/restart, frame/traffic/result bounds, deferred tools, TypeScript/Ruff adapters.
-- [x] Exact `@narumitw/pi-lsp@0.49.6` trial and audit. Transient package runtime rejected; maintained Microsoft protocol libraries retained.
-- [x] Three-repository paired benchmark confirms warm semantic value while native checks remain authoritative.
-- [x] F06 `LocalReview`: four exact targets, fetch-first base, raw HEAD/index/worktree capture, strict finding validation/dedup, immutable evidence/artifacts, optional second reviewer and disposable tests, `/review` TUI/RPC command and cancellation.
-- [x] Review path excludes tools/project context, rejects Git configured code, preserves source fingerprint, and stores artifacts outside repository.
-- [x] Multiple adversarial review rounds closed environment leakage, process descendants, frame bounds, stale diagnostics, filters/upload-pack, mutable evidence, coordinate collapse, binary corruption, source races, prompt/artifact bounds, and dependency-link mutation.
+- [x] `ExternalIntegrationControls`: exact origins, private-network/offline policy, address pinning, direct authority, plan-mode backstop, structural/string/exact redaction.
+- [x] F07 `ToolFederation`: lazy namespaced discovery/activation, official MCP v2 STDIO and Streamable HTTP, official dialect schemas, protected effects, bounded results/artifacts, cancellation/reload/shutdown.
+- [x] OAuth: PKCE/state, issuer/server/config binding, per-server origins, single-flight serialized refresh/logout, OS credential references, revoke, no ambiguous 401 mutation replay.
+- [x] F03 `BrowserControl`: project/profile-scoped persistent Chrome, atomic leases, owned/opener-bound pages, 16-page caps, AI refs, prepared target identity, action approval, observations, screenshots, upload/download artifacts.
+- [x] Browser network hardening: Chromium host pinning, no proxy, service-worker/WebSocket/WebRTC restrictions, one-shot page-bound non-GET authority including HEAD.
+- [x] Visual verification skill and evidence on fixture and repository pages.
+- [x] Official MCP and `playwright-core` package decisions recorded in ADRs 0006 and 0007; broader wrappers rejected as production boundaries.
+- [x] Repeated adversarial review resolved all high/critical findings. Final MCP sign-off `sa-64` and browser/security sign-off `sa-66`: no blockers.
 
 ## Verification
 
-Authoritative details: `docs/verification/phase-4-acceptance.md`.
+Authoritative details: `docs/verification/phase-5-acceptance.md`.
 
-- 200 unit pass.
-- 174 integration pass; 5 POSIX/opt-in skips.
-- 22 delegated file-search pass.
-- Real TypeScript and Ruff pass.
-- Smoke public contract, print, JSON, RPC, reload, shutdown, and leaks pass.
-- Live `/review` fixture finding and repository no-findings command pass with unchanged source.
-- Pi live 1/1; Codex live 2/2.
-- Standalone managed-review CLI attempts reached reviewer transport but lacked selected provider key. Scripted live command evidence and authenticated runtime backend evidence cover command/backend separately.
+- Post-sign-off isolated `npm run verify`: 239 unit; 188 integration with 5 platform skips; 22 delegated; smoke; Claude 2/2; Codex 2/2; Pi 1/1.
+- Real Chrome, keyring, MCP STDIO/HTTP/OAuth, pinned-host, profile collision/persistence, detached descendant, and secret-canary fixtures pass.
+- Repository visual artifacts: snapshot `c05b9157...4b061`; screenshot `fa670da7...f4d5`.
+- Startup median 4,170.4 ms versus matched Phase 4 4,061.4 ms: +2.7%.
+- Platform audit: zero vulnerabilities.
+- Live clean platform install, typecheck, formatting, 61/61 focused Phase 5 tests, and repository smoke passed.
 
 ## Key references
 
-- `docs/architecture/phase-4-language-review.md`
-- `docs/adr/0005-build-persistent-language-intelligence.md`
-- `docs/research/pi-lsp-audit.md`
-- `docs/phase-4-configuration.md`
-- `docs/security/phase-4-threat-model.md`
-- `docs/verification/phase-4-language-benchmark.md`
-- `docs/verification/phase-4-performance.md`
-- `docs/verification/phase-4-acceptance.md`
+- `docs/architecture/phase-5-mcp-browser.md`
+- `docs/adr/0006-build-tool-federation-on-official-mcp-v2.md`
+- `docs/adr/0007-build-browser-control-on-playwright-core.md`
+- `docs/phase-5-configuration.md`
+- `docs/security/phase-5-threat-model.md`
+- `docs/verification/phase-5-acceptance.md`
+- `docs/verification/phase-5-performance.md`
+- `docs/verification/phase-5-tui-smoke.md`
+- `.agent/handoff/pi-capabilities-phase-5.md`
 
 ## Repository state
 
-- Base: `7b7654c`
-- Branch: `pi-capabilities-phase-4`
-- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-4`
-- Phase 4 late sign-off hardening completed in `425145b` and documented in `ba54adc`: autocrlf-safe review capture and creation-identity-safe Windows process cleanup. Final isolated verification, independent review, publication, live fast-forward, and live verification passed.
+- Live `main` fast-forwarded through Phase 5 implementation/evidence at `f1603a9`; final integration documentation commit follows this handoff update.
+- Published branch: `pi-capabilities-phase-5`
+- External worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-5`
 - Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
 - Preserve DLL backup at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
 
 ## Next exact action
 
-Confirm Phase 5 public test seams, then run baseline verification and package trials without writing production tests before seam approval.
+Wait for explicit Phase 6 approval. If approved: fetch first, create isolated Phase 6 branch/worktree and checkpoint, then design F10 cross-session messaging and F11 persistent memory test seams before implementation.

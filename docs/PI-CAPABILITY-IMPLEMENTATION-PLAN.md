@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 5 in progress**
+Status: **Phase 5 complete; awaiting explicit Phase 6 approval**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -58,11 +58,11 @@ The reviewed file contains 15 `[X]` selections.
 | ID | Capability | Phase | Status |
 |---|---|---:|---|
 | F02 | Guarded worktrees and isolated agent workspaces | 3 | [ ] |
-| F03 | Live browser control and visual verification | 5 | [ ] |
+| F03 | Live browser control and visual verification | 5 | [x] |
 | F04 | LSP diagnostics and symbol navigation | 4 | [ ] |
 | F05 | Read-only plan mode | 2 | [x] |
 | F06 | First-class local code review | 4 | [ ] |
-| F07 | MCP client and OAuth | 5 | [ ] |
+| F07 | MCP client and OAuth | 5 | [x] |
 | F08 | Declarative lifecycle hooks | 2, 7 | [ ] |
 | F09 | Persistent named custom-agent profiles | 3 | [ ] |
 | F10 | Cross-session messaging and queue | 6 | [ ] |
@@ -709,106 +709,106 @@ Features: F04, F06.
 
 ---
 
-# Phase 5 - MCP and browser adapters **IN PROGRESS**
+# Phase 5 - MCP and browser adapters
 
 Features: F07, F03.
 
 ## Shared external-integration controls
 
-- [ ] Create dedicated credential storage policy
-- [ ] Define domain/origin allowlists
-- [ ] Define side-effect metadata and approval rules
-- [ ] Redact headers, tokens, cookies, form secrets, and OAuth codes
-- [ ] Add offline mode behavior
-- [ ] Add connection status UI without exposing secrets
-- [ ] Add dynamic tool activation to prevent schema explosion
-- [ ] Ensure plan mode blocks unknown/mutating external tools
+- [x] Create dedicated credential storage policy
+- [x] Define domain/origin allowlists
+- [x] Define side-effect metadata and approval rules
+- [x] Redact headers, tokens, cookies, form secrets, and OAuth codes
+- [x] Add offline mode behavior
+- [x] Add connection status UI without exposing secrets
+- [x] Add dynamic tool activation to prevent schema explosion
+- [x] Ensure plan mode blocks unknown/mutating external tools
 
 ## F07 MCP client and OAuth
 
 ### Adapter decision
 
-- [ ] Trial exact pinned `pi-mcp-adapter` version in disposable profile
-- [ ] Reproduce/falsify known argument-type issue
-- [ ] Reproduce/falsify package-command hang from long-lived resources
-- [ ] Test STDIO and streamable HTTP lifecycle
-- [ ] Decide adopt/wrap/build with official MCP SDK
-- [ ] Record ADR
+- [x] Trial exact pinned `pi-mcp-adapter` version in disposable profile
+- [x] Reproduce/falsify known argument-type issue
+- [x] Reproduce/falsify package-command hang from long-lived resources
+- [x] Test STDIO and streamable HTTP lifecycle
+- [x] Decide adopt/wrap/build with official MCP SDK
+- [x] Record ADR
 
 ### `ToolFederation`
 
-- [ ] Define user and trusted-project server config
-- [ ] Support STDIO and streamable HTTP
-- [ ] Support bearer token and OAuth with PKCE/state validation
-- [ ] Store tokens outside session/config files
-- [ ] Refresh and revoke credentials
-- [ ] Namespace server/tool collisions
-- [ ] Discover server instructions as untrusted data
-- [ ] Defer tool schemas until search/activation
-- [ ] Support enabled/disabled tools and per-tool policy
-- [ ] Enforce startup/tool timeouts
-- [ ] Reconnect with bounded backoff
-- [ ] Do not start clients during package list/update commands or child roles that do not need them
-- [ ] Add `/mcp` status/config/auth/logout UI
+- [x] Define user and trusted-project server config
+- [x] Support STDIO and streamable HTTP
+- [x] Support bearer token and OAuth with PKCE/state validation
+- [x] Store tokens outside session/config files
+- [x] Refresh and revoke credentials
+- [x] Namespace server/tool collisions
+- [x] Discover server instructions as untrusted data
+- [x] Defer tool schemas until search/activation
+- [x] Support enabled/disabled tools and per-tool policy
+- [x] Enforce startup/tool timeouts
+- [x] Reconnect with bounded backoff
+- [x] Do not start clients during package list/update commands or child roles that do not need them
+- [x] Add `/mcp` status/config/auth/logout UI
 
 ### Acceptance
 
-- [ ] Mock STDIO and HTTP servers pass
-- [ ] OAuth state mismatch rejected
-- [ ] Token refresh/revocation pass
-- [ ] Tool collision safe
-- [ ] Invalid native argument types preserved correctly
-- [ ] Package/print commands exit without hang
-- [ ] Tokens absent from all persisted/logged surfaces
+- [x] Mock STDIO and HTTP servers pass
+- [x] OAuth state mismatch rejected
+- [x] Token refresh/revocation pass
+- [x] Tool collision safe
+- [x] Invalid native argument types preserved correctly
+- [x] Package/print commands exit without hang
+- [x] Tokens absent from all persisted/logged surfaces
 
 ## F03 live browser control
 
 ### Adapter decision
 
-- [ ] Trial `pi-agent-browser-native`, `pi-browser-harness`, and `betterwright` against same local fixture
-- [ ] Compare setup, security, context size, screenshots, console/network support, cancellation, profile isolation, Windows reliability
-- [ ] Choose one exact pinned adapter or build thin `playwright-core` adapter
-- [ ] Record ADR and rejected alternatives
+- [x] Trial `pi-agent-browser-native`, `pi-browser-harness`, and `betterwright` against same local fixture
+- [x] Compare setup, security, context size, screenshots, console/network support, cancellation, profile isolation, Windows reliability
+- [x] Choose one exact pinned adapter or build thin `playwright-core` adapter
+- [x] Record ADR and rejected alternatives
 
 ### Browser module
 
-- [ ] Use dedicated agent browser profile by default
-- [ ] Detect and avoid collision with Impeccable live-browser sessions
-- [ ] Expose page list/open/close/navigation
-- [ ] Expose accessibility snapshot and stable element references
-- [ ] Expose click/fill/select/key/scroll/wait
-- [ ] Expose screenshot, console, page errors, and network requests
-- [ ] Support local dev-server origins
-- [ ] Require explicit approval for downloads, uploads, purchases, submissions, account changes, and authenticated remote writes
-- [ ] Restrict origins and private/metadata network targets
-- [ ] Bound screenshots/snapshots and persist full evidence as artifacts
-- [ ] Cancel in-flight actions
-- [ ] Close browser resources on reload/shutdown
+- [x] Use dedicated agent browser profile by default
+- [x] Detect and avoid collision with Impeccable live-browser sessions
+- [x] Expose page list/open/close/navigation
+- [x] Expose accessibility snapshot and stable element references
+- [x] Expose click/fill/select/key/scroll/wait
+- [x] Expose screenshot, console, page errors, and network requests
+- [x] Support local dev-server origins
+- [x] Require explicit approval for downloads, uploads, purchases, submissions, account changes, and authenticated remote writes
+- [x] Restrict origins and private/metadata network targets
+- [x] Bound screenshots/snapshots and persist full evidence as artifacts
+- [x] Cancel in-flight actions
+- [x] Close browser resources on reload/shutdown
 
 ### Visual verification workflow
 
-- [ ] Add reusable skill for start server, navigate, exercise flow, capture proof, inspect errors, report evidence
-- [ ] Integrate with background terminals
-- [ ] Integrate with review findings and artifacts
-- [ ] Require live-app verification before frontend task completion when applicable
+- [x] Add reusable skill for start server, navigate, exercise flow, capture proof, inspect errors, report evidence
+- [x] Integrate with background terminals
+- [x] Integrate with review findings and artifacts
+- [x] Require live-app verification before frontend task completion when applicable
 
 ### Acceptance
 
-- [ ] Local fixture navigate/click/fill/screenshot passes
-- [ ] Console and failed request surfaced
-- [ ] Blocked origin/download/upload tests pass
-- [ ] Dedicated profile isolation verified
-- [ ] Browser process cleanup verified
-- [ ] Plan mode blocks mutating browser action
-- [ ] Impeccable session coexistence verified
+- [x] Local fixture navigate/click/fill/screenshot passes
+- [x] Console and failed request surfaced
+- [x] Blocked origin/download/upload tests pass
+- [x] Dedicated profile isolation verified
+- [x] Browser process cleanup verified
+- [x] Plan mode blocks mutating browser action
+- [x] Impeccable session coexistence verified
 
 ## Phase 5 exit gate
 
-- [ ] F07 acceptance complete
-- [ ] F03 acceptance complete
-- [ ] Secret scan passes
-- [ ] External adapters disabled cleanly when unconfigured
-- [ ] No startup regression beyond agreed budget
+- [x] F07 acceptance complete
+- [x] F03 acceptance complete
+- [x] Secret scan passes
+- [x] External adapters disabled cleanly when unconfigured
+- [x] No startup regression beyond agreed budget
 
 ---
 
@@ -1193,6 +1193,8 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-26 | Phase 4 language intelligence and local review | `ef10735`, `197c6f6`, `c362c4f` | exact package trial; three-repository benchmark; Windows process/frame/filter/fetch/junction probes; iterative architecture/security reviews; serialized deterministic suite; live command fixtures | 200 unit; 174 integration + 22 delegated; 5 POSIX/opt-in skips; real TypeScript and Ruff; smoke print/JSON/RPC/reload/shutdown/leaks; Pi 1/1; Codex 2/2 | Pass | F04 and F06 complete; transient package replaced by persistent internal module; native checks remain authoritative; artifacts remain outside source |
 | 2026-08-26 | Phase 4 live integration | `ef10735`, `197c6f6`, `c362c4f` | fast-forward live main; platform dependency install/audit; live check/format; 200-unit run; focused 77-test Phase 4 integration; smoke; Pi/Codex live | Phase 4 focused 77 pass + 1 opt-in Ruff skip; separate Ruff pass; smoke print/JSON/RPC/reload/shutdown/leaks; Pi 1/1; Codex 2/2 | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL backup; full isolated serialized suite remains authoritative because unrelated process deadline tests drifted under live machine load |
 | 2026-08-26 | Phase 4 late sign-off hardening | `425145b`, `ba54adc` | real `core.autocrlf` and empty-repository fixtures; filter non-execution regression; live Windows creation-identity termination; repeated adversarial review; live fast-forward verification | 202 unit; 176 integration + 22 delegated; 5 platform skips; smoke; Claude 2/2; Codex 2/2; Pi 1/1; live focused 28 pass + 1 opt-in skip | Pass | False review changes eliminated without clean filters; every Windows language-server kill is creation-identity validated; final independent review found no blockers |
+| 2026-08-26 | Phase 5 MCP and browser adapters | `55e9b34`, `64af98d`, `f1603a9` | official package trials; repeated adversarial security reviews; address/credential/process/profile probes; paired startup benchmark; post-sign-off `npm run verify`; repository visual artifact | 239 unit; 188 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass | F07 and F03 complete; official MCP v2 and thin Playwright adapter selected; final MCP and browser/security reviews reported no blockers |
+| 2026-08-26 | Phase 5 live integration | `55e9b34`, `64af98d`, `f1603a9` | fast-forward live main; platform clean install/audit; live check/format; 61 focused Phase 5 tests; repository smoke | 61/61 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; live config enables inert unconfigured MCP/browser surfaces; Phase 6 not started |
 
 # Decision log
 
@@ -1218,6 +1220,8 @@ Record durable decisions here, then link a full ADR when needed.
 | D016 | 2026-08-25 | Plan mode governs agent tool calls, interactive shell interception, and hook effects; explicit extension/RPC administrative commands remain direct operator authority | Accepted | Pi 0.84.3 dispatches extension commands before input interception; documentation states authority boundary without claiming OS containment |
 | D017 | 2026-08-25 | Lazy rules block and retry the first side-effecting path operation, filter stale epoch messages, and cap matching/injection | Accepted | Relevant guidance must reach model before mutation; search-result paths activate before next model call |
 | D018 | 2026-08-25 | Hook and read-only Git commands use one bounded no-shell process module with minimal environment and native tree termination | Accepted | Generic `pi.exec` buffers output and cannot guarantee Windows descendant cleanup |
+| D019 | 2026-08-26 | Build ToolFederation on exact official MCP v2 client/core instead of adopting `pi-mcp-adapter` wholesale | Accepted | Native argument fidelity and lifecycle verified; platform must retain policy, OAuth binding, lazy publication, and identity-safe cleanup; ADR `docs/adr/0006-build-tool-federation-on-official-mcp-v2.md` |
+| D020 | 2026-08-26 | Build BrowserControl as a thin internal module over exact `playwright-core` instead of adopting broader wrappers | Accepted | Dedicated profile ownership, address policy, direct authority, artifacts, and lifecycle remain host-controlled; ADR `docs/adr/0007-build-browser-control-on-playwright-core.md` |
 
 # Risk register
 

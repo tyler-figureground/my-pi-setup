@@ -97,6 +97,15 @@ Automated tool registration, command discovery, approval retry, machine-readable
 
 Set `mcp` and/or `browser` false in `platform.json`, then `/reload`. Verification keeps flags-off platform behavior inert and preserves existing Phase 0-4 tools. Rollback does not delete credentials, profiles, or artifacts.
 
+## Live integration
+
+Live `main` fast-forwarded through `f1603a9` after fetch-first preflight. Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`.
+
+- Clean platform dependency install: 169 packages audited, zero vulnerabilities
+- Live TypeScript and formatting: passed
+- Live focused Phase 5 suite: 61/61 passed, including real Chrome, native keyring, MCP STDIO/HTTP/OAuth, address pinning, and process cleanup
+- Live repository smoke: print, JSON, RPC, reload, shutdown, and no-leak gates passed
+
 ## Result
 
-F07 and F03 isolated acceptance gates pass. Live-main integration evidence remains before final tracker completion. Phase 6 has not started.
+F07 and F03 acceptance gates pass in isolated and live checkouts. Phase 5 complete. Phase 6 has not started.
