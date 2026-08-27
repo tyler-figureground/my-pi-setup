@@ -14,8 +14,11 @@ const server = {
 test("official MCP OAuth protocol uses discovered endpoints for exchange, refresh, and revoke", async () => {
   const requests: Array<{ url: string; method: string; body: string }> = [];
   const protocol = createOfficialMcpOAuthProtocol({
-    authorizeUrl: async (url) =>
-      new URL(url).origin === "https://auth.example.test",
+    authorizeUrl: async (url) => ({
+      allowed: new URL(url).origin === "https://auth.example.test",
+      canonicalUrl: url,
+      resolvedAddresses: ["93.184.216.34"],
+    }),
     fetch: async (input, init) => {
       const request = new Request(input, init);
       const body = await request.text();

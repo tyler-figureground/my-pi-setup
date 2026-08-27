@@ -138,7 +138,10 @@ export function decodeBrowserConfiguration(
     else allowLoopback = value.allowLoopback;
   }
   return {
-    browser: { executablePath, profileName, allowedOrigins, allowLoopback },
+    browser:
+      diagnostics.length > 0
+        ? base
+        : { executablePath, profileName, allowedOrigins, allowLoopback },
     diagnostics,
   };
 }

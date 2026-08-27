@@ -36,6 +36,14 @@ test("browser wiring exposes bounded tools, direct approval retry, status, and c
             code: "approval_required",
             message: "approval required",
             retryable: false,
+            details: {
+              approvalScope: "scope",
+              action: "click",
+              origin: "https://example.test",
+              pageId: "page-1",
+              reference: "e1",
+              reason: "test",
+            },
           },
         };
       return {
@@ -67,9 +75,10 @@ test("browser wiring exposes bounded tools, direct approval retry, status, and c
     },
   };
   const capability = createBrowserCapability(pi as never, {
-    issueAuthority: () => ({
+    issueAuthority: (scope) => ({
       kind: "external-user-authority",
       value: "host-only",
+      scope,
     }),
   });
   capability.start(browser);

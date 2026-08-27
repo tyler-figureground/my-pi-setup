@@ -77,6 +77,7 @@ test("platform composition wires MCP and browser lazily without starting externa
         commands.push(name);
       },
       getActiveTools: () => [...active],
+      getAllTools: () => [...tools.values()],
       setActiveTools(names: string[]) {
         active = [...names];
       },
@@ -102,7 +103,7 @@ test("platform composition wires MCP and browser lazily without starting externa
       ],
       browser: {
         ...defaultPlatformBrowserConfiguration,
-        executablePath: "C:/chrome.exe",
+        executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
         allowedOrigins: ["http://127.0.0.1:4173"],
         allowLoopback: true,
       },

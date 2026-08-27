@@ -6,6 +6,15 @@
   "workspaces": true,
   "languageIntelligence": true,
   "review": true,
+  "mcp": true,
+  "browser": true,
+  "mcpServers": [],
+  "browserSettings": {
+    "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "profileName": "phase5",
+    "allowedOrigins": [],
+    "allowLoopback": false
+  },
   "plan": {
     "defaultScope": "user",
     "userDirectory": "plans",

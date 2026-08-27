@@ -245,6 +245,10 @@ async function smokeRepositoryExtensions() {
     "git_show",
     "git_list_files",
     "language_tools",
+    "mcp_tools",
+    "browser_pages",
+    "browser_observe",
+    "browser_action",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -287,6 +291,8 @@ async function smokeRepositoryExtensions() {
     "rules",
     "hooks",
     "review",
+    "mcp",
+    "browser",
   ]) {
     assert.ok(
       surface.commands.includes(command),

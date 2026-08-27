@@ -313,6 +313,34 @@ test("deny rules dominate confirmation and allow rules", () => {
   assert.equal(decision.reason, "deny wins");
 });
 
+test("Phase 5 browser observations are read-only while browser actions remain protected in plan mode", () => {
+  const policy = createCapabilityPolicy();
+  assert.equal(
+    policy.decide(
+      { kind: "tool", name: "browser_pages", source: "custom" },
+      "parent",
+      { kind: "plan" },
+    ).kind,
+    "allow",
+  );
+  assert.equal(
+    policy.decide(
+      { kind: "tool", name: "browser_observe", source: "custom" },
+      "parent",
+      { kind: "plan" },
+    ).kind,
+    "allow",
+  );
+  assert.equal(
+    policy.decide(
+      { kind: "tool", name: "browser_action", source: "custom" },
+      "parent",
+      { kind: "plan" },
+    ).kind,
+    "deny",
+  );
+});
+
 test("Phase 2 dedicated inspection tools are read-only while execution tools deny in plan mode", () => {
   const policy = createCapabilityPolicy();
   const readOnlyTools = [

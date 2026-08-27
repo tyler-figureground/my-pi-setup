@@ -39,6 +39,7 @@ export interface ExternalControlDecision {
   readonly reasonCode: ExternalControlReasonCode;
   readonly reason: string;
   readonly canonicalUrl?: string;
+  readonly resolvedAddresses?: readonly string[];
 }
 
 export interface SanitizedExternalData {
@@ -50,6 +51,7 @@ export interface SanitizedExternalData {
 export interface ExternalUserAuthorityToken {
   readonly kind: "external-user-authority";
   readonly value: string;
+  readonly scope?: string;
 }
 
 export interface ExternalIntegrationControls {
@@ -57,7 +59,15 @@ export interface ExternalIntegrationControls {
     request: ExternalOperationRequest,
     authority?: ExternalUserAuthorityToken,
   ): Promise<ExternalControlDecision>;
-  sanitize(value: unknown): SanitizedExternalData;
+  sanitize(
+    value: unknown,
+    limits?: {
+      readonly maxStringBytes?: number;
+      readonly maxNodes?: number;
+      readonly maxDepth?: number;
+      readonly exactRedactions?: readonly string[];
+    },
+  ): SanitizedExternalData;
 }
 
 export interface ExternalIntegrationControlOptions {
@@ -153,9 +163,9 @@ function deny(reasonCode: ExternalControlReasonCode, reason: string) {
 }
 
 const secretField =
-  /^(?:authorization|proxy-authorization|cookie|set-cookie|password|passwd|secret|client_secret|access_token|refresh_token|id_token|bearerToken|oauth_code|authorization_code|code_verifier)$/i;
+  /^(?:authorization|proxy-authorization|cookie|set-cookie|password|passwd|secret|session|bearer|oauth|client_secret|clientSecret|api_key|apiKey|session_token|sessionToken|access_token|accessToken|refresh_token|refreshToken|id_token|bearerToken|oauth_code|authorization_code|code_verifier)$/i;
 const secretQueryField =
-  /^(?:code|token|access_token|refresh_token|id_token|client_secret|code_verifier)$/i;
+  /^(?:code|token|password|secret|session|bearer|oauth|api_key|apiKey|session_token|sessionToken|access_token|refresh_token|id_token|client_secret|code_verifier|signature|sig)$/i;
 
 function sanitizeUrl(value: string) {
   try {
@@ -175,20 +185,70 @@ function sanitizeUrl(value: string) {
       url.searchParams.set(key, "[REDACTED]");
       redactions += 1;
     }
+    if (url.hash) {
+      url.hash = "#[REDACTED]";
+      redactions += 1;
+    }
     return redactions > 0 ? { value: url.href, redactions } : undefined;
   } catch {
     return undefined;
   }
 }
 
-function sanitizeExternalData(input: unknown): SanitizedExternalData {
+function redactTextSecrets(value: string) {
+  let redactions = 0;
+  const replace = (pattern: RegExp, replacement: string) =>
+    value.replace(pattern, (_match, capture: string) => {
+      redactions += 1;
+      return replacement.replace("$1", capture);
+    });
+  value = replace(
+    /\b(Authorization\s*:\s*(?:Bearer|Basic))\s+[^\s,;]+/gi,
+    "$1 [REDACTED]",
+  );
+  value = replace(/\b((?:Set-)?Cookie\s*:)\s*[^\s]+/gi, "$1 [REDACTED]");
+  value = replace(
+    /([?&](?:code|access_token|refresh_token|id_token|client_secret|code_verifier)=)[^&#\s]+/gi,
+    "$1[REDACTED]",
+  );
+  value = replace(
+    /(["']?(?:access[_-]?token|refresh[_-]?token|session[_-]?token|bearer[_-]?token|id[_-]?token|client[_-]?secret|code[_-]?verifier|authorization[_-]?code|oauth[_-]?code|api[_-]?key|password|passwd|session|bearer|oauth|secret)["']?\s*[:=]\s*["']?)[^"',}\s]+/gi,
+    "$1[REDACTED]",
+  );
+  return { value, redactions };
+}
+
+function sanitizeExternalData(
+  input: unknown,
+  limits: {
+    readonly maxStringBytes?: number;
+    readonly maxNodes?: number;
+    readonly maxDepth?: number;
+    readonly exactRedactions?: readonly string[];
+  } = {},
+): SanitizedExternalData {
+  const maxStringBytes = Math.min(
+    Math.max(1, limits.maxStringBytes ?? 64 * 1024),
+    16 * 1024 * 1024,
+  );
+  const maxNodes = Math.min(Math.max(1, limits.maxNodes ?? 10_000), 10_000);
+  const maxDepth = Math.min(Math.max(1, limits.maxDepth ?? 16), 32);
+  const exactRedactions = [...new Set(limits.exactRedactions ?? [])]
+    .filter(
+      (secret) =>
+        typeof secret === "string" &&
+        secret.length > 0 &&
+        Buffer.byteLength(secret) <= 64 * 1024,
+    )
+    .slice(0, 32)
+    .sort((left, right) => right.length - left.length);
   let redactions = 0;
   let truncations = 0;
   let nodes = 0;
   const ancestors = new Set<object>();
   const visit = (value: unknown, depth: number, field?: string): unknown => {
     nodes += 1;
-    if (nodes > 10_000 || depth > 16) {
+    if (nodes > maxNodes || depth > maxDepth) {
       truncations += 1;
       return "[TRUNCATED]";
     }
@@ -197,19 +257,28 @@ function sanitizeExternalData(input: unknown): SanitizedExternalData {
       return "[REDACTED]";
     }
     if (typeof value === "string") {
-      const url = sanitizeUrl(value);
+      let textValue = value;
+      for (const secret of exactRedactions) {
+        if (!textValue.includes(secret)) continue;
+        redactions += textValue.split(secret).length - 1;
+        textValue = textValue.split(secret).join("[REDACTED]");
+      }
+      const url = sanitizeUrl(textValue);
       if (url) {
         redactions += url.redactions;
         return url.value;
       }
-      if (Buffer.byteLength(value) <= 64 * 1024)
-        return value.replace(
+      const redacted = redactTextSecrets(textValue);
+      redactions += redacted.redactions;
+      const text = redacted.value;
+      if (Buffer.byteLength(text) <= maxStringBytes)
+        return text.replace(
           /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
           "",
         );
       truncations += 1;
-      return `${Buffer.from(value)
-        .subarray(0, 64 * 1024)
+      return `${Buffer.from(text)
+        .subarray(0, maxStringBytes)
         .toString("utf8")}[TRUNCATED]`;
     }
     if (
@@ -349,6 +418,7 @@ export function createExternalIntegrationControls(
         reasonCode: "allowed",
         reason: "Destination origin and resolved addresses are allowed.",
         canonicalUrl: url.href,
+        resolvedAddresses: [...new Set(addresses)],
       };
     },
   };

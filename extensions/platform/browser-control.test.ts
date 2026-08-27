@@ -6,7 +6,20 @@ import { createExternalIntegrationControls } from "./src/external/index.ts";
 import {
   createBrowserControl,
   type BrowserAdapterConnection,
+  type BrowserControlOutcome,
 } from "./src/browser/index.ts";
+
+function authorityFrom(result: BrowserControlOutcome<unknown>) {
+  assert.equal(result.ok, false);
+  if (result.ok) throw new Error("Expected approval request.");
+  const scope = result.error.details?.approvalScope;
+  assert.equal(typeof scope, "string");
+  return {
+    kind: "external-user-authority" as const,
+    value: "direct-user",
+    scope: scope as string,
+  };
+}
 
 test("BrowserControl starts lazily with its dedicated profile and exposes only owned pages", async () => {
   const starts: unknown[] = [];
@@ -80,6 +93,7 @@ test("BrowserControl starts lazily with its dedicated profile and exposes only o
       profileDirectory: "C:/phase5/browser-profile",
       executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
       serviceWorkers: "block",
+      hostResolverRules: [{ hostname: "127.0.0.1", address: "127.0.0.1" }],
       authorizeUrl: "function",
     },
   );
@@ -268,7 +282,7 @@ test("BrowserControl requires direct authority before a protected page action", 
     kind: "click",
     pageId: opened.value.page.id,
     ref: "e4",
-    authority: { kind: "external-user-authority", value: "direct-user" },
+    authority: authorityFrom(pending),
   });
   assert.equal(approved.ok, true);
   assert.equal(actions, 1);
@@ -409,7 +423,7 @@ test("BrowserControl persists screenshots without returning pixels in model prev
   if (stored.ok) assert.deepEqual(Buffer.from(stored.value.body), png);
 });
 
-test("BrowserControl allows bounded form interaction normally but plan mode blocks it", async () => {
+test("BrowserControl requires approval for form interaction and plan mode still blocks it", async () => {
   let mode: "normal" | "plan" = "normal";
   const actions: unknown[] = [];
   const control = createBrowserControl({
@@ -417,7 +431,9 @@ test("BrowserControl allows bounded form interaction normally but plan mode bloc
     executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
     allowedOrigins: ["http://127.0.0.1:4173"],
     allowLoopback: true,
-    controls: createExternalIntegrationControls(),
+    controls: createExternalIntegrationControls({
+      authority: { verify: (token) => token.value === "direct-user" },
+    }),
     artifacts: createInMemoryArtifactStore(),
     context: { actor: "parent", mode: () => mode },
     adapter: {
@@ -461,11 +477,16 @@ test("BrowserControl allows bounded form interaction normally but plan mode bloc
   });
   assert.equal(opened.ok, true);
   if (!opened.ok) return;
-  const filled = await control.act({
-    kind: "fill",
+  const fillRequest = {
+    kind: "fill" as const,
     pageId: opened.value.page.id,
     ref: "e3",
     value: "hello",
+  };
+  const fillPending = await control.act(fillRequest);
+  const filled = await control.act({
+    ...fillRequest,
+    authority: authorityFrom(fillPending),
   });
   assert.equal(filled.ok, true);
   assert.equal(actions.length, 1);
@@ -489,7 +510,7 @@ test("BrowserControl injects password fields from a bound credential reference w
   const stored = await credentials.store({
     binding: {
       integration: "browser",
-      resourceId: "page-1",
+      resourceId: "browser",
       origin: "http://127.0.0.1:4173",
     },
     secret: "secret-password",
@@ -497,6 +518,7 @@ test("BrowserControl injects password fields from a bound credential reference w
   assert.equal(stored.ok, true);
   if (!stored.ok) return;
   const actions: unknown[] = [];
+  const artifacts = createInMemoryArtifactStore();
   const control = createBrowserControl({
     profileDirectory: "C:/phase5/browser-profile",
     executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -506,7 +528,7 @@ test("BrowserControl injects password fields from a bound credential reference w
       authority: { verify: (token) => token.value === "direct-user" },
     }),
     credentials,
-    artifacts: createInMemoryArtifactStore(),
+    artifacts,
     adapter: {
       async start(): Promise<BrowserAdapterConnection> {
         return {
@@ -527,8 +549,13 @@ test("BrowserControl injects password fields from a bound credential reference w
             };
           },
           async closePage() {},
-          async observe() {
-            throw new Error("not used");
+          async observe(request) {
+            return request.kind === "console"
+              ? {
+                  kind: "console",
+                  records: [{ text: "echo secret-password" }],
+                }
+              : { kind: request.kind, text: "snapshot secret-password" };
           },
           async classifyAction() {
             return { effect: "credential-use", reason: "password field" };
@@ -549,12 +576,16 @@ test("BrowserControl injects password fields from a bound credential reference w
   assert.equal(opened.ok, true);
   if (!opened.ok) return;
 
-  const result = await control.act({
-    kind: "fill",
+  const credentialRequest = {
+    kind: "fill" as const,
     pageId: opened.value.page.id,
     ref: "e2",
     credentialReference: stored.value.reference,
-    authority: { kind: "external-user-authority", value: "direct-user" },
+  };
+  const credentialPending = await control.act(credentialRequest);
+  const result = await control.act({
+    ...credentialRequest,
+    authority: authorityFrom(credentialPending),
   });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(JSON.stringify(result).includes("secret-password"), false);
@@ -562,6 +593,101 @@ test("BrowserControl injects password fields from a bound credential reference w
     (actions[0] as { input?: { value?: string } }).input?.value,
     "secret-password",
   );
+  const observed = await control.observe({
+    pageId: opened.value.page.id,
+    kind: "console",
+  });
+  assert.equal(observed.ok, true);
+  assert.equal(JSON.stringify(observed).includes("secret-password"), false);
+  if (observed.ok) {
+    const persisted = await artifacts.get(observed.value.artifactId);
+    assert.equal(persisted.ok, true);
+    if (persisted.ok)
+      assert.equal(
+        Buffer.from(persisted.value.body).includes(
+          Buffer.from("secret-password"),
+        ),
+        false,
+      );
+  }
+  const screenshot = await control.observe({
+    pageId: opened.value.page.id,
+    kind: "screenshot",
+  });
+  assert.equal(screenshot.ok, false);
+  if (!screenshot.ok) assert.equal(screenshot.error.code, "policy_denied");
+});
+
+test("BrowserControl rejects approval after same-origin document identity drift", async () => {
+  let documentIdentity = "document-1";
+  let acted = 0;
+  const control = createBrowserControl({
+    profileDirectory: "C:/phase5/browser-profile",
+    executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    allowedOrigins: ["http://127.0.0.1:4173"],
+    allowLoopback: true,
+    controls: createExternalIntegrationControls({
+      authority: { verify: (token) => token.value === "direct-user" },
+    }),
+    artifacts: createInMemoryArtifactStore(),
+    adapter: {
+      async start(): Promise<BrowserAdapterConnection> {
+        return {
+          async listPages() {
+            return [
+              {
+                id: "adapter-1",
+                url: "http://127.0.0.1:4173/form",
+                title: "Form",
+              },
+            ];
+          },
+          async targetIdentity() {
+            return documentIdentity;
+          },
+          async openPage() {
+            return {
+              id: "adapter-1",
+              url: "http://127.0.0.1:4173/form",
+              title: "Form",
+            };
+          },
+          async closePage() {},
+          async observe() {
+            throw new Error("not used");
+          },
+          async classifyAction() {
+            return { effect: "remote-write", reason: "button" };
+          },
+          async act() {
+            acted += 1;
+            return { changed: true };
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  const opened = await control.act({
+    kind: "open",
+    url: "http://127.0.0.1:4173/form",
+  });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const request = {
+    kind: "click" as const,
+    pageId: opened.value.page.id,
+    ref: "e1",
+  };
+  const pending = await control.act(request);
+  documentIdentity = "document-2";
+  const drifted = await control.act({
+    ...request,
+    authority: authorityFrom(pending),
+  });
+  assert.equal(drifted.ok, false);
+  if (!drifted.ok) assert.equal(drifted.error.code, "approval_required");
+  assert.equal(acted, 0);
 });
 
 test("BrowserControl revalidates an owned-page navigation before the adapter acts", async () => {
@@ -687,12 +813,29 @@ test("BrowserControl supports select, key, scroll, and wait with conservative ac
   assert.equal(opened.ok, true);
   if (!opened.ok) return;
   const pageId = opened.value.page.id;
+  const approve = async (request: any) => {
+    const pending = await control.act(request);
+    return control.act({ ...request, authority: authorityFrom(pending) });
+  };
   assert.equal(
-    (await control.act({ kind: "select", pageId, ref: "e3", value: "one" })).ok,
+    (
+      await approve({
+        kind: "select",
+        pageId,
+        ref: "e3",
+        value: "one",
+      })
+    ).ok,
     true,
   );
   assert.equal(
-    (await control.act({ kind: "scroll", pageId, deltaY: 400 })).ok,
+    (
+      await approve({
+        kind: "scroll",
+        pageId,
+        deltaY: 400,
+      })
+    ).ok,
     true,
   );
   assert.equal(
@@ -714,7 +857,7 @@ test("BrowserControl supports select, key, scroll, and wait with conservative ac
         pageId,
         ref: "e4",
         key: "Enter",
-        authority: { kind: "external-user-authority", value: "direct-user" },
+        authority: authorityFrom(pending),
       })
     ).ok,
     true,
@@ -810,7 +953,7 @@ test("BrowserControl gates upload/download and exchanges only bounded artifacts 
     pageId,
     ref: "e5",
     artifactId: upload.value.id,
-    authority: { kind: "external-user-authority", value: "direct-user" },
+    authority: authorityFrom(pending),
   });
   assert.equal(approvedUpload.ok, true, JSON.stringify(approvedUpload));
   assert.equal(
@@ -818,11 +961,15 @@ test("BrowserControl gates upload/download and exchanges only bounded artifacts 
     Buffer.from("fixture upload").toString("base64"),
   );
 
-  const approvedDownload = await control.act({
-    kind: "download",
+  const downloadRequest = {
+    kind: "download" as const,
     pageId,
     ref: "e6",
-    authority: { kind: "external-user-authority", value: "direct-user" },
+  };
+  const pendingDownload = await control.act(downloadRequest);
+  const approvedDownload = await control.act({
+    ...downloadRequest,
+    authority: authorityFrom(pendingDownload),
   });
   assert.equal(approvedDownload.ok, true, JSON.stringify(approvedDownload));
   if (!approvedDownload.ok) return;
@@ -830,4 +977,100 @@ test("BrowserControl gates upload/download and exchanges only bounded artifacts 
   const stored = await artifacts.get(approvedDownload.value.artifactId!);
   assert.equal(stored.ok, true);
   if (stored.ok) assert.deepEqual(Buffer.from(stored.value.body), downloaded);
+});
+
+test("BrowserControl serializes concurrent opens at its owned-page ceiling", async () => {
+  const pages = new Map<string, { id: string; url: string; title: string }>();
+  let next = 1;
+  const control = createBrowserControl({
+    profileDirectory: "C:/phase5/browser-profile",
+    executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    allowedOrigins: ["http://127.0.0.1:4173"],
+    allowLoopback: true,
+    controls: createExternalIntegrationControls(),
+    artifacts: createInMemoryArtifactStore(),
+    adapter: {
+      async start(): Promise<BrowserAdapterConnection> {
+        return {
+          async listPages() {
+            return [...pages.values()];
+          },
+          async openPage(url) {
+            await new Promise((resolve) => setImmediate(resolve));
+            const page = {
+              id: `adapter-${next++}`,
+              url,
+              title: "Fixture",
+            };
+            pages.set(page.id, page);
+            return page;
+          },
+          async closePage(id) {
+            pages.delete(id);
+          },
+          async observe() {
+            throw new Error("not used");
+          },
+          async act() {
+            throw new Error("not used");
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  const outcomes = await Promise.all(
+    Array.from({ length: 40 }, () =>
+      control.act({ kind: "open", url: "http://127.0.0.1:4173/" }),
+    ),
+  );
+  assert.equal(outcomes.filter((outcome) => outcome.ok).length, 16);
+  assert.equal(control.status().pageCount, 16);
+});
+
+test("BrowserControl closes a late startup without resurrecting after shutdown", async () => {
+  let resolveStart!: (connection: BrowserAdapterConnection) => void;
+  let closes = 0;
+  const control = createBrowserControl({
+    profileDirectory: "C:/phase5/browser-profile",
+    executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    allowedOrigins: ["http://127.0.0.1:4173"],
+    allowLoopback: true,
+    controls: createExternalIntegrationControls(),
+    artifacts: createInMemoryArtifactStore(),
+    adapter: {
+      start: async () =>
+        new Promise<BrowserAdapterConnection>((resolve) => {
+          resolveStart = resolve;
+        }),
+    },
+  });
+  const opening = control.act({
+    kind: "open",
+    url: "http://127.0.0.1:4173/",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const closing = control.close();
+  resolveStart({
+    async listPages() {
+      return [];
+    },
+    async openPage() {
+      throw new Error("must not open");
+    },
+    async closePage() {},
+    async observe() {
+      throw new Error("not used");
+    },
+    async act() {
+      throw new Error("not used");
+    },
+    async close() {
+      closes += 1;
+    },
+  });
+  await closing;
+  assert.equal((await opening).ok, false);
+  assert.equal(closes, 1);
+  assert.equal(control.status().state, "closed");
 });

@@ -94,8 +94,11 @@ test("official MCP Streamable HTTP adapter invokes a mock server through the ori
       },
     ],
     adapter: createOfficialMcpAdapter({
-      authorizeUrl: async (_server, url) =>
-        new URL(url).origin === fixture.origin,
+      authorizeUrl: async (_server, url) => ({
+        allowed: new URL(url).origin === fixture.origin,
+        canonicalUrl: url,
+        resolvedAddresses: ["127.0.0.1"],
+      }),
     }),
     controls: createExternalIntegrationControls({
       resolveHost: async () => ["127.0.0.1"],

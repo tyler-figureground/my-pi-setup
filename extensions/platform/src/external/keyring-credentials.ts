@@ -117,6 +117,7 @@ export function createKeyringCredentialVault(
     reference: string,
     binding: CredentialBinding,
     secret: string,
+    commit = true,
   ) => {
     const chunks = splitSecret(secret);
     if (chunks.length === 0 || chunks.length > MAX_CHUNKS)
@@ -136,7 +137,10 @@ export function createKeyringCredentialVault(
         chunks: chunks.length,
         sha256: digest(secret),
       };
-      await (await indexEntry(reference)).setPassword(JSON.stringify(metadata));
+      if (commit)
+        await (
+          await indexEntry(reference)
+        ).setPassword(JSON.stringify(metadata));
       return metadata;
     } catch (error) {
       await Promise.allSettled(
@@ -235,7 +239,15 @@ export function createKeyringCredentialVault(
         credentialBindingKey(prior.binding) !== credentialBindingKey(binding)
       )
         return false;
-      await writeVersion(reference, binding, secret);
+      const staged = await writeVersion(reference, binding, secret, false);
+      try {
+        await (await indexEntry(reference)).setPassword(JSON.stringify(staged));
+      } catch {
+        await deleteVersion(reference, staged);
+        return false;
+      }
+      // The active index is durable before old chunks become unreachable. A
+      // cleanup failure cannot roll the credential back to a partial version.
       await deleteVersion(reference, prior);
       return true;
     },
@@ -255,14 +267,11 @@ export function createKeyringCredentialVault(
         credentialBindingKey(index.binding) !== credentialBindingKey(binding)
       )
         return false;
-      const removals = await Promise.allSettled([
-        ...Array.from({ length: index.chunks }, async (_unused, position) =>
-          (
-            await chunkEntry(reference, index.generation, position)
-          ).deleteCredential(),
-        ),
-        (await indexEntry(reference)).deleteCredential(),
-      ]);
+      const removedIndex = await (
+        await indexEntry(reference)
+      ).deleteCredential();
+      if (!removedIndex) return false;
+      const removals = await deleteVersion(reference, index);
       return removals.every(
         (result) => result.status === "fulfilled" && result.value !== false,
       );

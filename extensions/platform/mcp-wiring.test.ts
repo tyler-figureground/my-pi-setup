@@ -69,6 +69,7 @@ test("MCP loader lazily registers generic namespaced tools and preserves peer to
       commands.set(name, command);
     },
     getActiveTools: () => [...active],
+    getAllTools: () => [...tools.values()],
     setActiveTools(names: string[]) {
       active = [...names];
     },

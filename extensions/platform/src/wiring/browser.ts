@@ -6,12 +6,13 @@ import type {
   BrowserControl,
   BrowserObservationKind,
 } from "../browser/index.ts";
+import type { CredentialVault } from "../external/credentials.ts";
 import type { ExternalUserAuthorityToken } from "../external/index.ts";
 
 const toolNames = ["browser_pages", "browser_action", "browser_observe"];
 
 export interface BrowserCapabilityOptions {
-  readonly issueAuthority?: () => ExternalUserAuthorityToken;
+  readonly issueAuthority?: (scope: string) => ExternalUserAuthorityToken;
 }
 
 function resultText(value: unknown, details: unknown) {
@@ -26,6 +27,10 @@ export function createBrowserCapability(
   options: BrowserCapabilityOptions = {},
 ) {
   let browser: BrowserControl | undefined;
+  let statusUi:
+    { setStatus(key: string, value: string | undefined): void } | undefined;
+  let credentials: CredentialVault | undefined;
+  let credentialScope: string | undefined;
 
   pi.registerTool({
     name: "browser_pages",
@@ -112,20 +117,35 @@ export function createBrowserCapability(
       if (!acted.ok && acted.error.code === "approval_required") {
         if (!ctx.hasUI || !options.issueAuthority)
           throw new Error(acted.error.message);
+        const approvalScope = acted.error.details?.approvalScope;
+        if (typeof approvalScope !== "string")
+          throw new Error("Browser approval scope is unavailable.");
         const confirmed = await ctx.ui.confirm(
           "Approve browser action?",
-          `${parameters.kind} may change an external system. Allow once?`,
+          [
+            `Action: ${String(acted.error.details?.action ?? parameters.kind)}`,
+            `Origin: ${String(acted.error.details?.origin ?? "unknown")}`,
+            `Page: ${String(acted.error.details?.pageId ?? "unknown")}`,
+            `Reference: ${String(acted.error.details?.reference ?? "")}`,
+            `Artifact: ${String(acted.error.details?.artifactId ?? "")}`,
+            `Risk: ${String(acted.error.details?.reason ?? acted.error.message)}`,
+            "Allow once?",
+          ].join("\n"),
         );
         if (!confirmed) throw new Error("Browser action denied by user.");
         acted = await browser.act(
           {
             ...request,
-            authority: options.issueAuthority(),
+            authority: options.issueAuthority(approvalScope),
           } as BrowserActionRequest,
           signal,
         );
       }
       if (!acted.ok) throw new Error(acted.error.message);
+      statusUi?.setStatus(
+        "platform:browser",
+        `Browser ${browser.status().state} (${browser.status().pageCount})`,
+      );
       return resultText(
         {
           page: acted.value.page,
@@ -144,9 +164,63 @@ export function createBrowserCapability(
   });
 
   pi.registerCommand("browser", {
-    description: "Show dedicated browser status",
-    handler: async (_args, ctx) => {
+    description:
+      "Show browser status or manage credentials: credential-store, credential-remove",
+    handler: async (args, ctx) => {
       if (!ctx.hasUI) throw new Error("/browser requires TUI or RPC mode.");
+      const [action = "status", first, second] = args
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      if (action === "credential-store") {
+        if (!credentials || !credentialScope)
+          throw new Error("Browser credential vault is unavailable.");
+        if (!first || !second || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(second))
+          throw new Error(
+            "Usage: /browser credential-store <origin> <ENV_NAME>",
+          );
+        const url = new URL(first);
+        if (url.origin !== first)
+          throw new Error("Browser credential origin must be canonical.");
+        const secret = process.env[second];
+        if (!secret)
+          throw new Error(`Environment variable ${second} is unavailable.`);
+        delete process.env[second];
+        const stored = await credentials.store({
+          binding: {
+            integration: "browser",
+            resourceId: credentialScope,
+            origin: url.origin,
+          },
+          secret,
+        });
+        if (!stored.ok) throw new Error(stored.error.message);
+        ctx.ui.notify(
+          `Stored opaque browser credential reference: ${stored.value.reference}`,
+          "info",
+        );
+        return;
+      }
+      if (action === "credential-remove") {
+        if (!credentials || !credentialScope || !first || !second)
+          throw new Error(
+            "Usage: /browser credential-remove <reference> <origin>",
+          );
+        const origin = new URL(second).origin;
+        if (origin !== second)
+          throw new Error("Browser credential origin must be canonical.");
+        const removed = await credentials.remove(first, {
+          integration: "browser",
+          resourceId: credentialScope,
+          origin,
+        });
+        if (!removed)
+          throw new Error("Browser credential could not be removed.");
+        ctx.ui.notify("Browser credential removed.", "info");
+        return;
+      }
+      if (action !== "status")
+        throw new Error(`Unknown /browser action ${JSON.stringify(action)}.`);
       const status = browser?.status();
       ctx.ui.notify(
         status
@@ -158,13 +232,30 @@ export function createBrowserCapability(
   });
 
   return {
-    start(next: BrowserControl) {
+    start(
+      next: BrowserControl,
+      runtime: {
+        readonly ui?: {
+          setStatus(key: string, value: string | undefined): void;
+        };
+        readonly credentials?: CredentialVault;
+        readonly credentialScope?: string;
+      } = {},
+    ) {
       browser = next;
+      statusUi = runtime.ui;
+      credentials = runtime.credentials;
+      credentialScope = runtime.credentialScope;
+      statusUi?.setStatus("platform:browser", "Browser idle (0)");
       pi.setActiveTools([...new Set([...pi.getActiveTools(), ...toolNames])]);
     },
     async stop() {
       const current = browser;
       browser = undefined;
+      statusUi?.setStatus("platform:browser", undefined);
+      statusUi = undefined;
+      credentials = undefined;
+      credentialScope = undefined;
       const removed = new Set(toolNames);
       pi.setActiveTools(
         pi.getActiveTools().filter((name) => !removed.has(name)),

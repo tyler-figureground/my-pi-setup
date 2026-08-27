@@ -55,6 +55,7 @@ function decodeOne(
         "tools",
         "credentialReference",
         "oauth",
+        "protocol",
       ].includes(key),
   );
   if (unknown.length > 0)
@@ -90,6 +91,10 @@ function decodeOne(
     const args = stringArray(transport.args ?? [], 128, "MCP STDIO args");
     let env: Record<string, string> | undefined;
     if (transport.env !== undefined) {
+      if (source.scope !== "user")
+        throw new Error(
+          "MCP STDIO environment references are user-managed only.",
+        );
       if (
         !transport.env ||
         typeof transport.env !== "object" ||
@@ -201,6 +206,8 @@ function decodeOne(
   }
   let oauth: McpOAuthServer | undefined;
   if (object.oauth !== undefined) {
+    if (source.scope !== "user")
+      throw new Error("MCP OAuth configuration is user-managed only.");
     if (
       decodedTransport.kind !== "http" ||
       !object.oauth ||
@@ -234,6 +241,8 @@ function decodeOne(
       scopes: stringArray(auth.scopes ?? [], 64, "MCP oauth scopes"),
     };
   }
+  if (source.scope !== "user" && object.credentialReference !== undefined)
+    throw new Error("MCP credential references are user-managed only.");
   if (
     object.credentialReference !== undefined &&
     (typeof object.credentialReference !== "string" ||
@@ -242,14 +251,30 @@ function decodeOne(
       ))
   )
     throw new Error("MCP credentialReference is invalid.");
+  if (
+    object.credentialReference !== undefined &&
+    decodedTransport.kind === "http" &&
+    new URL(decodedTransport.url).protocol !== "https:"
+  )
+    throw new Error("MCP bearer credentials require HTTPS.");
   if (oauth && object.credentialReference !== undefined)
     throw new Error(
       "MCP server cannot configure bearer and OAuth credentials together.",
     );
+  if (object.enabled !== undefined && typeof object.enabled !== "boolean")
+    throw new Error("MCP enabled must be boolean.");
+  if (
+    object.protocol !== undefined &&
+    object.protocol !== "legacy" &&
+    object.protocol !== "auto" &&
+    object.protocol !== "2026-07-28"
+  )
+    throw new Error("MCP protocol must be legacy, auto, or 2026-07-28.");
   return {
     id: object.id,
     transport: decodedTransport,
-    enabled: object.enabled === undefined ? true : object.enabled === true,
+    enabled: object.enabled === undefined ? true : object.enabled,
+    ...(object.protocol ? { protocol: object.protocol } : {}),
     tools: {
       include,
       exclude,
@@ -296,5 +321,8 @@ export function decodeMcpServers(
       });
     }
   }
-  return { servers, diagnostics };
+  return {
+    servers: diagnostics.length > 0 ? base : servers,
+    diagnostics,
+  };
 }

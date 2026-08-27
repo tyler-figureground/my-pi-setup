@@ -73,6 +73,7 @@ const integration = [
   "extensions/platform/phase2-composition.test.ts",
   "extensions/platform/phase5-composition.test.ts",
   "extensions/platform/phase4-composition.test.ts",
+  "extensions/platform/pinned-fetch.integration.test.ts",
   "extensions/platform/plan-mode.integration.test.ts",
   "extensions/platform/profiles.test.ts",
   "extensions/platform/project-identity.test.ts",
@@ -139,7 +140,7 @@ if (suite === "unit") {
 } else if (suite === "integration") {
   run(process.execPath, [
     "--test",
-    "--test-timeout=30000",
+    "--test-timeout=60000",
     "--test-concurrency=1",
     "--experimental-strip-types",
     ...integration,

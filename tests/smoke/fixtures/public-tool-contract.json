@@ -90,6 +90,70 @@
     }
   },
   {
+    "name": "browser_action",
+    "parameters": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "open",
+            "close",
+            "navigate",
+            "click",
+            "fill",
+            "select",
+            "key",
+            "scroll",
+            "wait",
+            "upload",
+            "download"
+          ]
+        },
+        "url": { "type": "string", "maxLength": 8192 },
+        "pageId": { "type": "string", "maxLength": 128 },
+        "ref": { "type": "string", "maxLength": 32 },
+        "value": { "type": "string", "maxLength": 65536 },
+        "credentialReference": { "type": "string", "maxLength": 256 },
+        "artifactId": { "type": "string", "maxLength": 64 },
+        "key": { "type": "string", "maxLength": 128 },
+        "deltaY": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+        "state": { "type": "string", "enum": ["visible", "hidden"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_observe",
+    "parameters": {
+      "type": "object",
+      "required": ["kind", "pageId"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "snapshot",
+            "screenshot",
+            "console",
+            "page-errors",
+            "network"
+          ]
+        },
+        "pageId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_pages",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "crawl",
     "parameters": {
       "type": "object",
@@ -389,6 +453,18 @@
           "description": "Workspace symbol name query."
         }
       }
+    }
+  },
+  {
+    "name": "mcp_tools",
+    "parameters": {
+      "type": "object",
+      "required": ["query"],
+      "properties": {
+        "query": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+      },
+      "additionalProperties": false
     }
   },
   {

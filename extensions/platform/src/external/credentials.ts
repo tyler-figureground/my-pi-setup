@@ -6,6 +6,7 @@ export interface CredentialBinding {
   readonly integration: ExternalIntegration;
   readonly resourceId: string;
   readonly origin?: string;
+  readonly scope?: string;
 }
 
 export interface CredentialReference {
@@ -52,6 +53,11 @@ export function normalizeCredentialBinding(
     (binding.integration !== "mcp" && binding.integration !== "browser")
   )
     throw new TypeError("Credential binding is invalid.");
+  if (
+    binding.scope !== undefined &&
+    (!/^[a-f0-9]{64}$/.test(binding.scope) || binding.scope.length !== 64)
+  )
+    throw new TypeError("Credential scope is invalid.");
   if (binding.origin === undefined) return { ...binding };
   const url = new URL(binding.origin);
   if (
@@ -69,7 +75,7 @@ export function isCredentialReference(reference: string) {
 }
 
 export function credentialBindingKey(binding: CredentialBinding) {
-  return `${binding.integration}\0${binding.resourceId}\0${binding.origin ?? ""}`;
+  return `${binding.integration}\0${binding.resourceId}\0${binding.origin ?? ""}\0${binding.scope ?? ""}`;
 }
 
 function invalid(message: string): CredentialVaultOutcome<never> {

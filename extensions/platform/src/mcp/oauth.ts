@@ -33,6 +33,7 @@ export interface McpOAuthProtocol {
     readonly code: string;
     readonly codeVerifier: string;
     readonly redirectUri: string;
+    readonly issuer?: string;
   }): Promise<McpOAuthTokens>;
   refresh(request: {
     readonly server: McpOAuthServer;
@@ -174,6 +175,7 @@ function binding(server: McpOAuthServer): CredentialBinding {
     integration: "mcp",
     resourceId: server.id,
     origin: new URL(server.serverUrl).origin,
+    scope: serverFingerprint(server),
   };
 }
 
@@ -215,6 +217,23 @@ export function createMcpAuthorization(
   )
     throw new TypeError("OAuth flow timeout is invalid.");
   const pending = new Map<string, PendingFlow>();
+  const refreshes = new Map<string, Promise<McpOAuthTokens>>();
+  const persistence = new Map<string, Promise<unknown>>();
+  const operations = new Map<string, Promise<unknown>>();
+
+  const serializeOperation = async <T>(
+    serverId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const prior = operations.get(serverId) ?? Promise.resolve();
+    const current = prior.catch(() => undefined).then(operation);
+    operations.set(serverId, current);
+    try {
+      return await current;
+    } finally {
+      if (operations.get(serverId) === current) operations.delete(serverId);
+    }
+  };
 
   const prune = () => {
     const now = clock();
@@ -234,7 +253,7 @@ export function createMcpAuthorization(
       return undefined;
     }
   };
-  const persistTokens = async (
+  const persistTokensInner = async (
     server: McpOAuthServer,
     tokens: McpOAuthTokens,
   ) => {
@@ -254,8 +273,56 @@ export function createMcpAuthorization(
       secret: encoded,
     });
     if (!stored.ok) throw new Error(stored.error.message);
-    await options.references.set(server.id, stored.value.reference);
+    try {
+      await options.references.set(server.id, stored.value.reference);
+    } catch (error) {
+      const removed = await options.vault.remove(
+        stored.value.reference,
+        binding(server),
+      );
+      if (!removed)
+        throw new AggregateError(
+          [error, new Error("Credential rollback failed.")],
+          "Credential reference persistence and rollback failed.",
+        );
+      throw error;
+    }
     return stored.value.reference;
+  };
+  const persistTokens = async (
+    server: McpOAuthServer,
+    tokens: McpOAuthTokens,
+  ) => {
+    const key = server.id;
+    const prior = persistence.get(key) ?? Promise.resolve();
+    const current = prior
+      .catch(() => undefined)
+      .then(() => persistTokensInner(server, tokens));
+    persistence.set(key, current);
+    try {
+      return await current;
+    } finally {
+      if (persistence.get(key) === current) persistence.delete(key);
+    }
+  };
+
+  const refreshTokens = async (server: McpOAuthServer) => {
+    const key = serverFingerprint(server);
+    let current = refreshes.get(key);
+    if (!current) {
+      current = serializeOperation(server.id, async () => {
+        const loaded = await loadTokens(server);
+        if (!loaded) throw new Error("OAuth credential is unavailable.");
+        const refreshed = await options.protocol.refresh({
+          server,
+          tokens: loaded.tokens,
+        });
+        await persistTokens(server, refreshed);
+        return refreshed;
+      }).finally(() => refreshes.delete(key));
+      refreshes.set(key, current);
+    }
+    return current;
   };
 
   return {
@@ -299,10 +366,10 @@ export function createMcpAuthorization(
           ok: true,
           value: { serverId: server.id, authorizationUrl, expiresAt },
         };
-      } catch (error) {
+      } catch {
         return authorizationError(
           "protocol_error",
-          error instanceof Error ? error.message : String(error),
+          "OAuth authorization setup failed.",
           true,
         );
       }
@@ -350,18 +417,24 @@ export function createMcpAuthorization(
             "OAuth flow is bound to a different server configuration.",
           );
         pending.delete(state);
-        const tokens = await options.protocol.exchange({
-          server,
-          code,
-          codeVerifier: flow.verifier,
-          redirectUri: server.redirectUri,
+        const tokens = await serializeOperation(server.id, async () => {
+          const exchanged = await options.protocol.exchange({
+            server,
+            code,
+            codeVerifier: flow.verifier,
+            redirectUri: server.redirectUri,
+            ...(callback.searchParams.get("iss")
+              ? { issuer: callback.searchParams.get("iss")! }
+              : {}),
+          });
+          await persistTokens(server, exchanged);
+          return exchanged;
         });
-        await persistTokens(server, tokens);
         return { ok: true, value: publicStatus(server, tokens) };
-      } catch (error) {
+      } catch {
         return authorizationError(
           "protocol_error",
-          error instanceof Error ? error.message : String(error),
+          "OAuth code exchange failed.",
           true,
         );
       }
@@ -375,16 +448,12 @@ export function createMcpAuthorization(
             "credential_unavailable",
             "No bound MCP OAuth credential is available.",
           );
-        const tokens = await options.protocol.refresh({
-          server,
-          tokens: loaded.tokens,
-        });
-        await persistTokens(server, tokens);
+        const tokens = await refreshTokens(server);
         return { ok: true, value: publicStatus(server, tokens) };
-      } catch (error) {
+      } catch {
         return authorizationError(
           "protocol_error",
-          error instanceof Error ? error.message : String(error),
+          "OAuth token refresh failed.",
           true,
         );
       }
@@ -392,24 +461,26 @@ export function createMcpAuthorization(
     async logout(server) {
       try {
         validateServer(server);
-        const loaded = await loadTokens(server);
-        if (loaded) {
-          await options.protocol.revoke({ server, tokens: loaded.tokens });
-          const removed = await options.vault.remove(
-            loaded.reference,
-            binding(server),
-          );
-          if (!removed) throw new Error("Credential removal failed.");
-        }
-        await options.references.remove(server.id);
-        return {
-          ok: true,
-          value: { serverId: server.id, status: "logged-out" },
-        };
-      } catch (error) {
+        return await serializeOperation(server.id, async () => {
+          const loaded = await loadTokens(server);
+          if (loaded) {
+            await options.protocol.revoke({ server, tokens: loaded.tokens });
+            const removed = await options.vault.remove(
+              loaded.reference,
+              binding(server),
+            );
+            if (!removed) throw new Error("Credential removal failed.");
+          }
+          await options.references.remove(server.id);
+          return {
+            ok: true as const,
+            value: { serverId: server.id, status: "logged-out" as const },
+          };
+        });
+      } catch {
         return authorizationError(
           "protocol_error",
-          error instanceof Error ? error.message : String(error),
+          "OAuth revocation failed.",
           true,
         );
       }
@@ -417,7 +488,17 @@ export function createMcpAuthorization(
     async token(server) {
       try {
         validateServer(server);
-        return (await loadTokens(server))?.tokens.accessToken;
+        const loaded = await loadTokens(server);
+        if (!loaded) return undefined;
+        if (
+          loaded.tokens.expiresAt !== undefined &&
+          loaded.tokens.expiresAt <= clock() + 30_000 &&
+          loaded.tokens.refreshToken
+        ) {
+          const refreshed = await refreshTokens(server);
+          return refreshed.accessToken;
+        }
+        return loaded.tokens.accessToken;
       } catch {
         return undefined;
       }

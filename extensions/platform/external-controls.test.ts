@@ -88,6 +88,31 @@ test("external controls redact secrets and OAuth codes from nested external data
   });
   assert.equal(sanitized.redactions, 5);
   assert.equal(JSON.stringify(sanitized).includes("secret-"), false);
+  const prose = controls.sanitize(
+    "request failed Authorization: Bearer secret-bearer Cookie: session=secret-cookie",
+  );
+  assert.equal(JSON.stringify(prose).includes("secret-bearer"), false);
+  assert.equal(JSON.stringify(prose).includes("secret-cookie"), false);
+  const embedded = controls.sanitize(
+    'HTTP 500: {"accessToken":"secret-canary","api_key":"api-canary","sessionToken":"session-canary","bearerToken":"bearer-canary","oauth_code":"oauth-canary"}',
+  );
+  assert.equal(JSON.stringify(embedded).includes("secret-canary"), false);
+  assert.equal(JSON.stringify(embedded).includes("api-canary"), false);
+  assert.equal(JSON.stringify(embedded).includes("session-canary"), false);
+  assert.equal(JSON.stringify(embedded).includes("bearer-canary"), false);
+  assert.equal(JSON.stringify(embedded).includes("oauth-canary"), false);
+  const literalFields = controls.sanitize({
+    session: "session-canary",
+    bearer: "bearer-canary",
+    oauth: "oauth-canary",
+    passwd: "passwd-canary",
+  });
+  assert.deepEqual(literalFields.value, {
+    session: "[REDACTED]",
+    bearer: "[REDACTED]",
+    oauth: "[REDACTED]",
+    passwd: "[REDACTED]",
+  });
 });
 
 test("external controls deny side effects in plan mode and require direct user authority otherwise", async () => {

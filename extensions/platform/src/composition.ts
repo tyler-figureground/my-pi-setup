@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -85,8 +85,33 @@ export function platformBrowserProfileRoot(agentDir: string) {
     : path.join(agentDir, "browser", "profiles");
 }
 
+function createLazyCredentialVault(): CredentialVault {
+  let pending: Promise<CredentialVault> | undefined;
+  const vault = () =>
+    (pending ??= import("./external/keyring-credentials.ts").then(
+      ({ createKeyringCredentialVault }) => createKeyringCredentialVault(),
+    ));
+  return {
+    async store(input) {
+      return (await vault()).store(input);
+    },
+    async resolve(reference, binding) {
+      return (await vault()).resolve(reference, binding);
+    },
+    async inspect(reference) {
+      return (await vault()).inspect(reference);
+    },
+    async replace(reference, binding, secret) {
+      return (await vault()).replace(reference, binding, secret);
+    },
+    async remove(reference, binding) {
+      return (await vault()).remove(reference, binding);
+    },
+  };
+}
+
 function installedBrowserExecutable(configured: string) {
-  if (configured) return configured;
+  if (configured) return existsSync(configured) ? configured : "";
   const candidates =
     process.platform === "win32"
       ? [
@@ -99,6 +124,15 @@ function installedBrowserExecutable(configured: string) {
           "/usr/bin/chromium-browser",
         ];
   return candidates.find((candidate) => existsSync(candidate)) ?? "";
+}
+
+function browserProfileScope(agentDir: string, projectId: string) {
+  return createHash("sha256")
+    .update(path.resolve(agentDir), "utf8")
+    .update("\0")
+    .update(projectId, "utf8")
+    .digest("hex")
+    .slice(0, 24);
 }
 
 export function builtInLanguageServers(): readonly LanguageServerDefinition[] {
@@ -355,15 +389,8 @@ export function createPlatformExtension(
           verify: (token) => token.value === authorityValue,
         },
       });
-      let credentialVault = options.credentialVault;
-      if (
-        !credentialVault &&
-        (configuration.flags.mcp || configuration.flags.browser)
-      ) {
-        const { createKeyringCredentialVault } =
-          await import("./external/keyring-credentials.ts");
-        credentialVault = createKeyringCredentialVault();
-      }
+      const credentialVault =
+        options.credentialVault ?? createLazyCredentialVault();
 
       if (configuration.flags.mcp) {
         const oauthServers = configuration.mcpServers.flatMap((server) =>
@@ -389,26 +416,51 @@ export function createPlatformExtension(
               store: state.value,
               scope: project.projectId,
             });
-            const authorizationOrigins = oauthServers.map(
-              (server) => new URL(server.authorizationServer).origin,
-            );
-            const protocol = protocolModule.createOfficialMcpOAuthProtocol({
-              authorizeUrl: async (url) => {
-                const decision = await externalControls.assess({
-                  integration: "mcp",
-                  operation: "oauth",
-                  effect: "credential-use",
-                  actor: role,
-                  mode: platformMode(),
-                  destination: {
-                    url,
-                    allowedOrigins: authorizationOrigins,
-                    allowLoopback: false,
-                  },
-                });
-                return decision.kind !== "deny";
-              },
-            });
+            const protocols = new Map<
+              string,
+              import("./mcp/oauth.ts").McpOAuthProtocol
+            >();
+            const protocolFor = (
+              server: import("./mcp/oauth.ts").McpOAuthServer,
+            ) => {
+              let current = protocols.get(server.id);
+              if (current) return current;
+              const allowedOrigin = new URL(server.authorizationServer).origin;
+              current = protocolModule.createOfficialMcpOAuthProtocol({
+                authorizeUrl: async (url) => {
+                  const decision = await externalControls.assess({
+                    integration: "mcp",
+                    operation: "oauth",
+                    effect: "network-read",
+                    actor: role,
+                    mode: platformMode(),
+                    destination: {
+                      url,
+                      allowedOrigins: [allowedOrigin],
+                      allowLoopback: false,
+                    },
+                  });
+                  return decision.kind === "allow"
+                    ? {
+                        allowed: true,
+                        canonicalUrl: decision.canonicalUrl,
+                        resolvedAddresses: decision.resolvedAddresses,
+                      }
+                    : { allowed: false };
+                },
+              });
+              protocols.set(server.id, current);
+              return current;
+            };
+            const protocol: import("./mcp/oauth.ts").McpOAuthProtocol = {
+              authorizationUrl: (request) =>
+                protocolFor(request.server).authorizationUrl(request),
+              exchange: (request) =>
+                protocolFor(request.server).exchange(request),
+              refresh: (request) =>
+                protocolFor(request.server).refresh(request),
+              revoke: (request) => protocolFor(request.server).revoke(request),
+            };
             authorization = oauthModule.createMcpAuthorization({
               vault: credentialVault,
               references,
@@ -425,60 +477,83 @@ export function createPlatformExtension(
           }),
         });
         current.mcp = mcpCapability;
-        const adapter =
-          options.mcpAdapter ??
-          (await import("./mcp/official-adapter.ts")).createOfficialMcpAdapter({
-            authorizeUrl: async (server, url) => {
-              if (server.transport.kind !== "http") return false;
-              const decision = await externalControls.assess({
-                integration: "mcp",
-                operation: "http-request",
-                effect: "network-read",
-                actor: role,
-                mode: platformMode(),
-                destination: {
-                  url,
-                  allowedOrigins: server.transport.allowedOrigins,
-                  allowLoopback: server.transport.allowLoopback ?? false,
-                },
-              });
-              return decision.kind === "allow";
-            },
-            tokenFor: async (server) => {
-              if ("oauth" in server && server.oauth && authorization)
-                return authorization.token(server.oauth);
-              const reference =
-                "credentialReference" in server
-                  ? server.credentialReference
-                  : undefined;
-              if (typeof reference !== "string" || !credentialVault)
-                return undefined;
-              return credentialVault.resolve(reference, {
-                integration: "mcp",
-                resourceId: server.id,
-                ...(server.transport.kind === "http"
-                  ? { origin: new URL(server.transport.url).origin }
-                  : {}),
-              });
-            },
-          });
+        const officialAdapterOptions = {
+          authorizeUrl: async (server: McpServerDefinition, url: string) => {
+            if (server.transport.kind !== "http") return { allowed: false };
+            const decision = await externalControls.assess({
+              integration: "mcp",
+              operation: "http-request",
+              effect: "network-read",
+              actor: role,
+              mode: platformMode(),
+              destination: {
+                url,
+                allowedOrigins: server.transport.allowedOrigins,
+                allowLoopback: server.transport.allowLoopback ?? false,
+              },
+            });
+            return decision.kind === "allow"
+              ? {
+                  allowed: true,
+                  canonicalUrl: decision.canonicalUrl,
+                  resolvedAddresses: decision.resolvedAddresses,
+                }
+              : { allowed: false };
+          },
+          tokenFor: async (server: McpServerDefinition) => {
+            if (server.oauth && authorization)
+              return authorization.token(server.oauth);
+            const reference = server.credentialReference;
+            if (typeof reference !== "string") return undefined;
+            return credentialVault.resolve(reference, {
+              integration: "mcp",
+              resourceId: server.id,
+              ...(server.transport.kind === "http"
+                ? { origin: new URL(server.transport.url).origin }
+                : {}),
+            });
+          },
+          refreshTokenFor: async (server: McpServerDefinition) => {
+            if (!server.oauth || !authorization)
+              throw new Error("MCP OAuth refresh is unavailable.");
+            const refreshed = await authorization.refresh(server.oauth);
+            if (!refreshed.ok) throw new Error(refreshed.error.message);
+          },
+        };
+        let actualMcpAdapter: Promise<McpTransportAdapter> | undefined;
+        const adapter: McpTransportAdapter = options.mcpAdapter ?? {
+          async connect(server, signal) {
+            actualMcpAdapter ??= import("./mcp/official-adapter.ts").then(
+              ({ createOfficialMcpAdapter }) =>
+                createOfficialMcpAdapter(officialAdapterOptions),
+            );
+            return (await actualMcpAdapter).connect(server, signal);
+          },
+        };
         const { createToolFederation } = await import("./mcp/index.ts");
         mcpCapability.start(
           createToolFederation({
             servers: configuration.mcpServers,
             adapter,
             controls: externalControls,
+            ...(artifacts ? { artifacts } : {}),
+            projectId: project.projectId,
             context: { actor: role, mode: platformMode },
           }),
-          { authorization, oauthServers },
+          {
+            authorization,
+            oauthServers,
+            ...(ctx.hasUI ? { ui: ctx.ui } : {}),
+          },
         );
       }
 
       if (configuration.flags.browser) {
         browserCapability ??= createBrowserCapability(pi, {
-          issueAuthority: () => ({
+          issueAuthority: (scope) => ({
             kind: "external-user-authority",
             value: authorityValue,
+            scope,
           }),
         });
         current.browser = browserCapability;
@@ -492,16 +567,24 @@ export function createPlatformExtension(
               "warning",
             );
         } else {
-          const adapter =
-            options.browserAdapter ??
-            (
-              await import("./browser/playwright.ts")
-            ).createPlaywrightBrowserAdapter();
+          let actualBrowserAdapter: Promise<BrowserAdapter> | undefined;
+          const adapter: BrowserAdapter = options.browserAdapter ?? {
+            async start(browserOptions, signal) {
+              actualBrowserAdapter ??= import("./browser/playwright.ts").then(
+                ({ createPlaywrightBrowserAdapter }) =>
+                  createPlaywrightBrowserAdapter(),
+              );
+              return (await actualBrowserAdapter).start(browserOptions, signal);
+            },
+          };
           const { createBrowserControl } = await import("./browser/index.ts");
           browserCapability.start(
             createBrowserControl({
+              projectId: project.projectId,
+              credentialScope: browserProfileScope(agentDir, project.projectId),
               profileDirectory: path.join(
                 platformBrowserProfileRoot(agentDir),
+                browserProfileScope(agentDir, project.projectId),
                 configuration.browser.profileName,
               ),
               executablePath,
@@ -513,6 +596,11 @@ export function createPlatformExtension(
               adapter,
               context: { actor: role, mode: platformMode },
             }),
+            {
+              ...(ctx.hasUI ? { ui: ctx.ui } : {}),
+              credentials: credentialVault,
+              credentialScope: browserProfileScope(agentDir, project.projectId),
+            },
           );
         }
       }

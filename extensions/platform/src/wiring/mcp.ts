@@ -53,6 +53,8 @@ export function createMcpCapability(
   let federation: ToolFederation | undefined;
   let authorization: McpAuthorization | undefined;
   let oauthServers: readonly McpOAuthServer[] = [];
+  let statusUi:
+    { setStatus(key: string, value: string | undefined): void } | undefined;
   const dynamicTools = new Map<string, string>();
 
   const invoke = async (
@@ -95,7 +97,10 @@ export function createMcpCapability(
         isError: result.value.isError,
         redactions: result.value.redactions,
         truncations: result.value.truncations,
-        ...(result.value.structuredContent
+        ...(result.value.artifactId
+          ? { artifactId: result.value.artifactId }
+          : {}),
+        ...(result.value.structuredContent !== undefined
           ? { structuredContent: result.value.structuredContent }
           : {}),
       },
@@ -104,7 +109,11 @@ export function createMcpCapability(
 
   const registerFederatedTool = (tool: ActivatedFederatedTool) => {
     const name = `mcp_${tool.id}`;
+    if (name.length > 64)
+      throw new Error("Federated MCP tool name exceeds provider limits.");
     if (dynamicTools.has(name)) return name;
+    if (pi.getAllTools().some((candidate) => candidate.name === name))
+      throw new Error(`Federated MCP tool name collides with ${name}.`);
     pi.registerTool({
       name,
       label: `MCP ${tool.serverId}/${tool.name}`,
@@ -137,6 +146,11 @@ export function createMcpCapability(
         signal,
       );
       if (!activated.ok) throw new Error(activated.error.message);
+      const status = federation.status();
+      statusUi?.setStatus(
+        "platform:mcp",
+        `MCP ${status.servers.filter((server) => server.state === "connected").length}/${status.servers.length}`,
+      );
       const activeBefore = new Set(pi.getActiveTools());
       const added = activated.value.tools
         .map(registerFederatedTool)
@@ -225,17 +239,25 @@ export function createMcpCapability(
       runtime: {
         readonly authorization?: McpAuthorization;
         readonly oauthServers?: readonly McpOAuthServer[];
+        readonly ui?: {
+          setStatus(key: string, value: string | undefined): void;
+        };
       } = {},
     ) {
       federation = next;
       authorization = runtime.authorization;
       oauthServers = runtime.oauthServers ?? [];
+      statusUi = runtime.ui;
+      const status = next.status();
+      statusUi?.setStatus("platform:mcp", `MCP 0/${status.servers.length}`);
     },
     async stop() {
       const current = federation;
       federation = undefined;
       authorization = undefined;
       oauthServers = [];
+      statusUi?.setStatus("platform:mcp", undefined);
+      statusUi = undefined;
       const removed = new Set(dynamicTools.keys());
       dynamicTools.clear();
       if (removed.size > 0)

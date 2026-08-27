@@ -6,6 +6,10 @@ import {
   type FetchLike,
   type OAuthTokens,
 } from "@modelcontextprotocol/client";
+import {
+  createPinnedFetch,
+  type PinnedFetchAuthorization,
+} from "../external/pinned-fetch.ts";
 import type {
   McpOAuthProtocol,
   McpOAuthServer,
@@ -16,7 +20,7 @@ export interface OfficialMcpOAuthProtocolOptions {
   readonly authorizeUrl: (
     url: string,
     signal?: AbortSignal,
-  ) => Promise<boolean>;
+  ) => Promise<PinnedFetchAuthorization>;
   readonly fetch?: FetchLike;
   readonly clock?: () => number;
 }
@@ -41,15 +45,20 @@ export function createOfficialMcpOAuthProtocol(
   options: OfficialMcpOAuthProtocolOptions,
 ): McpOAuthProtocol {
   const clock = options.clock ?? Date.now;
-  const underlying = options.fetch ?? fetch;
-  const guardedFetch: FetchLike = async (input, init) => {
-    const request = new Request(input, init);
-    if (!(await options.authorizeUrl(request.url, init?.signal ?? undefined)))
-      throw new Error(
-        `OAuth destination is not authorized: ${new URL(request.url).origin}`,
-      );
-    return underlying(request.url, { ...init, redirect: "error" });
-  };
+  const guardedFetch: FetchLike = options.fetch
+    ? async (input, init) => {
+        const url = new URL(input).href;
+        const authorization = await options.authorizeUrl(
+          url,
+          init?.signal ?? undefined,
+        );
+        if (!authorization.allowed)
+          throw new Error(
+            `OAuth destination is not authorized: ${new URL(url).origin}`,
+          );
+        return options.fetch!(url, { ...init, redirect: "error" });
+      }
+    : createPinnedFetch({ authorize: options.authorizeUrl });
   const metadata = new Map<string, Promise<AuthorizationServerMetadata>>();
   const metadataFor = (server: McpOAuthServer) => {
     let pending = metadata.get(server.authorizationServer);
@@ -57,11 +66,16 @@ export function createOfficialMcpOAuthProtocol(
       pending = discoverAuthorizationServerMetadata(
         server.authorizationServer,
         { fetchFn: guardedFetch, skipIssuerValidation: false },
-      ).then((value) => {
-        if (!value)
-          throw new Error("OAuth authorization metadata is unavailable.");
-        return value;
-      });
+      )
+        .then((value) => {
+          if (!value)
+            throw new Error("OAuth authorization metadata is unavailable.");
+          return value;
+        })
+        .catch((error) => {
+          metadata.delete(server.authorizationServer);
+          throw error;
+        });
       metadata.set(server.authorizationServer, pending);
     }
     return pending;
@@ -92,7 +106,7 @@ export function createOfficialMcpOAuthProtocol(
       if (request.server.scopes.length > 0)
         url.searchParams.set("scope", request.server.scopes.join(" "));
       url.searchParams.set("resource", request.server.serverUrl);
-      if (!(await options.authorizeUrl(url.href)))
+      if (!(await options.authorizeUrl(url.href)).allowed)
         throw new Error("OAuth authorization endpoint is not allowed.");
       return url.href;
     },
@@ -104,6 +118,7 @@ export function createOfficialMcpOAuthProtocol(
           metadata: discovered,
           clientInformation: clientInformation(request.server),
           authorizationCode: request.code,
+          ...(request.issuer ? { iss: request.issuer } : {}),
           codeVerifier: request.codeVerifier,
           redirectUri: request.redirectUri,
           resource: new URL(request.server.serverUrl),

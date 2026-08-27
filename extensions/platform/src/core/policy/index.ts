@@ -137,6 +137,10 @@ const toolOperations = {
     git_log: ["read"],
     git_show: ["read"],
     git_list_files: ["read"],
+    browser_pages: ["read"],
+    browser_observe: ["read"],
+    browser_action: arbitraryProcessCapabilities,
+    mcp_tools: ["process", "network-read", "credential-use"],
   },
   sdk: {},
 } as const satisfies Record<
