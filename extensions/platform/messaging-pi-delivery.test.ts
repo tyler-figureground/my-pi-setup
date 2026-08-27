@@ -831,6 +831,7 @@ test("when-idle records durably only after session becomes idle", async (t) => {
 
   const waiting = await adapter.deliverOnce(idleDelivery);
   assert.equal(waiting.ok, false);
+  if (!waiting.ok) assert.equal(waiting.error.code, "deferred");
   assert.equal(sendCount, 0);
   idle = true;
   adapter.handleEvent({ type: "agent_settled" });

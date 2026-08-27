@@ -62,9 +62,13 @@ import { createLanguageCapability } from "./wiring/language.ts";
 import { createReviewCapability } from "./wiring/review.ts";
 import { createBrowserCapability } from "./wiring/browser.ts";
 import { createMcpCapability } from "./wiring/mcp.ts";
-import { createMemoryCapability } from "./wiring/memory.ts";
+import {
+  createMemoryCapability,
+  type CurrentWorkspaceLeaseProvider,
+} from "./wiring/memory.ts";
 import { createMessagingCapability } from "./wiring/messaging.ts";
 import { createWorkspaceManager } from "./workspaces/index.ts";
+import { createCurrentWorkspaceLeaseProvider } from "./workspaces/current-workspace-lease.ts";
 import {
   createHostMemoryBindingFactory,
   createMemoryStoreModule,
@@ -287,6 +291,7 @@ export interface PlatformExtensionOptions {
   ) => Outcome<MemoryPersistenceAdapter, MemoryPersistenceError>;
   createSessionBrokerModule?: typeof createSessionBrokerModule;
   createSessionDeliveryAdapter?: typeof createPiSessionDeliveryAdapter;
+  currentWorkspaceLeaseProvider?: CurrentWorkspaceLeaseProvider;
 }
 
 export function createPlatformExtension(
@@ -351,6 +356,7 @@ export function createPlatformExtension(
           readonly runtime: PlatformRuntime;
           readonly project: ResolvedProjectIdentity;
           readonly sessionId: string;
+          readonly workspaceProvider?: CurrentWorkspaceLeaseProvider;
         }
       | undefined;
 
@@ -417,7 +423,20 @@ export function createPlatformExtension(
         failures.push(error);
       }
       try {
-        await current.lifecycle.shutdown(reason);
+        const report = await current.lifecycle.shutdown(reason);
+        if (report.status === "degraded") {
+          const lifecycleFailures = report.failures.map(
+            (failure) =>
+              new Error(
+                `Lifecycle resource ${JSON.stringify(failure.resourceId)} ${failure.phase} ${failure.kind}: ${failure.message}`,
+              ),
+          );
+          failures.push(
+            ...(lifecycleFailures.length > 0
+              ? lifecycleFailures
+              : [new Error("Lifecycle shutdown reported degraded status.")]),
+          );
+        }
       } catch (error) {
         failures.push(error);
       }
@@ -473,7 +492,8 @@ export function createPlatformExtension(
         configuration.flags.memory;
       if (!platformEnabled || role !== "parent") return;
 
-      const resolved = await makeProjectIdentity().resolve(ctx.cwd);
+      const projectIdentity = makeProjectIdentity();
+      const resolved = await projectIdentity.resolve(ctx.cwd);
       if (!resolved.ok) {
         if (ctx.hasUI) {
           ctx.ui.notify(resolved.error.message, "error");
@@ -481,13 +501,15 @@ export function createPlatformExtension(
         return;
       }
       const project = resolved.value;
+      const memoryEnabled = configuration.flags.memory && projectTrusted;
+      const messagingEnabled = configuration.flags.messaging && projectTrusted;
       const artifacts =
         configuration.flags.languageIntelligence ||
         configuration.flags.review ||
         configuration.flags.mcp ||
         configuration.flags.browser ||
-        configuration.flags.messaging ||
-        configuration.flags.memory
+        messagingEnabled ||
+        memoryEnabled
           ? createFileSystemArtifactStore({
               root: platformArtifactRoot(agentDir),
             })
@@ -506,10 +528,67 @@ export function createPlatformExtension(
       });
       const credentialVault =
         options.credentialVault ?? createLazyCredentialVault();
+      let workspaces: ReturnType<typeof createWorkspaceManager> | undefined;
+      if (
+        configuration.flags.workspaces &&
+        projectTrusted &&
+        project.kind === "git" &&
+        !project.bare
+      ) {
+        const state = createSqliteStateStore({
+          path: path.join(agentDir, "state", "platform.sqlite"),
+        });
+        if (state.ok) {
+          const workspaceBase =
+            process.platform === "win32"
+              ? path.join(
+                  process.env.LOCALAPPDATA ?? agentDir,
+                  "pi-agent",
+                  "workspaces",
+                )
+              : path.join(agentDir, "workspaces");
+          workspaces = createWorkspaceManager({
+            project,
+            projectTrusted,
+            workspaceRoot: path.join(
+              workspaceBase,
+              project.projectId
+                .slice(project.projectId.indexOf(":") + 1)
+                .slice(0, 16),
+            ),
+            stateStore: state.value,
+          });
+          const recovery = await workspaces.recover();
+          if (ctx.hasUI) {
+            if (!recovery.ok) {
+              ctx.ui.notify(recovery.error.message, "error");
+            } else {
+              for (const blocked of recovery.value.blocked) {
+                ctx.ui.notify(
+                  `Workspace ${blocked.workspaceId} recovery blocked: ${blocked.reason}`,
+                  "warning",
+                );
+              }
+            }
+          }
+        } else if (ctx.hasUI) {
+          ctx.ui.notify(state.error.message, "error");
+        }
+      }
+      const workspaceProvider =
+        options.currentWorkspaceLeaseProvider ??
+        (workspaces && project.kind === "git" && !project.bare
+          ? createCurrentWorkspaceLeaseProvider({
+              manager: workspaces,
+              projectIdentity,
+              project,
+              sessionId: ctx.sessionManager.getSessionId(),
+            })
+          : undefined);
 
-      if (configuration.flags.memory) {
+      if (memoryEnabled) {
         const bindings = createHostMemoryBindingFactory({
-          revalidate(assertion) {
+          async revalidate(assertion) {
             const authority = memoryAuthority;
             if (
               !authority ||
@@ -523,7 +602,9 @@ export function createPlatformExtension(
             ) {
               return undefined;
             }
-            return assertion;
+            if (!assertion.workspace) return assertion;
+            const workspace = await authority.workspaceProvider?.current();
+            return workspace ? { ...assertion, workspace } : undefined;
           },
         });
         memoryCapability ??= createMemoryCapability(pi, {
@@ -537,10 +618,11 @@ export function createPlatformExtension(
           runtime: current,
           project,
           sessionId: ctx.sessionManager.getSessionId(),
+          ...(workspaceProvider ? { workspaceProvider } : {}),
         };
       }
 
-      if (configuration.flags.messaging) {
+      if (messagingEnabled) {
         messagingCapability ??= createMessagingCapability({
           pi,
           policy,
@@ -786,53 +868,6 @@ export function createPlatformExtension(
             }
           }
         }
-        let workspaces;
-        if (
-          configuration.flags.workspaces &&
-          projectTrusted &&
-          project.kind === "git" &&
-          !project.bare
-        ) {
-          const state = createSqliteStateStore({
-            path: path.join(agentDir, "state", "platform.sqlite"),
-          });
-          if (state.ok) {
-            const workspaceBase =
-              process.platform === "win32"
-                ? path.join(
-                    process.env.LOCALAPPDATA ?? agentDir,
-                    "pi-agent",
-                    "workspaces",
-                  )
-                : path.join(agentDir, "workspaces");
-            workspaces = createWorkspaceManager({
-              project,
-              projectTrusted,
-              workspaceRoot: path.join(
-                workspaceBase,
-                project.projectId
-                  .slice(project.projectId.indexOf(":") + 1)
-                  .slice(0, 16),
-              ),
-              stateStore: state.value,
-            });
-            const recovery = await workspaces.recover();
-            if (ctx.hasUI) {
-              if (!recovery.ok) {
-                ctx.ui.notify(recovery.error.message, "error");
-              } else {
-                for (const blocked of recovery.value.blocked) {
-                  ctx.ui.notify(
-                    `Workspace ${blocked.workspaceId} recovery blocked: ${blocked.reason}`,
-                    "warning",
-                  );
-                }
-              }
-            }
-          } else if (ctx.hasUI) {
-            ctx.ui.notify(state.error.message, "error");
-          }
-        }
         current.unbindAgentServices = bindPlatformAgentServices(pi.events, {
           ...(profiles ? { profiles } : {}),
           ...(workspaces ? { workspaces } : {}),
@@ -972,8 +1007,8 @@ export function createPlatformExtension(
         current.hooks = hooksCapability;
         await current.hooks.start({ project, projectTrusted, ctx }, event);
       }
-      if (configuration.flags.memory) {
-        if (configuration.memory.defaultScope === "workspace" && ctx.hasUI) {
+      if (memoryEnabled) {
+        if (ctx.hasUI && !(await workspaceProvider?.current())) {
           ctx.ui.notify(
             "Workspace Memory is unavailable without a verified current workspace lease. Choose user or project scope explicitly.",
             "warning",
@@ -993,9 +1028,10 @@ export function createPlatformExtension(
           }),
           project,
           defaultScope: configuration.memory.defaultScope,
+          ...(workspaceProvider ? { workspaceProvider } : {}),
         });
       }
-      if (configuration.flags.messaging) {
+      if (messagingEnabled) {
         const state = createSqliteStateStore({
           path: path.join(agentDir, "state", "platform.sqlite"),
         });

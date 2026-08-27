@@ -354,9 +354,11 @@ export function createPiSessionDeliveryAdapter(
             });
           }
           if (mode === "pi/when-idle" && !context.isIdle()) {
-            return unavailable(
-              "Pi delivery is waiting for the session to become idle.",
-            );
+            return failure({
+              code: "deferred",
+              message: "Pi delivery is waiting for the session to become idle.",
+              retryable: true,
+            });
           }
           const sessionFile = context.sessionManager.getSessionFile();
           if (sessionFile === undefined) {

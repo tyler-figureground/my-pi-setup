@@ -113,9 +113,11 @@ function validateTransaction(
       !operation ||
       typeof operation !== "object" ||
       ![
+        "check-record",
         "put-record",
         "delete-record",
         "append-event",
+        "delete-event",
         "claim-lease",
         "renew-lease",
         "release-lease",
@@ -124,11 +126,15 @@ function validateTransaction(
       return stateFailure("INVALID_REQUEST", "Unknown state mutation type");
     }
     const names =
-      operation.type === "put-record" || operation.type === "delete-record"
+      operation.type === "check-record" ||
+      operation.type === "put-record" ||
+      operation.type === "delete-record"
         ? [operation.collection, operation.key]
         : operation.type === "append-event"
           ? [operation.stream, operation.eventId, operation.eventType]
-          : [operation.resource, operation.owner];
+          : operation.type === "delete-event"
+            ? [operation.stream, operation.eventId]
+            : [operation.resource, operation.owner];
     if (!names.every(validName)) {
       return stateFailure(
         "INVALID_REQUEST",
@@ -136,8 +142,11 @@ function validateTransaction(
       );
     }
     if (
-      (operation.type === "put-record" || operation.type === "delete-record") &&
-      !isValidExpectedVersion(operation.expectedVersion)
+      (operation.type === "check-record" &&
+        !isPositiveSafeInteger(operation.expectedVersion)) ||
+      ((operation.type === "put-record" ||
+        operation.type === "delete-record") &&
+        !isValidExpectedVersion(operation.expectedVersion))
     ) {
       return stateFailure(
         "INVALID_REQUEST",
@@ -549,6 +558,28 @@ function applyMutation(
     leases: StateLease[];
   },
 ): StateStoreResult<undefined> {
+  if (operation.type === "check-record") {
+    const row = database
+      .prepare(
+        "SELECT version FROM records WHERE collection = ? AND record_key = ?",
+      )
+      .get(operation.collection, operation.key) as SqliteRow | undefined;
+    const actualVersion = row ? numberColumn(row, "version") : null;
+    if (actualVersion !== operation.expectedVersion) {
+      return stateFailure(
+        "VERSION_CONFLICT",
+        "Record version does not match",
+        true,
+        {
+          collection: operation.collection,
+          key: operation.key,
+          actualVersion,
+        },
+      );
+    }
+    return success(undefined);
+  }
+
   if (operation.type === "put-record") {
     const row = database
       .prepare(
@@ -703,6 +734,13 @@ function applyMutation(
     return success(undefined);
   }
 
+  if (operation.type === "delete-event") {
+    database
+      .prepare("DELETE FROM events WHERE stream = ? AND event_id = ?")
+      .run(operation.stream, operation.eventId);
+    return success(undefined);
+  }
+
   const row = database
     .prepare(
       "SELECT resource, owner, fence, expires_at, metadata_json FROM leases WHERE resource = ?",
@@ -804,6 +842,21 @@ function createAdapter(
   now: () => number,
 ): StateStore {
   return {
+    withBusyTimeout(nextBusyTimeoutMs) {
+      if (!Number.isSafeInteger(nextBusyTimeoutMs) || nextBusyTimeoutMs < 0) {
+        throw new TypeError("Busy timeout must be a non-negative integer");
+      }
+      return createAdapter(
+        path,
+        nextBusyTimeoutMs,
+        maxMetadataBytes,
+        maxTransactionBytes,
+        maxTransactionOperations,
+        maxQueryLimit,
+        maxSnapshotEntries,
+        now,
+      );
+    },
     async transact(transaction) {
       const valid = validateTransaction(
         transaction,

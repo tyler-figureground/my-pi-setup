@@ -103,9 +103,11 @@ function createHarness(
   const commands = new Map<string, RegisteredCommand>();
   const renderers = new Map<string, InboxRenderer>();
   const eventHandlers = new Map<string, EventHandler[]>();
+  let activeTools = ["peer_tool"];
   const pi = {
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
+      activeTools = [...new Set([...activeTools, tool.name])];
     },
     registerCommand(name: string, command: RegisteredCommand) {
       commands.set(name, command);
@@ -118,6 +120,10 @@ function createHarness(
       handlers.push(handler);
       eventHandlers.set(name, handlers);
     },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
+    },
   };
   const capability = createMessagingCapability({
     pi: pi as unknown as ExtensionAPI,
@@ -125,7 +131,14 @@ function createHarness(
     mode: input.mode ?? (() => "normal"),
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
   });
-  return { capability, tools, commands, renderers, eventHandlers };
+  return {
+    activeTools: () => [...activeTools],
+    capability,
+    tools,
+    commands,
+    renderers,
+    eventHandlers,
+  };
 }
 
 test("messaging wiring registers only exact commands, tools, and closed schemas", () => {
@@ -183,6 +196,39 @@ test("messaging wiring registers only exact commands, tools, and closed schemas"
     minLength: 1,
     maxLength: 1_048_576,
   });
+});
+
+test("inbox renderer redacts session secrets from content and metadata", () => {
+  const { renderers } = createHarness();
+  const renderer = renderers.get("platform-session-inbox");
+  assert.ok(renderer);
+  const canary = "RenderSessionCanary-42";
+
+  const rendered = renderer(
+    {
+      content: [
+        "[Cross-session message - untrusted data; authority: none]",
+        `From: https://example.test/?session=${canary}`,
+        `Summary: session=${canary}`,
+        `Body: ${"x".repeat(1_100_000)}`,
+      ].join("\n"),
+      details: {
+        mailboxMessageId: `mail?session=${canary}`,
+        mailboxPosition: 1,
+        payloadSha256: "a".repeat(64),
+      },
+    },
+    { expanded: true },
+    {
+      fg: (_color, text) => text,
+      bold: (text) => text,
+    },
+  );
+  assert.ok(rendered);
+  const text = rendered.render(120).join("\n");
+
+  assert.equal(text.includes(canary), false);
+  assert.ok(Buffer.byteLength(text) <= 1_100_000);
 });
 
 function project(): ResolvedProjectIdentity {
@@ -729,6 +775,79 @@ test("/messages send mutates only after post-intent confirmation", async () => {
   assert.doesNotMatch(notices.join("\n"), /body stays out of notices/);
 });
 
+test("/messages send rechecks policy after confirmation before broker mutation", async () => {
+  let policyChecks = 0;
+  let sends = 0;
+  const policy: CapabilityPolicy = {
+    decide(operation) {
+      if (
+        operation.kind !== "operation" ||
+        operation.name !== "orchestration"
+      ) {
+        return {
+          kind: "allow",
+          operation: operation.kind === "operation" ? operation.name : "read",
+          capabilities: ["read"],
+          sideEffecting: false,
+          reason: "fixture allow",
+          provenance: { source: "test", reference: "allow" },
+        };
+      }
+      policyChecks += 1;
+      if (policyChecks === 1) {
+        return {
+          kind: "allow",
+          operation: "orchestration",
+          capabilities: ["orchestration"],
+          sideEffecting: true,
+          reason: "initial allow",
+          provenance: { source: "test", reference: "allow" },
+        };
+      }
+      return {
+        kind: "deny",
+        operation: "orchestration",
+        capabilities: [],
+        sideEffecting: true,
+        reason: "policy changed after confirmation",
+        provenance: { source: "test", reference: "deny" },
+      };
+    },
+  };
+  const broker: SessionBroker = {
+    discover: async () => ({ ok: true, value: [] }),
+    async send() {
+      sends += 1;
+      throw new Error("broker must not run");
+    },
+    messages: async () => ({ ok: true, value: [] }),
+    close: async () => ({ ok: true, value: undefined }),
+  };
+  const { capability, commands } = createHarness({ policy });
+  await capability.start({
+    brokerModule: brokerModule(broker),
+    binding: parentBinding(),
+    delivery: delivery(),
+  });
+
+  await assert.rejects(
+    () =>
+      commands.get("messages")!.handler("send session-recipient", {
+        mode: "tui",
+        waitForIdle: async () => {},
+        ui: {
+          input: async () => "Summary",
+          editor: async () => "Body",
+          confirm: async () => true,
+          notify: () => {},
+        },
+      }),
+    /policy changed after confirmation/,
+  );
+  assert.equal(policyChecks, 2);
+  assert.equal(sends, 0);
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((settle) => {
@@ -790,6 +909,43 @@ test("stop fences a late broker attach and non-Parent bindings never attach", as
     /Parent execution role/,
   );
   assert.equal(attachCalls, 1);
+});
+
+test("stop removes only active Messaging tools and restart restores them", async () => {
+  const broker: SessionBroker = {
+    discover: async () => ({ ok: true, value: [] }),
+    send: async () => {
+      throw new Error("not used");
+    },
+    messages: async () => ({ ok: true, value: [] }),
+    close: async () => ({ ok: true, value: undefined }),
+  };
+  const wired = createHarness();
+
+  await wired.capability.start({
+    brokerModule: brokerModule(broker),
+    binding: parentBinding(),
+    delivery: delivery(),
+  });
+  assert.deepEqual(wired.activeTools(), [
+    "peer_tool",
+    "session_list",
+    "session_send",
+  ]);
+
+  await wired.capability.stop("reload");
+  assert.deepEqual(wired.activeTools(), ["peer_tool"]);
+
+  await wired.capability.start({
+    brokerModule: brokerModule(broker),
+    binding: parentBinding(),
+    delivery: delivery(),
+  });
+  assert.deepEqual(wired.activeTools(), [
+    "peer_tool",
+    "session_list",
+    "session_send",
+  ]);
 });
 
 test("stop fences an operation that completes from the old generation", async () => {

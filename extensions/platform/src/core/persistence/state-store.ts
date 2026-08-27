@@ -3,7 +3,7 @@ import type { JsonObject, ModuleError, Outcome } from "../result.ts";
 export const CURRENT_SCHEMA_VERSION = 5;
 export const DEFAULT_METADATA_MAX_BYTES = 64 * 1024;
 export const DEFAULT_TRANSACTION_MAX_BYTES = 1024 * 1024;
-export const DEFAULT_TRANSACTION_MAX_OPERATIONS = 128;
+export const DEFAULT_TRANSACTION_MAX_OPERATIONS = 256;
 export const DEFAULT_QUERY_MAX_LIMIT = 1_000;
 export const DEFAULT_SNAPSHOT_MAX_ENTRIES = 10_000;
 
@@ -53,6 +53,12 @@ export interface StateLease {
 
 export type StateMutation =
   | {
+      readonly type: "check-record";
+      readonly collection: string;
+      readonly key: string;
+      readonly expectedVersion: number;
+    }
+  | {
       readonly type: "put-record";
       readonly collection: string;
       readonly key: string;
@@ -71,6 +77,11 @@ export type StateMutation =
       readonly eventId: string;
       readonly eventType: string;
       readonly metadata: JsonObject;
+    }
+  | {
+      readonly type: "delete-event";
+      readonly stream: string;
+      readonly eventId: string;
     }
   | {
       readonly type: "claim-lease";
@@ -186,6 +197,8 @@ export interface StateStoreDiagnostics {
 }
 
 export interface StateStore {
+  /** @internal Create a same-storage adapter with a shorter native lock wait. */
+  withBusyTimeout?(busyTimeoutMs: number): StateStore;
   transact(
     transaction: StateTransaction,
   ): Promise<StateStoreResult<StateTransactionResult>>;

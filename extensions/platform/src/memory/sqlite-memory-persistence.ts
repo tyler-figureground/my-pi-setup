@@ -17,6 +17,7 @@ import type {
   MemoryPersistenceResult,
   PersistedMemory,
 } from "./memory-persistence.ts";
+import { contradictionClaim, isConservativeNearDuplicate } from "./analysis.ts";
 
 const SCHEMA_VERSION = 1;
 
@@ -649,25 +650,6 @@ function ensureFtsIntegrity(database: DatabaseSync) {
   }
 }
 
-function contradictionClaim(content: string) {
-  const normalized = content
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[.!?]+$/, "");
-  const assignment = /^(.+?)\s+(?:should be|is|are|=|:)\s+(.+)$/.exec(
-    normalized,
-  );
-  if (assignment)
-    return { subject: assignment[1]!.trim(), value: assignment[2]!.trim() };
-  const positive = /^(?:use|prefer|enable|allow)\s+(.+)$/.exec(normalized);
-  if (positive) return { subject: positive[1]!.trim(), value: "enabled" };
-  const negative = /^(?:do not use|don't use|avoid|disable|deny)\s+(.+)$/.exec(
-    normalized,
-  );
-  if (negative) return { subject: negative[1]!.trim(), value: "disabled" };
-  return undefined;
-}
-
 export function createSqliteMemoryPersistenceAdapter(
   options: SqliteMemoryPersistenceOptions,
 ): Outcome<MemoryPersistenceAdapter, MemoryPersistenceError> {
@@ -731,7 +713,12 @@ export function createSqliteMemoryPersistenceAdapter(
         }
       });
     },
-    async create(entry, receipt, contradictionIds = []) {
+    async create(
+      entry,
+      receipt,
+      contradictionIds = [],
+      nearDuplicateLimit = 64,
+    ) {
       return withDatabase<
         | { readonly created: true }
         | {
@@ -805,12 +792,58 @@ export function createSqliteMemoryPersistenceAdapter(
               receipt: duplicateReceipt,
             });
           }
-          const reconciledIds = new Set(contradictionIds);
-          const claim =
-            entry.memory.status === "active"
-              ? contradictionClaim(entry.memory.content)
-              : undefined;
-          if (claim) {
+          const claim = contradictionClaim(entry.memory.content);
+          const nearRows = database
+            .prepare(
+              `SELECT rowid, * FROM memories
+               WHERE scope_kind = ? AND scope_key = ?
+                 AND kind_id = ? AND kind_version = ?
+                 AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY updated_at DESC, id LIMIT ?`,
+            )
+            .all(
+              entry.memory.scope.kind,
+              scopeKey(entry.memory.scope),
+              entry.memory.kind.id,
+              entry.memory.kind.version,
+              entry.memory.updatedAt,
+              nearDuplicateLimit,
+            ) as SqliteRow[];
+          const nearDuplicate = nearRows
+            .map((row) => persistedFromRow(database, row))
+            .find((candidate) => {
+              const other = contradictionClaim(candidate.memory.content);
+              if (
+                claim &&
+                other?.subject === claim.subject &&
+                other.value !== claim.value
+              )
+                return false;
+              return isConservativeNearDuplicate(
+                candidate.normalizedContent,
+                entry.normalizedContent,
+              );
+            });
+          if (nearDuplicate) {
+            const duplicateReceipt = {
+              ...receipt,
+              memoryId: nearDuplicate.memory.id,
+              state: "duplicate" as const,
+              duplicateOf: nearDuplicate.memory.id,
+            };
+            writeReceipt(database, duplicateReceipt);
+            database.exec("COMMIT");
+            return success({
+              created: false as const,
+              existing: nearDuplicate,
+              replayed: false,
+              receipt: duplicateReceipt,
+            });
+          }
+          const reconciledIds = new Set<string>();
+          const activeClaim =
+            entry.memory.status === "active" ? claim : undefined;
+          if (activeClaim) {
             const currentRows = database
               .prepare(
                 `SELECT rowid, * FROM memories
@@ -830,8 +863,8 @@ export function createSqliteMemoryPersistenceAdapter(
               const current = persistedFromRow(database, currentRow);
               const other = contradictionClaim(current.memory.content);
               if (
-                other?.subject === claim.subject &&
-                other.value !== claim.value
+                other?.subject === activeClaim.subject &&
+                other.value !== activeClaim.value
               )
                 reconciledIds.add(current.memory.id);
             }
@@ -1018,7 +1051,40 @@ export function createSqliteMemoryPersistenceAdapter(
               },
             };
           }
+          let storedEntry = entry;
           if (contradictionIds) {
+            const selected = new Set<string>();
+            const claim =
+              entry.memory.status === "active"
+                ? contradictionClaim(entry.memory.content)
+                : undefined;
+            if (claim) {
+              const candidates = database
+                .prepare(
+                  `SELECT rowid, * FROM memories
+                   WHERE id <> ? AND scope_kind = ? AND scope_key = ?
+                     AND kind_id = ? AND kind_version = ?
+                     AND status = 'active'
+                     AND (expires_at IS NULL OR expires_at > ?)`,
+                )
+                .all(
+                  entry.memory.id,
+                  entry.memory.scope.kind,
+                  scopeKey(entry.memory.scope),
+                  entry.memory.kind.id,
+                  entry.memory.kind.version,
+                  entry.memory.updatedAt,
+                ) as SqliteRow[];
+              for (const candidateRow of candidates) {
+                const candidate = persistedFromRow(database, candidateRow);
+                const other = contradictionClaim(candidate.memory.content);
+                if (
+                  other?.subject === claim.subject &&
+                  other.value !== claim.value
+                )
+                  selected.add(candidate.memory.id);
+              }
+            }
             const existingTargets = database
               .prepare(
                 `SELECT source_id FROM memory_relationships
@@ -1027,9 +1093,8 @@ export function createSqliteMemoryPersistenceAdapter(
               .all(entry.memory.id, entry.memory.id) as SqliteRow[];
             const targetIds = new Set([
               ...existingTargets.map((target) => text(target, "source_id")),
-              ...contradictionIds,
+              ...selected,
             ]);
-            const selected = new Set(contradictionIds);
             for (const targetId of targetIds) {
               const targetRow = memoryRow(database, targetId);
               if (!targetRow) continue;
@@ -1065,21 +1130,35 @@ export function createSqliteMemoryPersistenceAdapter(
                 )
                 .run(memory.id, memory.revision, JSON.stringify(memory));
             }
+            const memory: MemoryRecord = {
+              ...entry.memory,
+              relationships: [...selected].map((targetId) => ({
+                kind: "pi/contradicts",
+                targetId,
+              })),
+            };
+            storedEntry = {
+              ...entry,
+              memory,
+              revisions: entry.revisions.map((revision) =>
+                revision.revision === memory.revision ? memory : revision,
+              ),
+            };
           }
-          updateCanonical(database, entry);
+          updateCanonical(database, storedEntry);
           database
             .prepare(
               `INSERT INTO memory_revisions (memory_id, revision, record_json)
                VALUES (?, ?, ?)`,
             )
             .run(
-              entry.memory.id,
-              entry.memory.revision,
-              JSON.stringify(entry.memory),
+              storedEntry.memory.id,
+              storedEntry.memory.revision,
+              JSON.stringify(storedEntry.memory),
             );
           writeReceipt(database, receipt);
           database.exec("COMMIT");
-          return success(undefined);
+          return success(storedEntry);
         } catch (error) {
           try {
             database.exec("ROLLBACK");
@@ -1289,10 +1368,25 @@ export function createSqliteMemoryPersistenceAdapter(
       return withDatabase(path, busyTimeoutMs, (database) => {
         database.exec("BEGIN IMMEDIATE");
         try {
+          const now = clock();
+          const deleted = database
+            .prepare("DELETE FROM memory_import_previews WHERE expires_at <= ?")
+            .run(now);
           const preview = database
             .prepare("SELECT id FROM memory_import_previews WHERE id = ?")
             .get(previewId);
-          if (!preview) throw new Error("Import preview is unavailable");
+          if (!preview) {
+            database.exec("COMMIT");
+            if (deleted.changes > 0) checkpoint(database);
+            return {
+              ok: false,
+              error: {
+                code: "preview_expired" as const,
+                message: "Import preview is unavailable.",
+                retryable: false,
+              },
+            };
+          }
           for (const staged of entries) {
             const entry = staged.entry;
             database
@@ -1369,6 +1463,7 @@ export function createSqliteMemoryPersistenceAdapter(
             .run(previewId);
           writeReceipt(database, receipt);
           database.exec("COMMIT");
+          if (deleted.changes > 0) checkpoint(database);
           return success(undefined);
         } catch (error) {
           try {

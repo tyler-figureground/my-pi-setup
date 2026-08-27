@@ -32,15 +32,17 @@ const projectOne = {
 };
 
 function openMemory(path: string, project = projectOne, busyTimeoutMs = 5_000) {
+  const clock = () => 1_000;
   const persistence = createSqliteMemoryPersistenceAdapter({
     path,
     busyTimeoutMs,
+    clock,
   });
   if (!persistence.ok) assert.fail(persistence.error.message);
   return createMemoryStoreModule({
     persistence: persistence.value,
-    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
-    clock: () => 1_000,
+    artifacts: createInMemoryArtifactStore({ clock }),
+    clock,
   }).bind(
     createHostMemoryBindingFactory().issue({
       executionRole: "parent",
@@ -59,17 +61,16 @@ function openConfiguredMemory(
     readonly limits?: Parameters<typeof createMemoryStoreModule>[0]["limits"];
   } = {},
 ) {
+  const clock = options.clock ?? (() => 1_000);
   const persistence = createSqliteMemoryPersistenceAdapter({
     path,
-    ...(options.clock ? { clock: options.clock } : {}),
+    clock,
   });
   if (!persistence.ok) assert.fail(persistence.error.message);
   return createMemoryStoreModule({
     persistence: persistence.value,
-    artifacts: createInMemoryArtifactStore({
-      clock: options.clock ?? (() => 1_000),
-    }),
-    clock: options.clock ?? (() => 1_000),
+    artifacts: createInMemoryArtifactStore({ clock }),
+    clock,
     ...(options.secretCanaries
       ? { secretCanaries: options.secretCanaries }
       : {}),
@@ -259,18 +260,23 @@ test("node:sqlite byte scans exclude secret fields from content, FTS, citations,
   const jwt =
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmMTEifQ.abcdefghijklmnopqrstuvwxyz012345";
   const password = "sqlite-url-password";
+  const npmToken = `npm_${"A7b9C2d4E6f8G1h3J5k7L9m2N4p6Q8r1S3t5"}`;
+  const randomCredential = "q7Wm2_Kp9Vx4Nc8Rz1Ht6Yb3Ld5Sf0Gj";
+  const lowerCredential = "7q2m9x4n8v1c6b3z5k0j4h8s2d9f6a1w";
   try {
     const memory = openConfiguredMemory(path, { secretCanaries: [canary] });
     const remembered = await memory.remember({
       requestId: "sqlite-secret-safe-request",
       kind: coreMemoryKinds.projectFact,
       scope: "project",
-      content: `Redact ${canary}, ${jwt}, and https://user:${password}@example.test/path.`,
+      content: `Redact ${canary}, ${jwt}, ${npmToken}, and https://user:${password}@example.test/path.`,
       citations: [
         {
           kind: "external",
           locator: {
             api_key: canary,
+            opaque: randomCredential,
+            nested: { lowerCredential },
             url: `https://user:${password}@example.test`,
           },
           excerpt: jwt,
@@ -285,8 +291,22 @@ test("node:sqlite byte scans exclude secret fields from content, FTS, citations,
       content: "Secret request identifiers are rejected.",
     });
     assert.equal(rejected.ok, false);
+    const entropyRejected = await memory.remember({
+      requestId: randomCredential,
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Entropy-shaped request identifiers are rejected.",
+    });
+    assert.equal(entropyRejected.ok, false);
     const bytes = databaseBytes(path);
-    for (const secret of [canary, jwt, password])
+    for (const secret of [
+      canary,
+      jwt,
+      password,
+      npmToken,
+      randomCredential,
+      lowerCredential,
+    ])
       assert.equal(
         bytes.some((body) => body.includes(Buffer.from(secret))),
         false,
@@ -357,6 +377,83 @@ test("node:sqlite access cleanup erases expired preview bodies from database and
     });
     assert.equal(expired.ok, false);
     if (!expired.ok) assert.equal(expired.error.code, "import_preview_expired");
+    assert.equal(
+      databaseBytes(path).some((body) => body.includes(Buffer.from(marker))),
+      false,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("node:sqlite import commit rejects and purges a preview expiring at transaction boundary", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-memory-preview-boundary-"));
+  const path = join(directory, "memory.sqlite");
+  let now = 1_000;
+  let expiresAt = Number.MAX_SAFE_INTEGER;
+  const marker = "BOUNDARY-EXPIRED-PREVIEW-07d31";
+  try {
+    const artifacts = createInMemoryArtifactStore({ clock: () => now });
+    const opened = createSqliteMemoryPersistenceAdapter({
+      path,
+      clock: () => now,
+    });
+    if (!opened.ok) assert.fail(opened.error.message);
+    const persistence = {
+      ...opened.value,
+      async commitImport(
+        ...args: Parameters<typeof opened.value.commitImport>
+      ) {
+        now = expiresAt;
+        return opened.value.commitImport(...args);
+      },
+    };
+    const memory = createMemoryStoreModule({
+      persistence,
+      artifacts,
+      clock: () => now,
+    }).bind(
+      createHostMemoryBindingFactory().issue({
+        executionRole: "parent",
+        project: projectOne,
+        ingress: "direct-user",
+      }),
+    );
+    const entry = JSON.stringify({
+      type: "memory",
+      kind: coreMemoryKinds.projectFact,
+      content: marker,
+    });
+    const artifact = await artifacts.put({
+      body: `${JSON.stringify({
+        type: "manifest",
+        format: { id: "pi.memory-bundle", version: 1 },
+        count: 1,
+        manifestSha256: createHash("sha256").update(entry).digest("hex"),
+      })}\n${entry}\n`,
+      filename: "boundary-preview.jsonl",
+    });
+    assert.equal(artifact.ok, true);
+    if (!artifact.ok) return;
+    const preview = await memory.transfer({
+      type: "preview-import",
+      requestId: "boundary-preview-create",
+      artifactId: artifact.value.id,
+      targetScope: "project",
+    });
+    assert.equal(preview.ok, true);
+    if (!preview.ok || preview.value.type !== "preview-import") return;
+    expiresAt = preview.value.expiresAt;
+    const committed = await memory.transfer({
+      type: "commit-import",
+      requestId: "boundary-preview-commit",
+      previewId: preview.value.previewId,
+      expectedManifestSha256: preview.value.manifestSha256,
+      collisions: "skip",
+    });
+    assert.equal(committed.ok, false);
+    if (!committed.ok)
+      assert.equal(committed.error.code, "import_preview_expired");
     assert.equal(
       databaseBytes(path).some((body) => body.includes(Buffer.from(marker))),
       false,
@@ -603,6 +700,164 @@ test("node:sqlite converges concurrent exact remembers on one canonical Memory",
     const inspected = await left.inspect({ scope: "project", limit: 10 });
     assert.equal(inspected.ok, true);
     if (inspected.ok) assert.equal(inspected.value.memories.length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("node:sqlite activation atomically reconciles symmetric contradiction links", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-memory-activation-links-"));
+  const path = join(directory, "memory.sqlite");
+  try {
+    const opened = createSqliteMemoryPersistenceAdapter({ path });
+    if (!opened.ok) assert.fail(opened.error.message);
+    const module = createMemoryStoreModule({
+      persistence: opened.value,
+      artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+      clock: () => 1_000,
+    });
+    const bindings = createHostMemoryBindingFactory();
+    const direct = module.bind(
+      bindings.issue({
+        executionRole: "parent",
+        project: projectOne,
+        ingress: "direct-user",
+      }),
+    );
+    const proposal = module.bind(
+      bindings.issue({
+        executionRole: "parent",
+        project: projectOne,
+        ingress: "model-proposal",
+      }),
+    );
+    const formatter = await direct.remember({
+      requestId: "sqlite-activation-formatter-active",
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Default formatter is Prettier.",
+    });
+    const formatterReview = await proposal.remember({
+      requestId: "sqlite-activation-formatter-review",
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Default formatter is Biome.",
+    });
+    const packageManager = await direct.remember({
+      requestId: "sqlite-activation-package-active",
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Package manager is npm.",
+    });
+    const packageReview = await proposal.remember({
+      requestId: "sqlite-activation-package-review",
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Package manager is pnpm.",
+    });
+    assert.equal(formatter.ok, true);
+    assert.equal(formatterReview.ok, true);
+    assert.equal(packageManager.ok, true);
+    assert.equal(packageReview.ok, true);
+    if (
+      !formatter.ok ||
+      !formatterReview.ok ||
+      !packageManager.ok ||
+      !packageReview.ok
+    )
+      return;
+
+    const takeover = await direct.remember({
+      requestId: "sqlite-activation-formatter-takeover",
+      kind: coreMemoryKinds.projectFact,
+      scope: "project",
+      content: "Default formatter is Biome.",
+    });
+    const promoted = await direct.change({
+      type: "promote",
+      requestId: "sqlite-activation-package-promote",
+      id: packageReview.value.memory.id,
+      expectedRevision: 1,
+    });
+    assert.equal(takeover.ok, true);
+    assert.equal(promoted.ok, true);
+    if (takeover.ok)
+      assert.deepEqual(takeover.value.memory.relationships, [
+        { kind: "pi/contradicts", targetId: formatter.value.memory.id },
+      ]);
+    if (promoted.ok && promoted.value.type === "promote")
+      assert.deepEqual(promoted.value.memory.relationships, [
+        { kind: "pi/contradicts", targetId: packageManager.value.memory.id },
+      ]);
+
+    const inspected = await direct.inspect({ scope: "project", limit: 10 });
+    assert.equal(inspected.ok, true);
+    if (!inspected.ok) return;
+    const records = new Map(
+      inspected.value.memories.map((memory) => [memory.id, memory]),
+    );
+    for (const [leftId, rightId] of [
+      [formatter.value.memory.id, formatterReview.value.memory.id],
+      [packageManager.value.memory.id, packageReview.value.memory.id],
+    ]) {
+      assert.deepEqual(records.get(leftId)?.relationships, [
+        { kind: "pi/contradicts", targetId: rightId },
+      ]);
+      assert.deepEqual(records.get(rightId)?.relationships, [
+        { kind: "pi/contradicts", targetId: leftId },
+      ]);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("node:sqlite converges concurrent near-identical remembers across repeated native races", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-memory-near-races-"));
+  try {
+    for (let run = 0; run < 24; run += 1) {
+      const path = join(directory, `memory-${run}.sqlite`);
+      openMemory(path);
+      const results = await runRememberRace(path, [
+        {
+          requestId: `process-near-left-${run}`,
+          content:
+            "Run focused tests before running complete verification suite.",
+        },
+        {
+          requestId: `process-near-right-${run}`,
+          content:
+            "Run focused tests before running complete verifiction suite.",
+        },
+      ]);
+      const successful = results.filter(
+        (
+          result,
+        ): result is {
+          ok: true;
+          value: { state: string; memory: { id: string } };
+        } =>
+          !!result &&
+          typeof result === "object" &&
+          "ok" in result &&
+          result.ok === true,
+      );
+      assert.equal(
+        successful.length,
+        2,
+        `run ${run}: ${JSON.stringify(results)}`,
+      );
+      assert.deepEqual(
+        successful.map(({ value }) => value.state).sort(),
+        ["created", "duplicate"],
+        `run ${run}`,
+      );
+      assert.equal(
+        successful[0]?.value.memory.id,
+        successful[1]?.value.memory.id,
+        `run ${run}`,
+      );
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

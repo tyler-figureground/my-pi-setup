@@ -277,6 +277,50 @@ test("exact canaries, JWTs, URL credentials, citation keys, kinds, and request I
   }
 });
 
+test("high-entropy credentials redact without canaries and preserve UUIDs, digests, and prose", async () => {
+  const memory = createFixture();
+  const npmToken = `npm_${"A7b9C2d4E6f8G1h3J5k7L9m2N4p6Q8r1S3t5"}`;
+  const randomCredential = "q7Wm2_Kp9Vx4Nc8Rz1Ht6Yb3Ld5Sf0Gj";
+  const lowerCredential = "7q2m9x4n8v1c6b3z5k0j4h8s2d9f6a1w";
+  const uuid = "123e4567-e89b-12d3-a456-426614174000";
+  const digest = "a".repeat(64);
+  const remembered = await memory.remember({
+    requestId: "entropy-safe-request",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: `Registry credential ${npmToken}; UUID ${uuid}; digest ${digest}.`,
+    citations: [
+      {
+        kind: "external",
+        locator: { opaque: randomCredential, nested: { lowerCredential } },
+        excerpt: `Bearer ${randomCredential}`,
+      },
+    ],
+  });
+
+  assert.equal(remembered.ok, true);
+  if (!remembered.ok) return;
+  const serialized = JSON.stringify(remembered.value.memory);
+  assert.equal(serialized.includes(npmToken), false);
+  assert.equal(serialized.includes(randomCredential), false);
+  assert.equal(serialized.includes(lowerCredential), false);
+  assert.equal(serialized.includes(uuid), true);
+  assert.equal(serialized.includes(digest), true);
+  assert.equal(
+    remembered.value.memory.content.includes("Registry credential"),
+    true,
+  );
+
+  const rejected = await memory.remember({
+    requestId: randomCredential,
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "High-entropy request identifiers never persist.",
+  });
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.error.code, "invalid_request");
+});
+
 test("remember deduplicates exact and conservatively near-identical content", async () => {
   const memory = createFixture();
   const first = await memory.remember({
@@ -419,6 +463,110 @@ test("review proposals cannot mutate active contradictions and direct user can t
   assert.equal(takeover.value.memory.id, review.value.memory.id);
   assert.equal(takeover.value.memory.status, "active");
   assert.equal(takeover.value.memory.provenance.ingress, "direct-user");
+});
+
+test("promotion and direct-user takeover recalculate symmetric contradictions", async () => {
+  let nextId = 0;
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+    clock: () => 1_000,
+    id: () => `activation-${++nextId}`,
+  });
+  const bindings = createHostMemoryBindingFactory();
+  const direct = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "activation-direct",
+    }),
+  );
+  const proposal = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "model-proposal",
+      sessionId: "activation-proposal",
+    }),
+  );
+  const formatter = await direct.remember({
+    requestId: "activation-formatter-active",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Prettier.",
+  });
+  const formatterReview = await proposal.remember({
+    requestId: "activation-formatter-review",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Biome.",
+  });
+  const packageManager = await direct.remember({
+    requestId: "activation-package-active",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Package manager is npm.",
+  });
+  const packageReview = await proposal.remember({
+    requestId: "activation-package-review",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Package manager is pnpm.",
+  });
+  assert.equal(formatter.ok, true);
+  assert.equal(formatterReview.ok, true);
+  assert.equal(packageManager.ok, true);
+  assert.equal(packageReview.ok, true);
+  if (
+    !formatter.ok ||
+    !formatterReview.ok ||
+    !packageManager.ok ||
+    !packageReview.ok
+  )
+    return;
+
+  const takeover = await direct.remember({
+    requestId: "activation-formatter-takeover",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Biome.",
+  });
+  const promoted = await direct.change({
+    type: "promote",
+    requestId: "activation-package-promote",
+    id: packageReview.value.memory.id,
+    expectedRevision: 1,
+  });
+  assert.equal(takeover.ok, true);
+  assert.equal(promoted.ok, true);
+  if (takeover.ok)
+    assert.deepEqual(takeover.value.memory.relationships, [
+      { kind: "pi/contradicts", targetId: formatter.value.memory.id },
+    ]);
+  if (promoted.ok && promoted.value.type === "promote")
+    assert.deepEqual(promoted.value.memory.relationships, [
+      { kind: "pi/contradicts", targetId: packageManager.value.memory.id },
+    ]);
+
+  const inspected = await direct.inspect({ scope: "project", limit: 10 });
+  assert.equal(inspected.ok, true);
+  if (!inspected.ok) return;
+  const records = new Map(
+    inspected.value.memories.map((memory) => [memory.id, memory]),
+  );
+  const expectedPairs = [
+    [formatter.value.memory.id, formatterReview.value.memory.id],
+    [packageManager.value.memory.id, packageReview.value.memory.id],
+  ];
+  for (const [leftId, rightId] of expectedPairs) {
+    assert.deepEqual(records.get(leftId)?.relationships, [
+      { kind: "pi/contradicts", targetId: rightId },
+    ]);
+    assert.deepEqual(records.get(rightId)?.relationships, [
+      { kind: "pi/contradicts", targetId: leftId },
+    ]);
+  }
 });
 
 test("bounded near dedupe keeps opposite token claims distinct", async () => {

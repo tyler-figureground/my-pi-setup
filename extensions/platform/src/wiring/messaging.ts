@@ -10,6 +10,7 @@ import type {
   SessionBrokerModule,
 } from "../messaging/index.ts";
 import {
+  sanitizeSessionText,
   SESSION_DELIVERY_MODES,
   type SessionDeliveryMode,
 } from "../messaging/index.ts";
@@ -19,6 +20,7 @@ import type {
 } from "../messaging/pi-delivery.ts";
 
 const inboxCustomType = "platform-session-inbox";
+const MESSAGING_TOOLS = ["session_list", "session_send"] as const;
 type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
 
 interface PendingActivation {
@@ -27,11 +29,19 @@ interface PendingActivation {
   stopReason?: ShutdownReason;
 }
 
-function sanitize(value: string, maxLength = 512) {
-  return value
+function capUtf8(value: string, maxBytes: number) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  let capped = Buffer.from(value).subarray(0, maxBytes).toString("utf8");
+  while (Buffer.byteLength(capped) > maxBytes) capped = capped.slice(0, -1);
+  return capped;
+}
+
+function sanitize(value: string, maxBytes = 512, redactSecrets = false) {
+  const bounded = capUtf8(value, maxBytes);
+  const sanitized = (redactSecrets ? sanitizeSessionText(bounded) : bounded)
     .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .slice(0, maxLength);
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  return capUtf8(sanitized, maxBytes);
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -70,6 +80,19 @@ export function createMessagingCapability(
       }
     | undefined;
 
+  const removeActiveTools = () => {
+    const messagingTools = new Set<string>(MESSAGING_TOOLS);
+    pi.setActiveTools(
+      pi.getActiveTools().filter((name) => !messagingTools.has(name)),
+    );
+  };
+
+  const activateAllowedTools = () => {
+    const allowed =
+      options.mode() === "plan" ? ["session_list"] : MESSAGING_TOOLS;
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...allowed])]);
+  };
+
   const authorizeTool = (name: "session_list" | "session_send") => {
     if (!current) throw new Error("Session messaging is unavailable.");
     const decision = options.policy.decide(
@@ -77,7 +100,9 @@ export function createMessagingCapability(
       current.binding.executionRole,
       { kind: options.mode() },
     );
-    if (decision.kind !== "allow") throw new Error(decision.reason);
+    if (decision.kind !== "allow") {
+      throw new Error(sanitize(decision.reason, 2_048, true));
+    }
     return current;
   };
 
@@ -88,7 +113,9 @@ export function createMessagingCapability(
       current.binding.executionRole,
       { kind: options.mode() },
     );
-    if (decision.kind !== "allow") throw new Error(decision.reason);
+    if (decision.kind !== "allow") {
+      throw new Error(sanitize(decision.reason, 2_048, true));
+    }
     return current;
   };
 
@@ -224,11 +251,11 @@ export function createMessagingCapability(
           ? "No visible sessions."
           : discovered.value
               .map((session) => {
-                const name = sanitize(session.name ?? "unnamed");
+                const name = sanitize(session.name ?? "unnamed", 512, true);
                 const capabilities = session.capabilities
                   .map(
                     (capability) =>
-                      `${sanitize(capability.id, 256)}@${capability.version}`,
+                      `${sanitize(capability.id, 256, true)}@${capability.version}`,
                   )
                   .join(", ");
                 return `${sanitize(session.address.piSessionId)} ${name} [${session.status}] ${session.executionRole} ${session.visibleBecause}${capabilities ? ` ${capabilities}` : ""}`;
@@ -292,14 +319,16 @@ export function createMessagingCapability(
             ...(expectedIncarnation === undefined
               ? []
               : [`Expected incarnation: ${sanitize(expectedIncarnation)}`]),
-            `Summary: ${sanitize(summary)}`,
+            `Summary: ${sanitize(summary, 512, true)}`,
             `Body: ${bodyBytes} bytes`,
             `Delivery: ${deliveryMode} v1 - untrusted, authority none`,
           ].join("\n"),
         );
         ensureCurrent(runtime);
         if (!confirmed) return;
-        const sent = await runtime.broker.send(
+        const authorizedRuntime = authorizeOperation("orchestration");
+        ensureCurrent(authorizedRuntime);
+        const sent = await authorizedRuntime.broker.send(
           {
             requestId: (options.requestId ?? randomUUID)(),
             recipients: [
@@ -314,7 +343,7 @@ export function createMessagingCapability(
             body: { kind: "text", text: message },
             delivery: { mode: deliveryMode, version: 1 },
           },
-          runtime.controller.signal,
+          authorizedRuntime.controller.signal,
         );
         if (!sent.ok) throw new Error(sent.error.message);
         ensureCurrent(runtime);
@@ -343,7 +372,7 @@ export function createMessagingCapability(
                   envelope.sender.piSessionId === runtime.binding.piSessionId
                     ? envelope.recipient.piSessionId
                     : envelope.sender.piSessionId;
-                return `${envelope.mailboxPosition} ${sanitize(envelope.id)} ${message.state} ${sanitize(peer)} attempts=${message.attempts} ${sanitize(envelope.summary)}${message.lastErrorCode ? ` error=${sanitize(message.lastErrorCode)}` : ""}`;
+                return `${envelope.mailboxPosition} ${sanitize(envelope.id)} ${message.state} ${sanitize(peer)} attempts=${message.attempts} ${sanitize(envelope.summary, 512, true)}${message.lastErrorCode ? ` error=${sanitize(message.lastErrorCode, 512, true)}` : ""}`;
               })
               .join("\n");
       ctx.ui.notify(text, "info");
@@ -420,13 +449,15 @@ export function createMessagingCapability(
       const sessions = discovered.value.map((session) => ({
         sessionId: sanitize(session.address.piSessionId),
         incarnation: sanitize(session.incarnation),
-        ...(session.name === undefined ? {} : { name: sanitize(session.name) }),
+        ...(session.name === undefined
+          ? {}
+          : { name: sanitize(session.name, 512, true) }),
         status: session.status,
         role: session.executionRole,
         currentProject: session.projectId === runtime.binding.project.projectId,
         capabilities: session.capabilities.map(
           (capability) =>
-            `${sanitize(capability.id, 256)}@${capability.version}`,
+            `${sanitize(capability.id, 256, true)}@${capability.version}`,
         ),
         lastHeartbeatAt: session.lastHeartbeatAt,
       }));
@@ -477,7 +508,7 @@ export function createMessagingCapability(
     ),
     renderCall(params, theme) {
       return new Text(
-        `${theme.fg("accent", `send ${params.recipients.length} recipient${params.recipients.length === 1 ? "" : "s"}`)}\n${sanitize(params.summary)}`,
+        `${theme.fg("accent", `send ${params.recipients.length} recipient${params.recipients.length === 1 ? "" : "s"}`)}\n${sanitize(params.summary, 512, true)}`,
         0,
         0,
       );
@@ -556,7 +587,7 @@ export function createMessagingCapability(
     (message, { expanded }, theme) => {
       const content =
         typeof message.content === "string"
-          ? sanitize(message.content, 1_048_576)
+          ? sanitize(message.content, 1_048_576, true)
           : "";
       const lines = content.split("\n");
       const sender = lines.find((line) => line.startsWith("From: "));
@@ -574,7 +605,7 @@ export function createMessagingCapability(
       if (!expanded) return new Text(compact.join("\n"), 0, 0);
       const metadata = [
         typeof details.mailboxMessageId === "string"
-          ? `message ${sanitize(details.mailboxMessageId)}`
+          ? `message ${sanitize(details.mailboxMessageId, 512, true)}`
           : undefined,
         typeof details.mailboxPosition === "number"
           ? `mailbox ${details.mailboxPosition}`
@@ -593,6 +624,8 @@ export function createMessagingCapability(
     },
   );
 
+  removeActiveTools();
+
   return {
     async start({ brokerModule, binding, delivery }) {
       if (binding.executionRole !== "parent") {
@@ -601,6 +634,7 @@ export function createMessagingCapability(
       if (current || pending) {
         throw new Error("Session messaging is already starting or active.");
       }
+      activateAllowedTools();
       const activation: PendingActivation = {
         generation: ++generation,
         attached: brokerModule.attach(binding, delivery),
@@ -609,7 +643,10 @@ export function createMessagingCapability(
       const attached = await activation.attached;
       if (pending === activation) pending = undefined;
       if (activation.stopReason !== undefined) return;
-      if (!attached.ok) throw new Error(attached.error.message);
+      if (!attached.ok) {
+        removeActiveTools();
+        throw new Error(attached.error.message);
+      }
       if (generation !== activation.generation) {
         const closed = await attached.value.close("reload");
         if (!closed.ok) throw new Error(closed.error.message);
@@ -625,6 +662,7 @@ export function createMessagingCapability(
     },
     async stop(reason) {
       generation++;
+      removeActiveTools();
       const activation = pending;
       if (activation) activation.stopReason = reason;
       const runtime = current;

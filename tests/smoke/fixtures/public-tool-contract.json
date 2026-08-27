@@ -468,6 +468,56 @@
     }
   },
   {
+    "name": "memory_search",
+    "parameters": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "ranking": {
+          "type": "string",
+          "enum": ["relevant", "recent", "exact"]
+        },
+        "within": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["user", "project", "workspace"]
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "preference",
+              "project-fact",
+              "decision",
+              "procedure",
+              "note"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "rg",
     "parameters": {
       "type": "object",
@@ -574,6 +624,79 @@
           "description": "Whether to include markdown scraped from each result. Defaults to false."
         }
       }
+    }
+  },
+  {
+    "name": "session_list",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "enum": ["current", "all-visible"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["online", "all"]
+        },
+        "capability": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "session_send",
+    "parameters": {
+      "type": "object",
+      "required": ["recipients", "summary", "message"],
+      "properties": {
+        "recipients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sessionId"],
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "expectedIncarnation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "deliveryMode": {
+          "type": "string",
+          "enum": ["pi/inbox", "pi/when-idle", "pi/follow-up", "pi/steer"]
+        }
+      },
+      "additionalProperties": false
     }
   },
   {

@@ -19,6 +19,7 @@ import {
   type MemoryStoreModuleOptions,
   type MemoryStoreResult,
 } from "./model.ts";
+import { contradictionClaim, isConservativeNearDuplicate } from "./analysis.ts";
 
 const supportedKinds = new Set(
   Object.values(coreMemoryKinds).map(({ id, version }) => `${id}\0${version}`),
@@ -334,108 +335,8 @@ function sameScope(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-const oppositeTokens = [
-  ["always", "never"],
-  ["allow", "deny"],
-  ["allowed", "denied"],
-  ["enable", "disable"],
-  ["enabled", "disabled"],
-  ["must", "must-not"],
-  ["should", "should-not"],
-  ["true", "false"],
-] as const;
-
-function boundedTokens(value: string) {
-  if (Buffer.byteLength(value) > 4 * 1024) return undefined;
-  const tokens = value.match(/[\p{L}\p{N}_-]+/gu)?.slice(0, 256) ?? [];
-  return tokens.length <= 256 ? tokens : undefined;
-}
-
-function tokenEditDistanceAtMostOne(left: string, right: string) {
-  if (left === right) return true;
-  if (left.length > 64 || right.length > 64) return false;
-  if (Math.abs(left.length - right.length) > 1) return false;
-  let differences = 0;
-  let leftIndex = 0;
-  let rightIndex = 0;
-  while (leftIndex < left.length && rightIndex < right.length) {
-    if (left[leftIndex] === right[rightIndex]) {
-      leftIndex += 1;
-      rightIndex += 1;
-      continue;
-    }
-    differences += 1;
-    if (differences > 1) return false;
-    if (left.length > right.length) leftIndex += 1;
-    else if (right.length > left.length) rightIndex += 1;
-    else {
-      leftIndex += 1;
-      rightIndex += 1;
-    }
-  }
-  return (
-    differences +
-      Number(leftIndex < left.length || rightIndex < right.length) <=
-    1
-  );
-}
-
-function hasOppositeTokens(left: readonly string[], right: readonly string[]) {
-  const leftSet = new Set(left);
-  const rightSet = new Set(right);
-  const includesNot = (tokens: ReadonlySet<string>) =>
-    tokens.has("not") || tokens.has("never") || tokens.has("no");
-  if (includesNot(leftSet) !== includesNot(rightSet)) return true;
-  return oppositeTokens.some(
-    ([positive, negative]) =>
-      (leftSet.has(positive) && rightSet.has(negative)) ||
-      (leftSet.has(negative) && rightSet.has(positive)),
-  );
-}
-
-function isConservativeNearDuplicate(left: string, right: string) {
-  const leftTokens = boundedTokens(left);
-  const rightTokens = boundedTokens(right);
-  if (
-    !leftTokens ||
-    !rightTokens ||
-    leftTokens.length < 4 ||
-    leftTokens.length !== rightTokens.length ||
-    hasOppositeTokens(leftTokens, rightTokens)
-  )
-    return false;
-  let changed = 0;
-  for (let index = 0; index < leftTokens.length; index += 1) {
-    if (leftTokens[index] === rightTokens[index]) continue;
-    if (!tokenEditDistanceAtMostOne(leftTokens[index]!, rightTokens[index]!))
-      return false;
-    changed += 1;
-    if (changed > 1) return false;
-  }
-  return changed === 1;
-}
-
 function candidateLimit(options: MemoryStoreModuleOptions) {
   return Math.min(options.limits?.maxCandidateIds ?? 500, 64);
-}
-
-function contradictionClaim(content: string) {
-  const normalized = content
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[.!?]+$/, "");
-  const assignment = /^(.+?)\s+(?:should be|is|are|=|:)\s+(.+)$/.exec(
-    normalized,
-  );
-  if (assignment)
-    return { subject: assignment[1]!.trim(), value: assignment[2]!.trim() };
-  const positive = /^(?:use|prefer|enable|allow)\s+(.+)$/.exec(normalized);
-  if (positive) return { subject: positive[1]!.trim(), value: "enabled" };
-  const negative = /^(?:do not use|don't use|avoid|disable|deny)\s+(.+)$/.exec(
-    normalized,
-  );
-  if (negative) return { subject: negative[1]!.trim(), value: "disabled" };
-  return undefined;
 }
 
 const secretCitationField =
@@ -532,6 +433,40 @@ function escapeRegularExpression(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const entropyCredentialCandidate = /[A-Za-z0-9][A-Za-z0-9_+\/=-]{31,}/g;
+
+function isHighEntropyCredential(value: string) {
+  if (value.length > 4 * 1024) return false;
+  if (
+    value.includes("/") &&
+    /(?:^|\/)(?:users|home|tmp|temp|appdata|documents|\.worktrees)(?:\/|$)/i.test(
+      value,
+    )
+  )
+    return false;
+  if (/^[0-9a-f]+$/i.test(value)) return false;
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  )
+    return false;
+  const categoryCount = [/[a-z]/, /[A-Z]/, /[0-9]/, /[_+\/=-]/].filter(
+    (pattern) => pattern.test(value),
+  ).length;
+  if (categoryCount < 2) return false;
+  const bytes = Buffer.from(value);
+  const frequencies = new Map<number, number>();
+  for (const byte of bytes)
+    frequencies.set(byte, (frequencies.get(byte) ?? 0) + 1);
+  let entropy = 0;
+  for (const count of frequencies.values()) {
+    const probability = count / bytes.length;
+    entropy -= probability * Math.log2(probability);
+  }
+  return entropy >= 4.5;
+}
+
 function redactMemoryContent(
   content: string,
   exactCanaries: readonly string[] = [],
@@ -546,6 +481,7 @@ function redactMemoryContent(
       kind: "exact-canary",
       pattern: new RegExp(escapeRegularExpression(canary), "g"),
     })),
+    { kind: "npm-token", pattern: /\bnpm_[A-Za-z0-9]{20,255}\b/g },
     { kind: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{20,255}\b/g },
     { kind: "openai-token", pattern: /\bsk-[A-Za-z0-9_-]{20,255}\b/g },
     { kind: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
@@ -581,6 +517,18 @@ function redactMemoryContent(
         continue;
       matches.push({ kind, start, end });
     }
+  }
+  for (const match of content.matchAll(entropyCredentialCandidate)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (
+      !isHighEntropyCredential(match[0]) ||
+      matches.some(
+        (candidate) => start < candidate.end && end > candidate.start,
+      )
+    )
+      continue;
+    matches.push({ kind: "high-entropy-credential", start, end });
   }
   matches.sort((left, right) => left.start - right.start);
   let redacted = content;
@@ -940,8 +888,10 @@ export function createMemoryStoreModule(
               }
               return success({
                 state: "created" as const,
-                memory: takeover,
-                contradictionIds: [],
+                memory: updated.value.memory,
+                contradictionIds: updated.value.memory.relationships
+                  .filter(({ kind }) => kind === "pi/contradicts")
+                  .map(({ targetId }) => targetId),
                 redactions: scanned.value.redactions,
                 replayed: false,
               });
@@ -1070,6 +1020,7 @@ export function createMemoryStoreModule(
               revision: memory.revision,
             },
             contradictionIds,
+            candidateLimit(options),
           );
           if (!stored.ok)
             return stored.error.code === "revision_conflict"
@@ -1700,6 +1651,8 @@ export function createMemoryStoreModule(
                   })
                   .map(({ memory }) => memory.id)
               : [];
+          } else if (request.type === "promote") {
+            contradictionIds = [];
           }
           const memory: MemoryRecord = {
             ...current.value.memory,
@@ -1787,7 +1740,7 @@ export function createMemoryStoreModule(
           }
           return success({
             type: request.type,
-            memory,
+            memory: updated.value.memory,
             replayed: false,
           } as const);
         },
@@ -2626,6 +2579,11 @@ export function createMemoryStoreModule(
               return memoryFailure(
                 "invalid_request",
                 "Memory request ID was already used for different intent.",
+              );
+            if (committed.error.code === "preview_expired")
+              return memoryFailure(
+                "import_preview_expired",
+                "Memory import preview expired before commit.",
               );
             return memoryFailure(
               "storage_failed",

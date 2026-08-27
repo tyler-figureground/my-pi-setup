@@ -23,6 +23,7 @@ import type {
   SessionBroker,
 } from "./src/messaging/index.ts";
 import { createInMemoryMemoryPersistenceAdapter } from "./src/memory/memory-persistence.ts";
+import type { WorkspaceLease } from "./src/workspaces/index.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -333,6 +334,44 @@ test("Phase 6 flags off leave surfaces and storage paths inert", async () => {
   }
 });
 
+test("untrusted projects leave Phase 6 messaging and Memory surfaces inert", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pi-phase6-untrusted-"));
+  try {
+    const harness = createHarness();
+    harness.context.cwd = root;
+    harness.context.isProjectTrusted = () => false;
+    let brokerModules = 0;
+    createPlatformExtension({
+      agentDir: path.join(root, "agent"),
+      flags: {
+        ...defaultPlatformFlags,
+        messaging: true,
+        memory: true,
+      },
+      createSessionBrokerModule: () => {
+        brokerModules += 1;
+        throw new Error("untrusted project broker must not be created");
+      },
+    })(harness.api);
+
+    await harness.emit("session_start", {
+      type: "session_start",
+      reason: "startup",
+    });
+
+    assert.equal(brokerModules, 0);
+    assert.deepEqual([...harness.commands], []);
+    assert.deepEqual([...harness.tools], []);
+    assert.deepEqual(harness.activeTools(), ["read"]);
+    await pathDoesNotExist(
+      path.join(root, "agent", "state", "platform.sqlite"),
+    );
+    await pathDoesNotExist(path.join(root, "agent", "state", "memory.sqlite"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("first messaging send materializes the shared Artifact store", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-phase6-send-"));
   const agentDir = path.join(root, "agent");
@@ -521,6 +560,98 @@ test("workspace Memory default diagnoses absence without automatic work", async 
   }
 });
 
+test("workspace Memory revalidates host lease owner and fence before persistence", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "pi-phase6-workspace-fence-"),
+  );
+  try {
+    const harness = createHarness();
+    harness.context.cwd = root;
+    const project = {
+      kind: "git" as const,
+      projectId: "git:workspace-project",
+      requestedCwd: root,
+      canonicalCwd: root,
+      cwdWasAliased: false,
+      commonGitDir: path.join(root, ".git"),
+      worktreeGitDir: path.join(root, ".git", "worktrees", "workspace-one"),
+      repositoryRoot: root,
+      mainWorktree: root,
+      currentWorktree: root,
+      bare: false as const,
+    };
+    const workspace = (owner: WorkspaceLease["owner"], fence: number) =>
+      ({
+        workspaceId: "workspace-one",
+        owner,
+        fence,
+        expiresAt: Date.now() + 60_000,
+        snapshot: {
+          workspaceId: "workspace-one",
+          projectId: project.projectId,
+          projectRoot: root,
+          path: root,
+          branch: "pi-agent/workspace-one",
+          baseCommit: "a".repeat(40),
+          currentCommit: "b".repeat(40),
+          state: "leased",
+          createdAt: 1,
+          updatedAt: 2,
+          lease: {
+            owner,
+            fence,
+            expiresAt: Date.now() + 60_000,
+            role: "subagent",
+            projectTrusted: true,
+          },
+        },
+      }) satisfies WorkspaceLease;
+    const original = workspace(
+      { sessionId: "phase-6-session", agentId: "agent-one" },
+      7,
+    );
+    const rolled = workspace(
+      { sessionId: "phase-6-session", agentId: "agent-two" },
+      8,
+    );
+    let providerCalls = 0;
+    let persistenceCalls = 0;
+    createPlatformExtension({
+      agentDir: path.join(root, "agent"),
+      flags: { ...defaultPlatformFlags, memory: true },
+      createProjectIdentity: () => ({
+        resolve: async () => ({ ok: true, value: project }),
+      }),
+      currentWorkspaceLeaseProvider: {
+        current: async () => (++providerCalls === 1 ? original : rolled),
+      },
+      createMemoryPersistenceAdapter: () => {
+        persistenceCalls += 1;
+        return {
+          ok: true,
+          value: createInMemoryMemoryPersistenceAdapter(),
+        };
+      },
+    })(harness.api);
+    await harness.emit("session_start", {
+      type: "session_start",
+      reason: "startup",
+    });
+
+    await assert.rejects(
+      harness.tools.get("memory_search").execute("workspace-rollover", {
+        text: "query",
+        within: ["workspace"],
+      }),
+      /lease is no longer current/i,
+    );
+    assert.equal(providerCalls, 2);
+    assert.equal(persistenceCalls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resumed Plan state reconciles Phase 6 tools before broker attach", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-phase6-plan-"));
   try {
@@ -695,7 +826,7 @@ test("reload replaces messaging proof, adapter, and broker generation", async ()
   }
 });
 
-test("teardown aggregates messaging failure after stopping Memory and lifecycle", async () => {
+test("teardown aggregates messaging and degraded lifecycle failures after all cleanup", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-phase6-teardown-"));
   try {
     const harness = createHarness();
@@ -712,8 +843,26 @@ test("teardown aggregates messaging failure after stopping Memory and lifecycle"
         acquire: async <T>() => undefined as T,
         async shutdown(reason) {
           events.push(`lifecycle:${reason}`);
-          assert.equal(harness.activeTools().includes("memory_search"), false);
-          return { reason, status: "clean", closed: [], failures: [] };
+          for (const tool of [
+            "session_list",
+            "session_send",
+            "memory_search",
+          ]) {
+            assert.equal(harness.activeTools().includes(tool), false, tool);
+          }
+          return {
+            reason,
+            status: "degraded",
+            closed: [],
+            failures: [
+              {
+                resourceId: "phase6-daemon",
+                phase: "close",
+                kind: "timeout",
+                message: "daemon close timed out",
+              },
+            ],
+          };
         },
       }),
       createSessionDeliveryAdapter: () => ({
@@ -767,6 +916,9 @@ test("teardown aggregates messaging failure after stopping Memory and lifecycle"
         error instanceof AggregateError &&
         error.errors.some((failure) =>
           /broker close failed/.test(String(failure)),
+        ) &&
+        error.errors.some((failure) =>
+          /phase6-daemon|daemon close timed out/.test(String(failure)),
         ),
     );
     assert.deepEqual(events, [

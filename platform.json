@@ -8,12 +8,23 @@
   "review": true,
   "mcp": true,
   "browser": true,
+  "messaging": true,
+  "memory": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "profileName": "phase5",
     "allowedOrigins": [],
     "allowLoopback": false
+  },
+  "messagingSettings": {
+    "discoverableBy": "same-project",
+    "acceptsFrom": "same-project"
+  },
+  "memorySettings": {
+    "defaultScope": "project",
+    "automaticRecall": false,
+    "automaticExtraction": false
   },
   "plan": {
     "defaultScope": "user",

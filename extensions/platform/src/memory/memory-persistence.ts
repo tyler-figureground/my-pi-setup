@@ -1,8 +1,9 @@
 import { success, type JsonObject, type Outcome } from "../core/result.ts";
+import { contradictionClaim, isConservativeNearDuplicate } from "./analysis.ts";
 import type { MemoryRecord } from "./model.ts";
 
 export interface MemoryPersistenceError {
-  readonly code: "storage_failed" | "revision_conflict";
+  readonly code: "storage_failed" | "revision_conflict" | "preview_expired";
   readonly message: string;
   readonly retryable: boolean;
 }
@@ -62,6 +63,7 @@ export interface MemoryPersistenceAdapter {
     entry: PersistedMemory,
     receipt: MemoryIdempotencyReceipt,
     contradictionIds?: readonly string[],
+    nearDuplicateLimit?: number,
   ): Promise<
     MemoryPersistenceResult<
       | { readonly created: true }
@@ -95,7 +97,7 @@ export interface MemoryPersistenceAdapter {
     expectedRevision: number,
     receipt: MemoryIdempotencyReceipt,
     contradictionIds?: readonly string[],
-  ): Promise<MemoryPersistenceResult<void>>;
+  ): Promise<MemoryPersistenceResult<PersistedMemory>>;
   forget(
     id: string,
     expectedRevision: number | undefined,
@@ -173,7 +175,12 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
       purgeExpired(now);
       return success(undefined);
     },
-    async create(entry, receipt, contradictionIds = []) {
+    async create(
+      entry,
+      receipt,
+      contradictionIds = [],
+      nearDuplicateLimit = 64,
+    ) {
       const priorReceipt = receipts.get(receipt.requestId);
       if (priorReceipt) {
         if (
@@ -206,14 +213,43 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
           receipt: structuredClone(priorReceipt),
         });
       }
-      const existing = [...entries.values()].find(
+      const claim = contradictionClaim(entry.memory.content);
+      const scoped = [...entries.values()].filter(
         (candidate) =>
           JSON.stringify(candidate.memory.scope) ===
             JSON.stringify(entry.memory.scope) &&
           candidate.memory.kind.id === entry.memory.kind.id &&
           candidate.memory.kind.version === entry.memory.kind.version &&
-          candidate.contentDigest === entry.contentDigest,
+          (candidate.memory.expiresAt === undefined ||
+            candidate.memory.expiresAt > entry.memory.updatedAt),
       );
+      const exact = scoped.find(
+        (candidate) => candidate.contentDigest === entry.contentDigest,
+      );
+      const near = scoped
+        .sort(
+          (left, right) =>
+            right.memory.updatedAt - left.memory.updatedAt ||
+            left.memory.id.localeCompare(right.memory.id),
+        )
+        .slice(0, nearDuplicateLimit)
+        .find((candidate) => {
+          const other = contradictionClaim(candidate.memory.content);
+          if (
+            claim &&
+            other?.subject === claim.subject &&
+            other.value !== claim.value
+          )
+            return false;
+          return (
+            candidate.normalizedContent === entry.normalizedContent ||
+            isConservativeNearDuplicate(
+              candidate.normalizedContent,
+              entry.normalizedContent,
+            )
+          );
+        });
+      const existing = exact ?? near;
       if (existing) {
         const duplicateReceipt = {
           ...structuredClone(receipt),
@@ -309,8 +345,31 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
             retryable: false,
           },
         };
+      let storedEntry = entry;
       if (contradictionIds) {
-        const targets = new Set(contradictionIds);
+        const targets = new Set<string>();
+        const claim =
+          entry.memory.status === "active"
+            ? contradictionClaim(entry.memory.content)
+            : undefined;
+        if (claim) {
+          for (const [targetId, target] of entries) {
+            if (
+              targetId === entry.memory.id ||
+              target.memory.status !== "active" ||
+              JSON.stringify(target.memory.scope) !==
+                JSON.stringify(entry.memory.scope) ||
+              target.memory.kind.id !== entry.memory.kind.id ||
+              target.memory.kind.version !== entry.memory.kind.version ||
+              (target.memory.expiresAt !== undefined &&
+                target.memory.expiresAt <= entry.memory.updatedAt)
+            )
+              continue;
+            const other = contradictionClaim(target.memory.content);
+            if (other?.subject === claim.subject && other.value !== claim.value)
+              targets.add(targetId);
+          }
+        }
         for (const [targetId, target] of entries) {
           if (targetId === entry.memory.id) continue;
           const relationships = target.memory.relationships.filter(
@@ -338,10 +397,24 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
             });
           }
         }
+        const memory = {
+          ...entry.memory,
+          relationships: [...targets].map((targetId) => ({
+            kind: "pi/contradicts" as const,
+            targetId,
+          })),
+        };
+        storedEntry = {
+          ...entry,
+          memory,
+          revisions: entry.revisions.map((revision) =>
+            revision.revision === memory.revision ? memory : revision,
+          ),
+        };
       }
-      entries.set(entry.memory.id, structuredClone(entry));
+      entries.set(entry.memory.id, structuredClone(storedEntry));
       receipts.set(receipt.requestId, structuredClone(receipt));
-      return success(undefined);
+      return success(structuredClone(storedEntry));
     },
     async forget(id, expectedRevision, receipt) {
       const current = entries.get(id);
