@@ -486,6 +486,7 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
           .filter(
             (record) =>
               record.collection === query.collection &&
+              (query.afterKey === undefined || record.key > query.afterKey) &&
               (query.keyPrefix === undefined ||
                 record.key.startsWith(query.keyPrefix)),
           )

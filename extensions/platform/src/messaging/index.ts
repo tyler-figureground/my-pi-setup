@@ -21,6 +21,22 @@ const MESSAGE_COLLECTION = "session-broker.messages";
 const REQUEST_COLLECTION = "session-broker.requests";
 const MAILBOX_COLLECTION = "session-broker.mailboxes";
 const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const MAX_DURABLE_RECEIPT_BYTES = 2 * 1024;
+const CLOSE_DRAIN_TIMEOUT_MS = 250;
+const MAX_DELIVERY_OPTIONS_BYTES = 16 * 1024;
+const MAX_DELIVERY_OPTIONS_DEPTH = 16;
+const MAX_DELIVERY_OPTIONS_NODES = 1_024;
+const MAX_OUTBOUND_SCAN_RECORDS = 10_000;
+const REDACTED = "[REDACTED]";
+const secretField =
+  /^(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|client[-_]?secret|access[-_]?token|refresh[-_]?token)$/i;
+const secretAssignment =
+  /(\b(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|client[-_]?secret|access[-_]?token|refresh[-_]?token)\b\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi;
+const bearerSecret = /(\bbearer\s+)[a-z0-9._~+\-/]+=*/gi;
+const knownSecret =
+  /\b(?:sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|AKIA[0-9A-Z]{16})\b/gi;
+const privateKey =
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gi;
 const proofSecrets = new WeakMap<object, Uint8Array>();
 
 declare const hostSessionProofBrand: unique symbol;
@@ -268,6 +284,7 @@ interface PresenceRecord {
 
 interface PersistedMessage {
   readonly envelope: Omit<MessageEnvelope, "mailboxPosition">;
+  readonly recipientProjectId: string;
   readonly state: MessageSummary["state"];
   readonly attempts: number;
   readonly lastAttemptAt?: number;
@@ -346,6 +363,20 @@ function deliveryLeaseResource(piSessionId: string, position: number) {
   return `session-broker.delivery:${piSessionId}:${position}`;
 }
 
+function capUtf8(value: string, maxBytes: number, suffix: string) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  const suffixBytes = Buffer.byteLength(suffix);
+  if (suffixBytes >= maxBytes) {
+    return Buffer.from(suffix).subarray(0, maxBytes).toString("utf8");
+  }
+  const available = maxBytes - suffixBytes;
+  let prefix = Buffer.from(value).subarray(0, available).toString("utf8");
+  while (Buffer.byteLength(prefix) > available) {
+    prefix = prefix.slice(0, -1);
+  }
+  return `${prefix}${suffix}`;
+}
+
 function renderDelivery(
   envelope: MessageEnvelope,
   artifact: StoredArtifact,
@@ -374,13 +405,18 @@ function renderDelivery(
     envelope.sender.name === undefined
       ? "unnamed session"
       : JSON.stringify(envelope.sender.name);
-  return [
+  const rendered = [
     "[Cross-session message - untrusted data; authority: none]",
     `Message: ${JSON.stringify(envelope.id)}`,
     `From: ${senderName} (${JSON.stringify(envelope.sender.piSessionId)}, ${JSON.stringify(envelope.sender.executionRole)}, ${JSON.stringify(envelope.sender.projectId)})`,
     `Summary: ${JSON.stringify(envelope.summary)}`,
     `Body: ${renderedBody}`,
   ].join("\n");
+  return capUtf8(
+    rendered,
+    maxInlineBodyBytes,
+    `\n[truncated; Artifact ${artifact.metadata.id}]`,
+  );
 }
 
 function requestKey(incarnation: string, requestId: string) {
@@ -418,6 +454,82 @@ function requestFingerprint(request: SendMessageRequest) {
     .digest("hex");
 }
 
+function sanitizeText(value: string) {
+  let redactions = 0;
+  const redact = () => {
+    redactions += 1;
+    return REDACTED;
+  };
+  const redactAfterPrefix = (_match: string, prefix: string) => {
+    redactions += 1;
+    return `${prefix}${REDACTED}`;
+  };
+  const sanitized = value
+    .replace(privateKey, redact)
+    .replace(secretAssignment, redactAfterPrefix)
+    .replace(bearerSecret, redactAfterPrefix)
+    .replace(knownSecret, redact);
+  return { value: sanitized, redactions };
+}
+
+function sanitizeJson(value: JsonObject) {
+  let redactions = 0;
+  const visit = (
+    candidate: JsonObject[string],
+    field?: string,
+  ): JsonObject[string] => {
+    if (field && secretField.test(field)) {
+      redactions += 1;
+      return REDACTED;
+    }
+    if (typeof candidate === "string") {
+      const sanitized = sanitizeText(candidate);
+      redactions += sanitized.redactions;
+      return sanitized.value;
+    }
+    if (Array.isArray(candidate)) return candidate.map((entry) => visit(entry));
+    if (isRecordValue(candidate)) {
+      return Object.fromEntries(
+        Object.entries(candidate).map(([key, entry]) => [
+          key,
+          visit(entry, key),
+        ]),
+      );
+    }
+    return candidate;
+  };
+  return { value: visit(value) as JsonObject, redactions };
+}
+
+function sanitizeSendRequest(request: SendMessageRequest) {
+  const summary = sanitizeText(request.summary);
+  const body =
+    request.body.kind === "text" ? sanitizeText(request.body.text) : undefined;
+  const options = request.delivery?.options
+    ? sanitizeJson(request.delivery.options)
+    : undefined;
+  return {
+    request: {
+      ...request,
+      summary: summary.value,
+      body:
+        request.body.kind === "text"
+          ? { ...request.body, text: body!.value }
+          : request.body,
+      ...(request.delivery
+        ? {
+            delivery: {
+              ...request.delivery,
+              ...(options ? { options: options.value } : {}),
+            },
+          }
+        : {}),
+    },
+    redactions:
+      summary.redactions + (body?.redactions ?? 0) + (options?.redactions ?? 0),
+  };
+}
+
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return (
     typeof value === "object" &&
@@ -434,24 +546,52 @@ function hasOnlyKeys(
   return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-function isJsonValue(value: unknown): boolean {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return true;
-  }
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) {
-    return (
-      Object.keys(value).length === value.length && value.every(isJsonValue)
-    );
-  }
+function isValidDeliveryReceipt(value: unknown): value is DeliveryReceipt {
   return (
     isRecordValue(value) &&
-    Object.values(value).every((entry) => isJsonValue(entry))
+    hasOnlyKeys(value, ["state", "durableReceipt"]) &&
+    (value.state === "accepted" || value.state === "already-present") &&
+    typeof value.durableReceipt === "string" &&
+    value.durableReceipt.length > 0 &&
+    Buffer.byteLength(value.durableReceipt) <= MAX_DURABLE_RECEIPT_BYTES &&
+    !value.durableReceipt.includes("\0")
   );
+}
+
+function isBoundedJsonValue(value: unknown) {
+  let bytes = 0;
+  let nodes = 0;
+  const seen = new WeakSet<object>();
+  const visit = (candidate: unknown, depth: number): boolean => {
+    nodes += 1;
+    if (
+      nodes > MAX_DELIVERY_OPTIONS_NODES ||
+      depth > MAX_DELIVERY_OPTIONS_DEPTH
+    ) {
+      return false;
+    }
+    if (candidate === null || typeof candidate === "boolean") return true;
+    if (typeof candidate === "number") return Number.isFinite(candidate);
+    if (typeof candidate === "string") {
+      bytes += Buffer.byteLength(candidate);
+      return bytes <= MAX_DELIVERY_OPTIONS_BYTES;
+    }
+    if (typeof candidate !== "object" || seen.has(candidate)) return false;
+    seen.add(candidate);
+    if (Array.isArray(candidate)) {
+      if (Object.keys(candidate).length !== candidate.length) return false;
+      return candidate.every((entry) => visit(entry, depth + 1));
+    }
+    if (!isRecordValue(candidate)) return false;
+    for (const [key, entry] of Object.entries(candidate)) {
+      bytes += Buffer.byteLength(key);
+      if (bytes > MAX_DELIVERY_OPTIONS_BYTES || !visit(entry, depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return visit(value, 0);
 }
 
 function validateSendRequest(request: unknown, limits: SessionBrokerLimits) {
@@ -553,7 +693,7 @@ function validateSendRequest(request: unknown, limits: SessionBrokerLimits) {
       request.delivery.version !== 1 ||
       (request.delivery.options !== undefined &&
         (!isRecordValue(request.delivery.options) ||
-          !isJsonValue(request.delivery.options)))
+          !isBoundedJsonValue(request.delivery.options)))
     ) {
       return brokerFailure(
         "invalid_request",
@@ -602,6 +742,33 @@ function snapshotSendRequest(request: SendMessageRequest): SendMessageRequest {
   };
 }
 
+function snapshotHostSessionBinding(
+  binding: HostSessionBinding,
+): HostSessionBinding {
+  return {
+    piSessionId: binding.piSessionId,
+    proof: binding.proof,
+    executionRole: binding.executionRole,
+    project: structuredClone(binding.project),
+    cwd: binding.cwd,
+    exposure: { ...binding.exposure },
+  };
+}
+
+function snapshotRuntimeSnapshot(snapshot: SessionRuntimeSnapshot) {
+  return {
+    ...(snapshot.name === undefined ? {} : { name: snapshot.name }),
+    status: snapshot.status,
+    capabilities: snapshot.capabilities.map((capability) => ({
+      id: capability.id,
+      version: capability.version,
+      ...(capability.parameters === undefined
+        ? {}
+        : { parameters: structuredClone(capability.parameters) }),
+    })),
+  };
+}
+
 async function record(state: StateStore, collection: string, key: string) {
   const queried = await state.query({ type: "record", collection, key });
   if (!queried.ok) return queried;
@@ -646,6 +813,21 @@ async function findMailboxEvent(
   }
 }
 
+async function settleWithin(
+  promise: Promise<unknown> | undefined,
+  timeoutMs: number,
+) {
+  if (!promise) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 export function issueHostSessionProof(): HostSessionProof {
   const proof = Object.freeze({}) as HostSessionProof;
   proofSecrets.set(proof, randomBytes(32));
@@ -682,6 +864,7 @@ export function createSessionBrokerModule(
 
   return {
     async attach(binding, delivery) {
+      binding = snapshotHostSessionBinding(binding);
       const secret =
         typeof binding.proof === "object" && binding.proof !== null
           ? proofSecrets.get(binding.proof)
@@ -692,6 +875,12 @@ export function createSessionBrokerModule(
           "Host session binding is invalid.",
         );
       }
+      if (binding.executionRole !== "parent") {
+        return brokerFailure(
+          "invalid_request",
+          "Only Parent sessions may own a SessionBroker.",
+        );
+      }
 
       const proofVerifier = createHash("sha256").update(secret).digest("hex");
       const incarnation = createHash("sha256")
@@ -699,7 +888,7 @@ export function createSessionBrokerModule(
         .update(id())
         .digest("hex");
       const owner = proofVerifier;
-      const snapshot = delivery.snapshot();
+      const snapshot = snapshotRuntimeSnapshot(delivery.snapshot());
       const presence: PresenceRecord = {
         incarnation,
         proofVerifier,
@@ -770,6 +959,7 @@ export function createSessionBrokerModule(
       let unsubscribe = () => {};
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let refreshes = Promise.resolve();
+      const activeSends = new Map<string, Promise<void>>();
 
       const verifyIdentity = async () => {
         const queried = await options.state.query({
@@ -845,7 +1035,8 @@ export function createSessionBrokerModule(
       };
 
       const queuePresenceRefresh = (nextSnapshot: SessionRuntimeSnapshot) => {
-        refreshes = refreshes.then(() => refreshPresence(nextSnapshot));
+        const ownedSnapshot = snapshotRuntimeSnapshot(nextSnapshot);
+        refreshes = refreshes.then(() => refreshPresence(ownedSnapshot));
       };
 
       const resolveRecipient = async (address: SessionAddress) => {
@@ -907,6 +1098,7 @@ export function createSessionBrokerModule(
         lastErrorCode?: string,
         durableReceipt?: string,
       ) => {
+        if (closed || identityLost) return false;
         const terminal =
           nextState === "delivered" ||
           nextState === "failed" ||
@@ -917,6 +1109,7 @@ export function createSessionBrokerModule(
         if (mailbox && (!mailbox.ok || !mailbox.value)) return false;
         const finished: PersistedMessage = {
           envelope: claimedMessage.envelope,
+          recipientProjectId: claimedMessage.recipientProjectId,
           state: nextState,
           attempts: claimedMessage.attempts,
           ...(claimedMessage.lastAttemptAt === undefined
@@ -1003,11 +1196,15 @@ export function createSessionBrokerModule(
             }
 
             const attemptedAt = clock();
+            const attemptsExhausted =
+              pending.attempts >= limits.maxDeliveryAttempts;
             const claimedMessage: PersistedMessage = {
               ...pending,
               state: "claimed",
-              attempts: pending.attempts + 1,
-              lastAttemptAt: attemptedAt,
+              attempts: attemptsExhausted
+                ? pending.attempts
+                : pending.attempts + 1,
+              ...(attemptsExhausted ? {} : { lastAttemptAt: attemptedAt }),
             };
             const claim = await options.state.transact({
               transactionId: `session-broker.delivery-claim:${incarnation}:${event.eventId}:${id()}`,
@@ -1054,11 +1251,43 @@ export function createSessionBrokerModule(
             );
             if (claimFence === undefined || !claimedRecord) return;
 
+            if (attemptsExhausted) {
+              const exhausted = await finishDelivery(
+                event.eventId,
+                event.position,
+                claimedRecord.version,
+                claimedMessage,
+                claimFence,
+                "failed",
+                claimedMessage.lastErrorCode ?? "delivery_attempts_exhausted",
+              );
+              if (!exhausted) return;
+              continue;
+            }
+
+            if (
+              claimedMessage.recipientProjectId !== binding.project.projectId
+            ) {
+              const quarantined = await finishDelivery(
+                event.eventId,
+                event.position,
+                claimedRecord.version,
+                claimedMessage,
+                claimFence,
+                "failed",
+                "recipient_project_changed",
+              );
+              if (!quarantined) return;
+              continue;
+            }
+
             const artifact = await options.artifacts.get(
               claimedMessage.envelope.body.id,
             );
             if (!artifact.ok) {
+              const expired = artifact.error.code === "artifact_expired";
               const terminal =
+                expired ||
                 claimedMessage.attempts >= limits.maxDeliveryAttempts;
               await finishDelivery(
                 event.eventId,
@@ -1066,8 +1295,8 @@ export function createSessionBrokerModule(
                 claimedRecord.version,
                 claimedMessage,
                 claimFence,
-                terminal ? "failed" : "queued",
-                "artifact_failed",
+                expired ? "expired" : terminal ? "failed" : "queued",
+                expired ? "artifact_expired" : "artifact_failed",
               );
               if (!terminal) return;
               continue;
@@ -1098,6 +1327,21 @@ export function createSessionBrokerModule(
               });
             }
             if (delivered.ok) {
+              if (!isValidDeliveryReceipt(delivered.value)) {
+                const terminal =
+                  claimedMessage.attempts >= limits.maxDeliveryAttempts;
+                const rejected = await finishDelivery(
+                  event.eventId,
+                  event.position,
+                  claimedRecord.version,
+                  claimedMessage,
+                  claimFence,
+                  terminal ? "failed" : "queued",
+                  "invalid_delivery_receipt",
+                );
+                if (!rejected || !terminal) return;
+                continue;
+              }
               const acknowledged = await finishDelivery(
                 event.eventId,
                 event.position,
@@ -1147,7 +1391,7 @@ export function createSessionBrokerModule(
         pumpController.abort(new Error("Session broker is closing."));
         closeResult = (async () => {
           await refreshes;
-          await pumpPromise;
+          await settleWithin(pumpPromise, CLOSE_DRAIN_TIMEOUT_MS);
           const current = await record(
             options.state,
             PRESENCE_COLLECTION,
@@ -1320,32 +1564,275 @@ export function createSessionBrokerModule(
           const valid = validateSendRequest(request, limits);
           if (!valid.ok) return valid;
           request = snapshotSendRequest(request);
-          const identity = await verifyIdentity();
-          if (!identity.ok) return identity;
           const fingerprint = requestFingerprint(request);
-          const persistedKey = requestKey(incarnation, request.requestId);
-          const priorRequest = await record(
-            options.state,
-            REQUEST_COLLECTION,
-            persistedKey,
-          );
-          if (!priorRequest.ok) {
-            return brokerFailure(
-              "storage_failed",
-              priorRequest.error.message,
-              priorRequest.error.retryable,
+          const sanitized = sanitizeSendRequest(request);
+          request = sanitized.request;
+          const sendKey = request.requestId;
+          const previousSend = activeSends.get(sendKey) ?? Promise.resolve();
+          let releaseLane = () => {};
+          const lane = new Promise<void>((resolve) => {
+            releaseLane = resolve;
+          });
+          activeSends.set(sendKey, lane);
+          await previousSend;
+          try {
+            if (signal?.aborted) {
+              return brokerFailure("cancelled", "Message send was cancelled.");
+            }
+            const identity = await verifyIdentity();
+            if (!identity.ok) return identity;
+            const persistedKey = requestKey(incarnation, request.requestId);
+            const priorRequest = await record(
+              options.state,
+              REQUEST_COLLECTION,
+              persistedKey,
             );
-          }
-          if (priorRequest.value) {
-            const persisted = parseRequest(priorRequest.value);
-            if (persisted.fingerprint !== fingerprint) {
+            if (!priorRequest.ok) {
               return brokerFailure(
-                "invalid_request",
-                "Host request ID was already used for different content.",
+                "storage_failed",
+                priorRequest.error.message,
+                priorRequest.error.retryable,
               );
             }
-            const renewed = await options.state.transact({
-              transactionId: `session-broker.replay:${incarnation}:${persistedKey}:${id()}`,
+            if (priorRequest.value) {
+              const persisted = parseRequest(priorRequest.value);
+              if (persisted.fingerprint !== fingerprint) {
+                return brokerFailure(
+                  "invalid_request",
+                  "Host request ID was already used for different content.",
+                );
+              }
+              const renewed = await options.state.transact({
+                transactionId: `session-broker.replay:${incarnation}:${persistedKey}:${id()}`,
+                operations: [
+                  {
+                    type: "renew-lease",
+                    resource: leaseResource(binding.piSessionId),
+                    owner,
+                    fence,
+                    ttlMs: limits.sessionTtlMs,
+                    metadata: { incarnation },
+                  },
+                ],
+              });
+              if (!renewed.ok) {
+                if (renewed.error.code === "LEASE_LOST") {
+                  identityLost = true;
+                  return brokerFailure(
+                    "identity_lost",
+                    "Session ownership fence is no longer current.",
+                  );
+                }
+                return brokerFailure(
+                  "storage_failed",
+                  renewed.error.message,
+                  renewed.error.retryable,
+                );
+              }
+              const deliveries: SendMessageReceipt["deliveries"][number][] = [];
+              for (const item of persisted.deliveries) {
+                const mailboxEvent = await findMailboxEvent(
+                  options.state,
+                  item.recipient.piSessionId,
+                  item.messageId,
+                );
+                if (!mailboxEvent.ok) {
+                  return brokerFailure(
+                    "storage_failed",
+                    mailboxEvent.error.message,
+                    mailboxEvent.error.retryable,
+                  );
+                }
+                const event = mailboxEvent.value;
+                if (!event) {
+                  return brokerFailure(
+                    "storage_failed",
+                    `Idempotent mailbox receipt ${JSON.stringify(item.messageId)} is missing.`,
+                  );
+                }
+                const storedMessage = await record(
+                  options.state,
+                  MESSAGE_COLLECTION,
+                  item.messageId,
+                );
+                if (!storedMessage.ok || !storedMessage.value) {
+                  return brokerFailure(
+                    "storage_failed",
+                    storedMessage.ok
+                      ? `Idempotent message ${JSON.stringify(item.messageId)} is missing.`
+                      : storedMessage.error.message,
+                    storedMessage.ok ? false : storedMessage.error.retryable,
+                  );
+                }
+                deliveries.push({
+                  recipient: item.recipient,
+                  messageId: item.messageId,
+                  mailboxPosition: event.position,
+                  state: "queued",
+                });
+              }
+              return success({
+                requestId: request.requestId,
+                body: persisted.body,
+                deliveries,
+                replayed: true,
+              });
+            }
+            const deliveryDirective = request.delivery ?? {
+              mode: "pi/inbox",
+              version: 1,
+            };
+            const recipients: PresenceRecord[] = [];
+            for (const address of request.recipients) {
+              const recipient = await resolveRecipient(address);
+              if (!recipient.ok) return recipient;
+              const capabilityId = `pi.delivery/${deliveryDirective.mode.replace(/^pi\//, "")}`;
+              if (
+                !recipient.value.snapshot.capabilities.some(
+                  (capability) =>
+                    (capability.id === capabilityId ||
+                      capability.id === deliveryDirective.mode) &&
+                    capability.version === deliveryDirective.version,
+                )
+              ) {
+                return brokerFailure(
+                  "capability_unavailable",
+                  `Recipient does not advertise ${deliveryDirective.mode} v${deliveryDirective.version}.`,
+                );
+              }
+              recipients.push(recipient.value);
+            }
+
+            const mailboxes: Array<{
+              readonly record: StateRecord | null;
+              readonly pending: number;
+            }> = [];
+            for (const address of request.recipients) {
+              const mailbox = await record(
+                options.state,
+                MAILBOX_COLLECTION,
+                address.piSessionId,
+              );
+              if (!mailbox.ok) {
+                return brokerFailure(
+                  "storage_failed",
+                  mailbox.error.message,
+                  mailbox.error.retryable,
+                );
+              }
+              const pending = mailbox.value
+                ? parseMailbox(mailbox.value).pending
+                : 0;
+              if (pending >= limits.maxPendingPerRecipient) {
+                return brokerFailure(
+                  "mailbox_full",
+                  `Recipient ${JSON.stringify(address.piSessionId)} mailbox is full.`,
+                  true,
+                );
+              }
+              mailboxes.push({ record: mailbox.value, pending });
+            }
+
+            const groupId = id();
+            const wrappedBody = JSON.stringify({
+              version: 1,
+              messageGroupId: groupId,
+              body:
+                request.body.kind === "text"
+                  ? {
+                      kind: "text",
+                      text: request.body.text,
+                      mediaType: request.body.mediaType ?? "text/plain",
+                    }
+                  : {
+                      kind: "bytes",
+                      bytes: Buffer.from(request.body.bytes).toString("base64"),
+                      mediaType: request.body.mediaType,
+                    },
+            });
+            const artifact = await options.artifacts.put({
+              body: wrappedBody,
+              mediaType: "application/vnd.pi.session-message+json",
+              metadata: {
+                format: "pi.session-message-body",
+                version: 1,
+                classification:
+                  sanitized.redactions > 0 ? "sanitized" : "secret-scanned",
+                redactions: sanitized.redactions,
+              },
+              expiresAt: clock() + ARTIFACT_RETENTION_MS,
+            });
+            if (!artifact.ok) {
+              return brokerFailure(
+                "artifact_failed",
+                artifact.error.message,
+                artifact.error.retryable,
+              );
+            }
+
+            const senderPresence = await record(
+              options.state,
+              PRESENCE_COLLECTION,
+              binding.piSessionId,
+            );
+            if (!senderPresence.ok) {
+              return brokerFailure(
+                "storage_failed",
+                senderPresence.error.message,
+                senderPresence.error.retryable,
+              );
+            }
+            if (!senderPresence.value) {
+              return brokerFailure(
+                "identity_lost",
+                "Session presence is lost.",
+              );
+            }
+            const currentSender = parsePresence(senderPresence.value);
+            const sentAt = clock();
+            const messages = request.recipients.map((address, index) => {
+              const messageId = id();
+              const message: PersistedMessage = {
+                envelope: {
+                  id: messageId,
+                  sender: {
+                    piSessionId: binding.piSessionId,
+                    incarnation,
+                    executionRole: binding.executionRole,
+                    projectId: binding.project.projectId,
+                    ...(currentSender.snapshot.name === undefined
+                      ? {}
+                      : { name: currentSender.snapshot.name }),
+                  },
+                  recipient: { piSessionId: address.piSessionId },
+                  sentAt,
+                  summary: request.summary,
+                  body: artifact.value,
+                  delivery: deliveryDirective,
+                  trust: "untrusted",
+                  authority: "none",
+                },
+                recipientProjectId: recipients[index]!.projectId,
+                state: "queued",
+                attempts: 0,
+              };
+              return {
+                address,
+                recipient: recipients[index]!,
+                mailbox: mailboxes[index]!,
+                message,
+              };
+            });
+            const persistedRequest: PersistedRequest = {
+              fingerprint,
+              body: artifact.value,
+              deliveries: messages.map(({ address, message }) => ({
+                recipient: address,
+                messageId: message.envelope.id,
+              })),
+            };
+            const committed = await options.state.transact({
+              transactionId: `session-broker.send:${incarnation}:${requestKey(incarnation, request.requestId)}`,
               operations: [
                 {
                   type: "renew-lease",
@@ -1355,10 +1842,42 @@ export function createSessionBrokerModule(
                   ttlMs: limits.sessionTtlMs,
                   metadata: { incarnation },
                 },
+                ...messages.flatMap(({ address, mailbox, message }) => [
+                  {
+                    type: "put-record" as const,
+                    collection: MESSAGE_COLLECTION,
+                    key: message.envelope.id,
+                    metadata: messageMetadata(message),
+                    expectedVersion: null,
+                  },
+                  {
+                    type: "append-event" as const,
+                    stream: mailboxStream(address.piSessionId),
+                    eventId: message.envelope.id,
+                    eventType: "mailbox.message-enqueued",
+                    metadata: { messageId: message.envelope.id },
+                  },
+                  {
+                    type: "put-record" as const,
+                    collection: MAILBOX_COLLECTION,
+                    key: address.piSessionId,
+                    metadata: mailboxMetadata({
+                      pending: mailbox.pending + 1,
+                    }),
+                    expectedVersion: mailbox.record?.version ?? null,
+                  },
+                ]),
+                {
+                  type: "put-record",
+                  collection: REQUEST_COLLECTION,
+                  key: persistedKey,
+                  metadata: requestMetadata(persistedRequest),
+                  expectedVersion: null,
+                },
               ],
             });
-            if (!renewed.ok) {
-              if (renewed.error.code === "LEASE_LOST") {
+            if (!committed.ok) {
+              if (committed.error.code === "LEASE_LOST") {
                 identityLost = true;
                 return brokerFailure(
                   "identity_lost",
@@ -1367,279 +1886,30 @@ export function createSessionBrokerModule(
               }
               return brokerFailure(
                 "storage_failed",
-                renewed.error.message,
-                renewed.error.retryable,
+                committed.error.message,
+                committed.error.retryable,
               );
             }
-            const deliveries: SendMessageReceipt["deliveries"][number][] = [];
-            for (const item of persisted.deliveries) {
-              const mailboxEvent = await findMailboxEvent(
-                options.state,
-                item.recipient.piSessionId,
-                item.messageId,
-              );
-              if (!mailboxEvent.ok) {
-                return brokerFailure(
-                  "storage_failed",
-                  mailboxEvent.error.message,
-                  mailboxEvent.error.retryable,
-                );
-              }
-              const event = mailboxEvent.value;
-              if (!event) {
-                return brokerFailure(
-                  "storage_failed",
-                  `Idempotent mailbox receipt ${JSON.stringify(item.messageId)} is missing.`,
-                );
-              }
-              const storedMessage = await record(
-                options.state,
-                MESSAGE_COLLECTION,
-                item.messageId,
-              );
-              if (!storedMessage.ok || !storedMessage.value) {
-                return brokerFailure(
-                  "storage_failed",
-                  storedMessage.ok
-                    ? `Idempotent message ${JSON.stringify(item.messageId)} is missing.`
-                    : storedMessage.error.message,
-                  storedMessage.ok ? false : storedMessage.error.retryable,
-                );
-              }
-              deliveries.push({
-                recipient: item.recipient,
-                messageId: item.messageId,
-                mailboxPosition: event.position,
-                state: "queued",
-              });
+            for (const address of request.recipients) {
+              attachedPumps.get(address.piSessionId)?.();
             }
             return success({
               requestId: request.requestId,
-              body: persisted.body,
-              deliveries,
-              replayed: true,
+              body: artifact.value,
+              deliveries: messages.map(({ address, message }, index) => ({
+                recipient: address,
+                messageId: message.envelope.id,
+                mailboxPosition: committed.value.events[index]!.position,
+                state: "queued" as const,
+              })),
+              replayed: false,
             });
-          }
-          const deliveryDirective = request.delivery ?? {
-            mode: "pi/inbox",
-            version: 1,
-          };
-          const recipients: PresenceRecord[] = [];
-          for (const address of request.recipients) {
-            const recipient = await resolveRecipient(address);
-            if (!recipient.ok) return recipient;
-            const capabilityId = `pi.delivery/${deliveryDirective.mode.replace(/^pi\//, "")}`;
-            if (
-              !recipient.value.snapshot.capabilities.some(
-                (capability) =>
-                  (capability.id === capabilityId ||
-                    capability.id === deliveryDirective.mode) &&
-                  capability.version === deliveryDirective.version,
-              )
-            ) {
-              return brokerFailure(
-                "capability_unavailable",
-                `Recipient does not advertise ${deliveryDirective.mode} v${deliveryDirective.version}.`,
-              );
+          } finally {
+            releaseLane();
+            if (activeSends.get(sendKey) === lane) {
+              activeSends.delete(sendKey);
             }
-            recipients.push(recipient.value);
           }
-
-          const mailboxes: Array<{
-            readonly record: StateRecord | null;
-            readonly pending: number;
-          }> = [];
-          for (const address of request.recipients) {
-            const mailbox = await record(
-              options.state,
-              MAILBOX_COLLECTION,
-              address.piSessionId,
-            );
-            if (!mailbox.ok) {
-              return brokerFailure(
-                "storage_failed",
-                mailbox.error.message,
-                mailbox.error.retryable,
-              );
-            }
-            const pending = mailbox.value
-              ? parseMailbox(mailbox.value).pending
-              : 0;
-            if (pending >= limits.maxPendingPerRecipient) {
-              return brokerFailure(
-                "mailbox_full",
-                `Recipient ${JSON.stringify(address.piSessionId)} mailbox is full.`,
-                true,
-              );
-            }
-            mailboxes.push({ record: mailbox.value, pending });
-          }
-
-          const groupId = id();
-          const wrappedBody = JSON.stringify({
-            version: 1,
-            messageGroupId: groupId,
-            body:
-              request.body.kind === "text"
-                ? {
-                    kind: "text",
-                    text: request.body.text,
-                    mediaType: request.body.mediaType ?? "text/plain",
-                  }
-                : {
-                    kind: "bytes",
-                    bytes: Buffer.from(request.body.bytes).toString("base64"),
-                    mediaType: request.body.mediaType,
-                  },
-          });
-          const artifact = await options.artifacts.put({
-            body: wrappedBody,
-            mediaType: "application/vnd.pi.session-message+json",
-            metadata: {
-              format: "pi.session-message-body",
-              version: 1,
-              classification: "nonsecret",
-            },
-            expiresAt: clock() + ARTIFACT_RETENTION_MS,
-          });
-          if (!artifact.ok) {
-            return brokerFailure(
-              "artifact_failed",
-              artifact.error.message,
-              artifact.error.retryable,
-            );
-          }
-
-          const senderPresence = await record(
-            options.state,
-            PRESENCE_COLLECTION,
-            binding.piSessionId,
-          );
-          if (!senderPresence.ok) {
-            return brokerFailure(
-              "storage_failed",
-              senderPresence.error.message,
-              senderPresence.error.retryable,
-            );
-          }
-          if (!senderPresence.value) {
-            return brokerFailure("identity_lost", "Session presence is lost.");
-          }
-          const currentSender = parsePresence(senderPresence.value);
-          const sentAt = clock();
-          const messages = request.recipients.map((address, index) => {
-            const messageId = id();
-            const message: PersistedMessage = {
-              envelope: {
-                id: messageId,
-                sender: {
-                  piSessionId: binding.piSessionId,
-                  incarnation,
-                  executionRole: binding.executionRole,
-                  projectId: binding.project.projectId,
-                  ...(currentSender.snapshot.name === undefined
-                    ? {}
-                    : { name: currentSender.snapshot.name }),
-                },
-                recipient: { piSessionId: address.piSessionId },
-                sentAt,
-                summary: request.summary,
-                body: artifact.value,
-                delivery: deliveryDirective,
-                trust: "untrusted",
-                authority: "none",
-              },
-              state: "queued",
-              attempts: 0,
-            };
-            return {
-              address,
-              recipient: recipients[index]!,
-              mailbox: mailboxes[index]!,
-              message,
-            };
-          });
-          const persistedRequest: PersistedRequest = {
-            fingerprint,
-            body: artifact.value,
-            deliveries: messages.map(({ address, message }) => ({
-              recipient: address,
-              messageId: message.envelope.id,
-            })),
-          };
-          const committed = await options.state.transact({
-            transactionId: `session-broker.send:${incarnation}:${requestKey(incarnation, request.requestId)}`,
-            operations: [
-              {
-                type: "renew-lease",
-                resource: leaseResource(binding.piSessionId),
-                owner,
-                fence,
-                ttlMs: limits.sessionTtlMs,
-                metadata: { incarnation },
-              },
-              ...messages.flatMap(({ address, mailbox, message }) => [
-                {
-                  type: "put-record" as const,
-                  collection: MESSAGE_COLLECTION,
-                  key: message.envelope.id,
-                  metadata: messageMetadata(message),
-                  expectedVersion: null,
-                },
-                {
-                  type: "append-event" as const,
-                  stream: mailboxStream(address.piSessionId),
-                  eventId: message.envelope.id,
-                  eventType: "mailbox.message-enqueued",
-                  metadata: { messageId: message.envelope.id },
-                },
-                {
-                  type: "put-record" as const,
-                  collection: MAILBOX_COLLECTION,
-                  key: address.piSessionId,
-                  metadata: mailboxMetadata({
-                    pending: mailbox.pending + 1,
-                  }),
-                  expectedVersion: mailbox.record?.version ?? null,
-                },
-              ]),
-              {
-                type: "put-record",
-                collection: REQUEST_COLLECTION,
-                key: persistedKey,
-                metadata: requestMetadata(persistedRequest),
-                expectedVersion: null,
-              },
-            ],
-          });
-          if (!committed.ok) {
-            if (committed.error.code === "LEASE_LOST") {
-              identityLost = true;
-              return brokerFailure(
-                "identity_lost",
-                "Session ownership fence is no longer current.",
-              );
-            }
-            return brokerFailure(
-              "storage_failed",
-              committed.error.message,
-              committed.error.retryable,
-            );
-          }
-          for (const address of request.recipients) {
-            attachedPumps.get(address.piSessionId)?.();
-          }
-          return success({
-            requestId: request.requestId,
-            body: artifact.value,
-            deliveries: messages.map(({ address, message }, index) => ({
-              recipient: address,
-              messageId: message.envelope.id,
-              mailboxPosition: committed.value.events[index]!.position,
-              state: "queued" as const,
-            })),
-            replayed: false,
-          });
         },
         async messages(query = {}) {
           if (closed) {
@@ -1665,26 +1935,41 @@ export function createSessionBrokerModule(
             );
           }
           if ((query.direction ?? "inbound") === "outbound") {
-            const queriedRecords = await options.state.query({
-              type: "records",
-              collection: MESSAGE_COLLECTION,
-              limit: 1_000,
-            });
-            if (!queriedRecords.ok) {
-              return brokerFailure(
-                "storage_failed",
-                queriedRecords.error.message,
-                queriedRecords.error.retryable,
-              );
-            }
-            if (queriedRecords.value.type !== "records") {
-              return brokerFailure(
-                "storage_failed",
-                "StateStore returned an unexpected query result.",
-              );
+            const messageRecords: StateRecord[] = [];
+            let afterKey: string | undefined;
+            while (true) {
+              const queriedRecords = await options.state.query({
+                type: "records",
+                collection: MESSAGE_COLLECTION,
+                ...(afterKey === undefined ? {} : { afterKey }),
+                limit: 1_000,
+              });
+              if (!queriedRecords.ok) {
+                return brokerFailure(
+                  "storage_failed",
+                  queriedRecords.error.message,
+                  queriedRecords.error.retryable,
+                );
+              }
+              if (queriedRecords.value.type !== "records") {
+                return brokerFailure(
+                  "storage_failed",
+                  "StateStore returned an unexpected query result.",
+                );
+              }
+              messageRecords.push(...queriedRecords.value.records);
+              const last = queriedRecords.value.records.at(-1);
+              if (!last || queriedRecords.value.records.length < 1_000) break;
+              if (messageRecords.length >= MAX_OUTBOUND_SCAN_RECORDS) {
+                return brokerFailure(
+                  "invalid_request",
+                  `Outbound inspection is limited to ${MAX_OUTBOUND_SCAN_RECORDS} persisted messages.`,
+                );
+              }
+              afterKey = last.key;
             }
             const outbound: MessageSummary[] = [];
-            for (const messageRecord of queriedRecords.value.records) {
+            for (const messageRecord of messageRecords) {
               const message = parseMessage(messageRecord);
               if (
                 message.envelope.sender.piSessionId !== binding.piSessionId ||
@@ -1705,13 +1990,13 @@ export function createSessionBrokerModule(
                 );
               }
               const event = mailboxEvent.value;
-              if (!event || event.position <= (query.afterPosition ?? 0)) {
+              if (!event || event.sequence <= (query.afterPosition ?? 0)) {
                 continue;
               }
               outbound.push({
                 envelope: {
                   ...message.envelope,
-                  mailboxPosition: event.position,
+                  mailboxPosition: event.sequence,
                 },
                 state: message.state,
                 attempts: message.attempts,
@@ -1725,11 +2010,7 @@ export function createSessionBrokerModule(
             }
             outbound.sort(
               (left, right) =>
-                left.envelope.sentAt - right.envelope.sentAt ||
-                left.envelope.recipient.piSessionId.localeCompare(
-                  right.envelope.recipient.piSessionId,
-                ) ||
-                left.envelope.id.localeCompare(right.envelope.id),
+                left.envelope.mailboxPosition - right.envelope.mailboxPosition,
             );
             return success(outbound.slice(0, limit));
           }
@@ -1773,6 +2054,9 @@ export function createSessionBrokerModule(
               );
             }
             const message = parseMessage(found.value);
+            if (message.recipientProjectId !== binding.project.projectId) {
+              continue;
+            }
             if (query.state && query.state !== message.state) continue;
             summaries.push({
               envelope: {

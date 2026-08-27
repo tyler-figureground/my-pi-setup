@@ -4,7 +4,9 @@ import test from "node:test";
 import { createInMemoryArtifactStore } from "./src/core/artifacts/index.ts";
 import {
   coreMemoryKinds,
+  createHostMemoryBindingFactory,
   createMemoryStoreModule,
+  type MemoryCitationInput,
 } from "./src/memory/index.ts";
 import { createInMemoryMemoryPersistenceAdapter } from "./src/memory/memory-persistence.ts";
 
@@ -26,14 +28,74 @@ function createFixture(
     clock: () => 1_000,
     id: () => `memory-${++nextId}`,
   });
-  return module.bind({
-    executionRole: "parent",
-    project,
-    ingress: options.ingress ?? "direct-user",
-    sessionId: "session-1",
-    sourceEntryId: "entry-1",
-  });
+  const bindings = createHostMemoryBindingFactory();
+  return module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: options.ingress ?? "direct-user",
+      sessionId: "session-1",
+      sourceEntryId: "entry-1",
+    }),
+  );
 }
+
+test("host binding rejects model-shaped assertions and revalidates workspace owner and fence before mutation", async () => {
+  let currentWorkspace = {
+    workspaceId: "workspace-authority",
+    owner: { sessionId: "session-1", agentId: "agent-1" },
+    fence: 7,
+    expiresAt: 2_000,
+    snapshot: {
+      workspaceId: "workspace-authority",
+      projectId: project.projectId,
+      projectRoot: "C:/project-one",
+      path: "C:/workspace-authority",
+      branch: "agent/workspace-authority",
+      baseCommit: "a".repeat(40),
+      currentCommit: "a".repeat(40),
+      state: "leased" as const,
+      createdAt: 100,
+      updatedAt: 100,
+    },
+  };
+  const bindings = createHostMemoryBindingFactory({
+    revalidate: (binding) => ({ ...binding, workspace: currentWorkspace }),
+  });
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+    clock: () => 1_000,
+  });
+  assert.throws(
+    () =>
+      Reflect.apply(module.bind, module, [
+        { executionRole: "parent", ingress: "direct-user", project },
+      ]),
+    /host-issued Memory capability/,
+  );
+  const capability = bindings.issue({
+    executionRole: "subagent",
+    ingress: "direct-user",
+    project,
+    workspace: currentWorkspace,
+    sessionId: "session-1",
+  });
+  const memory = module.bind(capability);
+  currentWorkspace = {
+    ...currentWorkspace,
+    owner: { sessionId: "session-2", agentId: "agent-2" },
+    fence: 8,
+  };
+  const result = await memory.remember({
+    requestId: "stale-workspace-capability",
+    kind: coreMemoryKinds.decision,
+    scope: "workspace",
+    content: "A stale capability cannot mutate workspace Memory.",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "workspace_lease_lost");
+});
 
 test("remember resolves project scope and host provenance before inspection", async () => {
   const memory = createFixture();
@@ -128,6 +190,93 @@ test("remember redacts likely secrets before persistence and returns ranges only
     assert.equal(JSON.stringify(inspected.value).includes(secret), false);
 });
 
+test("exact canaries, JWTs, URL credentials, citation keys, kinds, and request IDs never persist", async () => {
+  const canary = "F11-EXACT-CANARY-7f9182";
+  const jwt =
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+  const url = "https://alice:hunter2@example.test/private";
+  let nextId = 0;
+  const artifacts = createInMemoryArtifactStore({ clock: () => 1_000 });
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts,
+    clock: () => 1_000,
+    id: () => `secret-${++nextId}`,
+    secretCanaries: [canary],
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "session-safe",
+    }),
+  );
+  const remembered = await memory.remember({
+    requestId: "secret-fields-safe-request",
+    kind: coreMemoryKinds.decision,
+    scope: "project",
+    content: `Keep ${canary}, ${jwt}, and ${url} out of storage.`,
+    citations: [{ kind: "external", locator: { url, token: jwt } }],
+  });
+  assert.equal(remembered.ok, true);
+  if (!remembered.ok) return;
+  const serialized = JSON.stringify(remembered.value.memory);
+  for (const secret of [canary, jwt, "alice", "hunter2"])
+    assert.equal(serialized.includes(secret), false);
+  const exported = await memory.transfer({
+    type: "export",
+    requestId: "secret-fields-export",
+    format: { id: "pi.memory-bundle", version: 1 },
+    scopes: ["project"],
+  });
+  assert.equal(exported.ok, true);
+  if (exported.ok && exported.value.type === "export") {
+    const artifact = await artifacts.get(exported.value.artifact.id);
+    assert.equal(artifact.ok, true);
+    if (artifact.ok) {
+      const body = new TextDecoder().decode(artifact.value.body);
+      for (const secret of [canary, jwt, "alice", "hunter2"])
+        assert.equal(body.includes(secret), false);
+    }
+  }
+
+  const rejectedRequests: {
+    readonly requestId: string;
+    readonly citation: MemoryCitationInput;
+  }[] = [
+    {
+      requestId: canary,
+      citation: { kind: "external", locator: { source: "safe" } },
+    },
+    {
+      requestId: "secret-citation-kind",
+      citation: { kind: `external-${canary}`, locator: { source: "safe" } },
+    },
+    {
+      requestId: "secret-citation-key",
+      citation: { kind: "external", locator: { [canary]: "value" } },
+    },
+  ];
+  for (const request of rejectedRequests) {
+    const rejected = await memory.remember({
+      requestId: request.requestId,
+      kind: coreMemoryKinds.decision,
+      scope: "project",
+      content: "Rejected fields must not reach persistence.",
+      citations: [request.citation],
+    });
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok)
+      assert.equal(
+        ["invalid_request", "secret_redaction_failed"].includes(
+          rejected.error.code,
+        ),
+        true,
+      );
+  }
+});
+
 test("remember deduplicates exact and conservatively near-identical content", async () => {
   const memory = createFixture();
   const first = await memory.remember({
@@ -202,6 +351,120 @@ test("remember creates advisory symmetric contradiction links", async () => {
   }
 });
 
+test("review proposals cannot mutate active contradictions and direct user can take over exact review content", async () => {
+  let nextId = 0;
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+    clock: () => 1_000,
+    id: () => `review-${++nextId}`,
+  });
+  const bindings = createHostMemoryBindingFactory();
+  const direct = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "direct-session",
+    }),
+  );
+  const proposal = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "model-proposal",
+      sessionId: "proposal-session",
+    }),
+  );
+  const active = await direct.remember({
+    requestId: "review-active",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Prettier.",
+  });
+  const contradiction = await proposal.remember({
+    requestId: "review-contradiction",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Biome.",
+  });
+  const review = await proposal.remember({
+    requestId: "review-exact",
+    kind: coreMemoryKinds.decision,
+    scope: "project",
+    content: "Use the exact reviewed formatter policy.",
+  });
+  assert.equal(active.ok && active.value.memory.revision, 1);
+  assert.equal(
+    contradiction.ok && contradiction.value.state,
+    "review-required",
+  );
+  assert.equal(review.ok && review.value.state, "review-required");
+  if (!active.ok || !review.ok) return;
+  const unchanged = await direct.inspect({ id: active.value.memory.id });
+  assert.equal(unchanged.ok, true);
+  if (unchanged.ok) {
+    assert.equal(unchanged.value.memories[0]?.revision, 1);
+    assert.deepEqual(unchanged.value.memories[0]?.relationships, []);
+  }
+  const takeover = await direct.remember({
+    requestId: "review-takeover",
+    kind: coreMemoryKinds.decision,
+    scope: "project",
+    content: "Use the exact reviewed formatter policy.",
+  });
+  assert.equal(takeover.ok, true);
+  if (!takeover.ok) return;
+  assert.equal(takeover.value.state, "created");
+  assert.equal(takeover.value.memory.id, review.value.memory.id);
+  assert.equal(takeover.value.memory.status, "active");
+  assert.equal(takeover.value.memory.provenance.ingress, "direct-user");
+});
+
+test("bounded near dedupe keeps opposite token claims distinct", async () => {
+  const memory = createFixture();
+  const suffix =
+    " after focused verification in every production environment".repeat(4);
+  const first = await memory.remember({
+    requestId: "opposite-near-one",
+    kind: coreMemoryKinds.procedure,
+    scope: "project",
+    content: `Builds must always publish artifacts${suffix}.`,
+  });
+  const opposite = await memory.remember({
+    requestId: "opposite-near-two",
+    kind: coreMemoryKinds.procedure,
+    scope: "project",
+    content: `Builds must never publish artifacts${suffix}.`,
+  });
+  assert.equal(first.ok && first.value.state, "created");
+  assert.equal(opposite.ok && opposite.value.state, "created");
+});
+
+test("near dedupe caps 500 candidates with 16 KiB bodies", async () => {
+  const memory = createFixture();
+  for (let index = 0; index < 500; index += 1) {
+    const prefix = `Candidate ${index.toString().padStart(3, "0")}: `;
+    const result = await memory.remember({
+      requestId: `perf-candidate-${index}`,
+      kind: coreMemoryKinds.procedure,
+      scope: "project",
+      content: `${prefix}${"x".repeat(16 * 1024 - prefix.length)}`,
+    });
+    assert.equal(result.ok && result.value.state, "created");
+  }
+  const startedAt = performance.now();
+  const result = await memory.remember({
+    requestId: "perf-candidate-final",
+    kind: coreMemoryKinds.procedure,
+    scope: "project",
+    content: `Final candidate: ${"y".repeat(16 * 1024 - 17)}`,
+  });
+  const elapsed = performance.now() - startedAt;
+  assert.equal(result.ok && result.value.state, "created");
+  assert.equal(elapsed < 1_000, true, `near dedupe took ${elapsed}ms`);
+});
+
 test("search enforces host scopes and excludes review and expired memories", async () => {
   let now = 1_000;
   let nextId = 0;
@@ -212,24 +475,31 @@ test("search enforces host scopes and excludes review and expired memories", asy
     id: () => `search-${++nextId}`,
   });
   const otherProject = { ...project, projectId: "non-git:project-two" };
-  const directOne = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "direct-user",
-    sessionId: "session-one",
-  });
-  const proposalOne = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "model-proposal",
-    sessionId: "session-one",
-  });
-  const directTwo = module.bind({
-    executionRole: "parent",
-    project: otherProject,
-    ingress: "direct-user",
-    sessionId: "session-two",
-  });
+  const bindings = createHostMemoryBindingFactory();
+  const directOne = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "session-one",
+    }),
+  );
+  const proposalOne = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "model-proposal",
+      sessionId: "session-one",
+    }),
+  );
+  const directTwo = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project: otherProject,
+      ingress: "direct-user",
+      sessionId: "session-two",
+    }),
+  );
   const first = await directOne.remember({
     requestId: "search-request-1",
     kind: coreMemoryKinds.projectFact,
@@ -282,18 +552,23 @@ test("change promotes only with direct-user ingress and replaces optimistically"
     clock: () => 1_000,
     id: () => `change-${++nextId}`,
   });
-  const direct = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "direct-user",
-    sessionId: "session-direct",
-  });
-  const proposal = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "model-proposal",
-    sessionId: "session-model",
-  });
+  const bindings = createHostMemoryBindingFactory();
+  const direct = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "session-direct",
+    }),
+  );
+  const proposal = module.bind(
+    bindings.issue({
+      executionRole: "parent",
+      project,
+      ingress: "model-proposal",
+      sessionId: "session-model",
+    }),
+  );
   const proposed = await proposal.remember({
     requestId: "change-remember",
     kind: coreMemoryKinds.decision,
@@ -445,12 +720,14 @@ test("transfer exports, previews, and commits a digest-bound memory bundle", asy
     clock: () => 1_000,
     id: () => `transfer-${++nextId}`,
   });
-  const memory = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "direct-user",
-    sessionId: "transfer-session",
-  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "transfer-session",
+    }),
+  );
   await memory.remember({
     requestId: "transfer-remember",
     kind: coreMemoryKinds.preference,
@@ -518,6 +795,252 @@ test("transfer exports, previews, and commits a digest-bound memory bundle", asy
   }
 });
 
+test("import enforces the Memory per-entry content cap", async () => {
+  const artifacts = createInMemoryArtifactStore({ clock: () => 1_000 });
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts,
+    clock: () => 1_000,
+    limits: { maxContentBytes: 64 },
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+    }),
+  );
+  const entry = JSON.stringify({
+    type: "memory",
+    kind: coreMemoryKinds.projectFact,
+    content: "x".repeat(65),
+    citations: [],
+  });
+  const artifact = await artifacts.put({
+    body: `${JSON.stringify({
+      type: "manifest",
+      format: { id: "pi.memory-bundle", version: 1 },
+      count: 1,
+      manifestSha256: createHash("sha256").update(entry).digest("hex"),
+    })}\n${entry}\n`,
+    filename: "oversized-entry.jsonl",
+  });
+  assert.equal(artifact.ok, true);
+  if (!artifact.ok) return;
+  const preview = await memory.transfer({
+    type: "preview-import",
+    requestId: "per-entry-cap",
+    artifactId: artifact.value.id,
+    targetScope: "project",
+  });
+  assert.equal(preview.ok, false);
+  if (!preview.ok) assert.equal(preview.error.code, "content_too_large");
+});
+
+test("search bounds final serialized hits rather than excerpts alone", async () => {
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+    clock: () => 1_000,
+    limits: { maxExcerptBytes: 32, maxContextBytes: 256 },
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+    }),
+  );
+  await memory.remember({
+    requestId: "serialized-search-source",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: `Searchable ${"large-memory-body ".repeat(30)}`,
+  });
+  const hits = await memory.search({ text: "Searchable" });
+  assert.equal(hits.ok, true);
+  if (hits.ok)
+    assert.equal(Buffer.byteLength(JSON.stringify(hits)) <= 256, true);
+});
+
+test("import preview detects exact duplicates and contradictions inside one bundle", async () => {
+  let nextId = 0;
+  const artifacts = createInMemoryArtifactStore({ clock: () => 1_000 });
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts,
+    clock: () => 1_000,
+    id: () => `bundle-${++nextId}`,
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+    }),
+  );
+  const entries = [
+    "Default formatter is Prettier.",
+    "Default formatter is Prettier.",
+    "Default formatter is Biome.",
+  ].map((content) =>
+    JSON.stringify({
+      type: "memory",
+      kind: coreMemoryKinds.projectFact,
+      content,
+      citations: [],
+    }),
+  );
+  const body = entries.join("\n");
+  const artifact = await artifacts.put({
+    body: `${JSON.stringify({
+      type: "manifest",
+      format: { id: "pi.memory-bundle", version: 1 },
+      count: entries.length,
+      manifestSha256: createHash("sha256").update(body).digest("hex"),
+    })}\n${body}\n`,
+    filename: "intra-bundle.jsonl",
+  });
+  assert.equal(artifact.ok, true);
+  if (!artifact.ok) return;
+  const preview = await memory.transfer({
+    type: "preview-import",
+    requestId: "intra-bundle-preview",
+    artifactId: artifact.value.id,
+    targetScope: "project",
+  });
+  assert.equal(preview.ok, true);
+  if (!preview.ok || preview.value.type !== "preview-import") return;
+  assert.equal(preview.value.duplicates, 1);
+  assert.equal(preview.value.contradictions, 1);
+  const committed = await memory.transfer({
+    type: "commit-import",
+    requestId: "intra-bundle-commit",
+    previewId: preview.value.previewId,
+    expectedManifestSha256: preview.value.manifestSha256,
+    collisions: "skip",
+  });
+  assert.equal(committed.ok, true);
+  if (!committed.ok || committed.value.type !== "commit-import") return;
+  assert.deepEqual(
+    {
+      imported: committed.value.imported,
+      skipped: committed.value.skipped,
+    },
+    { imported: 2, skipped: 1 },
+  );
+  const inspected = await memory.inspect({ scope: "project", limit: 10 });
+  assert.equal(inspected.ok, true);
+  if (inspected.ok) {
+    assert.equal(inspected.value.memories.length, 2);
+    assert.equal(
+      inspected.value.memories.every(
+        ({ relationships }) => relationships.length === 1,
+      ),
+      true,
+    );
+  }
+});
+
+test("import previews enforce count quota and evict oldest staged bodies", async () => {
+  let nextId = 0;
+  const artifacts = createInMemoryArtifactStore({ clock: () => 1_000 });
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts,
+    clock: () => 1_000,
+    id: () => `preview-quota-${++nextId}`,
+    limits: {
+      maxImportPreviewCount: 2,
+      maxImportPreviewBytes: 64 * 1024,
+    },
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+    }),
+  );
+  const previews = [];
+  for (const index of [1, 2, 3]) {
+    const entry = JSON.stringify({
+      type: "memory",
+      kind: coreMemoryKinds.projectFact,
+      content: `Preview quota body ${index}.`,
+    });
+    const artifact = await artifacts.put({
+      body: `${JSON.stringify({
+        type: "manifest",
+        format: { id: "pi.memory-bundle", version: 1 },
+        count: 1,
+        manifestSha256: createHash("sha256").update(entry).digest("hex"),
+      })}\n${entry}\n`,
+      filename: `preview-${index}.jsonl`,
+    });
+    assert.equal(artifact.ok, true);
+    if (!artifact.ok) return;
+    const preview = await memory.transfer({
+      type: "preview-import",
+      requestId: `preview-quota-request-${index}`,
+      artifactId: artifact.value.id,
+      targetScope: "project",
+    });
+    assert.equal(preview.ok, true);
+    if (!preview.ok || preview.value.type !== "preview-import") return;
+    previews.push(preview.value);
+  }
+  const evicted = await memory.transfer({
+    type: "commit-import",
+    requestId: "preview-quota-evicted",
+    previewId: previews[0]!.previewId,
+    expectedManifestSha256: previews[0]!.manifestSha256,
+    collisions: "skip",
+  });
+  assert.equal(evicted.ok, false);
+  if (!evicted.ok) assert.equal(evicted.error.code, "import_preview_expired");
+});
+
+test("expiry removes bodies and contradiction links from surviving Memory", async () => {
+  let now = 1_000;
+  const module = createMemoryStoreModule({
+    persistence: createInMemoryMemoryPersistenceAdapter(),
+    artifacts: createInMemoryArtifactStore({ clock: () => now }),
+    clock: () => now,
+  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+    }),
+  );
+  const expiring = await memory.remember({
+    requestId: "expiry-link-left",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Prettier.",
+    expiresAt: 1_500,
+  });
+  const survivor = await memory.remember({
+    requestId: "expiry-link-right",
+    kind: coreMemoryKinds.projectFact,
+    scope: "project",
+    content: "Default formatter is Biome.",
+  });
+  assert.equal(expiring.ok, true);
+  assert.equal(survivor.ok, true);
+  if (!expiring.ok || !survivor.ok) return;
+  now = 2_000;
+  const missing = await memory.inspect({ id: expiring.value.memory.id });
+  const inspected = await memory.inspect({ id: survivor.value.memory.id });
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.error.code, "memory_not_found");
+  assert.equal(inspected.ok, true);
+  if (inspected.ok)
+    assert.deepEqual(inspected.value.memories[0]?.relationships, []);
+});
+
 test("remember sanitizes secret-shaped citation fields and excerpts", async () => {
   const memory = createFixture();
   const locatorSecret = "locator-secret-value";
@@ -558,29 +1081,33 @@ test("workspace scope rejects an expired host-bound Guarded Workspace lease", as
     artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
     clock: () => 1_000,
   });
-  const memory = module.bind({
-    executionRole: "subagent",
-    project,
-    ingress: "direct-user",
-    workspace: {
-      workspaceId: "workspace-one",
-      owner: { sessionId: "session-1", agentId: "agent-1" },
-      fence: 1,
-      expiresAt: 999,
-      snapshot: {
+  const memory = module.bind(
+    createHostMemoryBindingFactory({
+      revalidate: (binding) => binding,
+    }).issue({
+      executionRole: "subagent",
+      project,
+      ingress: "direct-user",
+      workspace: {
         workspaceId: "workspace-one",
-        projectId: project.projectId,
-        projectRoot: "C:/project-one",
-        path: "C:/workspace-one",
-        branch: "agent/workspace-one",
-        baseCommit: "a".repeat(40),
-        currentCommit: "a".repeat(40),
-        state: "leased",
-        createdAt: 100,
-        updatedAt: 100,
+        owner: { sessionId: "session-1", agentId: "agent-1" },
+        fence: 1,
+        expiresAt: 999,
+        snapshot: {
+          workspaceId: "workspace-one",
+          projectId: project.projectId,
+          projectRoot: "C:/project-one",
+          path: "C:/workspace-one",
+          branch: "agent/workspace-one",
+          baseCommit: "a".repeat(40),
+          currentCommit: "a".repeat(40),
+          state: "leased",
+          createdAt: 100,
+          updatedAt: 100,
+        },
       },
-    },
-  });
+    }),
+  );
 
   const remembered = await memory.remember({
     requestId: "workspace-expired",
@@ -591,6 +1118,67 @@ test("workspace scope rejects an expired host-bound Guarded Workspace lease", as
   assert.equal(remembered.ok, false);
   if (!remembered.ok)
     assert.equal(remembered.error.code, "workspace_lease_lost");
+});
+
+test("workspace fence is revalidated after reads and immediately before persistence mutation", async () => {
+  let currentWorkspace = {
+    workspaceId: "workspace-race",
+    owner: { sessionId: "session-1", agentId: "agent-1" },
+    fence: 3,
+    expiresAt: 2_000,
+    snapshot: {
+      workspaceId: "workspace-race",
+      projectId: project.projectId,
+      projectRoot: "C:/project-one",
+      path: "C:/workspace-race",
+      branch: "agent/workspace-race",
+      baseCommit: "a".repeat(40),
+      currentCommit: "a".repeat(40),
+      state: "leased" as const,
+      createdAt: 100,
+      updatedAt: 100,
+    },
+  };
+  const base = createInMemoryMemoryPersistenceAdapter();
+  let createCalls = 0;
+  const persistence = {
+    ...base,
+    async findCandidates(...args: Parameters<typeof base.findCandidates>) {
+      const result = await base.findCandidates(...args);
+      currentWorkspace = { ...currentWorkspace, fence: 4 };
+      return result;
+    },
+    async create(...args: Parameters<typeof base.create>) {
+      createCalls += 1;
+      return base.create(...args);
+    },
+  };
+  const module = createMemoryStoreModule({
+    persistence,
+    artifacts: createInMemoryArtifactStore({ clock: () => 1_000 }),
+    clock: () => 1_000,
+  });
+  const bindings = createHostMemoryBindingFactory({
+    revalidate: (binding) => ({ ...binding, workspace: currentWorkspace }),
+  });
+  const memory = module.bind(
+    bindings.issue({
+      executionRole: "subagent",
+      project,
+      workspace: currentWorkspace,
+      ingress: "direct-user",
+      sessionId: "session-1",
+    }),
+  );
+  const result = await memory.remember({
+    requestId: "workspace-mutation-race",
+    kind: coreMemoryKinds.decision,
+    scope: "workspace",
+    content: "Fence must still match at the mutation boundary.",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.code, "workspace_lease_lost");
+  assert.equal(createCalls, 0);
 });
 
 test("replace sanitizes citations before writing a new revision", async () => {
@@ -632,12 +1220,14 @@ test("import re-redacts citations and ignores archive authority fields", async (
     clock: () => 1_000,
     id: () => `import-${++nextId}`,
   });
-  const memory = module.bind({
-    executionRole: "parent",
-    project,
-    ingress: "direct-user",
-    sessionId: "host-session",
-  });
+  const memory = module.bind(
+    createHostMemoryBindingFactory().issue({
+      executionRole: "parent",
+      project,
+      ingress: "direct-user",
+      sessionId: "host-session",
+    }),
+  );
   const secret = "archive-secret-value";
   const entry = JSON.stringify({
     type: "memory",

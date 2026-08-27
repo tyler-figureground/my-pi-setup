@@ -74,7 +74,7 @@ export interface MemoryRecord {
   readonly authority: "none";
 }
 
-export interface HostMemoryBinding {
+export interface HostMemoryBindingAssertion {
   readonly executionRole: ExecutionRole;
   readonly project?: ResolvedProjectIdentity;
   readonly workspace?: WorkspaceLease;
@@ -82,6 +82,25 @@ export interface HostMemoryBinding {
     "direct-user" | "model-proposal" | "automatic-proposal" | "import";
   readonly sessionId?: string;
   readonly sourceEntryId?: string;
+}
+
+declare const hostMemoryBindingBrand: unique symbol;
+
+export interface HostMemoryBinding {
+  readonly [hostMemoryBindingBrand]: true;
+}
+
+export interface HostMemoryBindingFactory {
+  issue(binding: HostMemoryBindingAssertion): HostMemoryBinding;
+}
+
+export interface HostMemoryBindingFactoryOptions {
+  readonly revalidate?: (
+    binding: HostMemoryBindingAssertion,
+  ) =>
+    | HostMemoryBindingAssertion
+    | undefined
+    | Promise<HostMemoryBindingAssertion | undefined>;
 }
 
 export interface RememberRequest {
@@ -287,6 +306,8 @@ export interface MemoryStoreLimits {
   readonly maxTransferBytes: number;
   readonly maxTransferEntries: number;
   readonly maxCandidateIds: number;
+  readonly maxImportPreviewCount: number;
+  readonly maxImportPreviewBytes: number;
 }
 
 export interface MemoryStoreModuleOptions {
@@ -295,4 +316,5 @@ export interface MemoryStoreModuleOptions {
   readonly clock?: () => number;
   readonly id?: () => string;
   readonly limits?: Partial<MemoryStoreLimits>;
+  readonly secretCanaries?: readonly string[];
 }

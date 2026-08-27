@@ -123,6 +123,7 @@ export type StateQuery =
       readonly type: "records";
       readonly collection: string;
       readonly keyPrefix?: string;
+      readonly afterKey?: string;
       readonly limit?: number;
     }
   | {

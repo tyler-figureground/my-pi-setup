@@ -946,26 +946,24 @@ function createAdapter(
               `Query limit must be between 1 and ${maxQueryLimit}`,
             );
           }
-          const rows =
-            query.keyPrefix === undefined
-              ? database
-                  .prepare(
-                    `SELECT collection, record_key, metadata_json, version, updated_at
-                   FROM records WHERE collection = ? ORDER BY record_key LIMIT ?`,
-                  )
-                  .all(query.collection, limit)
-              : database
-                  .prepare(
-                    `SELECT collection, record_key, metadata_json, version, updated_at
-                   FROM records WHERE collection = ? AND substr(record_key, 1, ?) = ?
-                   ORDER BY record_key LIMIT ?`,
-                  )
-                  .all(
-                    query.collection,
-                    query.keyPrefix.length,
-                    query.keyPrefix,
-                    limit,
-                  );
+          const rows = database
+            .prepare(
+              `SELECT collection, record_key, metadata_json, version, updated_at
+               FROM records
+               WHERE collection = ?
+                 AND (? IS NULL OR record_key > ?)
+                 AND (? IS NULL OR substr(record_key, 1, ?) = ?)
+               ORDER BY record_key LIMIT ?`,
+            )
+            .all(
+              query.collection,
+              query.afterKey ?? null,
+              query.afterKey ?? null,
+              query.keyPrefix ?? null,
+              query.keyPrefix?.length ?? null,
+              query.keyPrefix ?? null,
+              limit,
+            );
           return success({
             type: "records" as const,
             records: (rows as SqliteRow[]).map(readRecord),

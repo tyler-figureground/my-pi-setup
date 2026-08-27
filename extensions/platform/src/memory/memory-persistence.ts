@@ -57,6 +57,7 @@ export interface MemorySearchCandidate {
 }
 
 export interface MemoryPersistenceAdapter {
+  purgeExpired(now: number): Promise<MemoryPersistenceResult<void>>;
   create(
     entry: PersistedMemory,
     receipt: MemoryIdempotencyReceipt,
@@ -64,7 +65,12 @@ export interface MemoryPersistenceAdapter {
   ): Promise<
     MemoryPersistenceResult<
       | { readonly created: true }
-      | { readonly created: false; readonly existing: PersistedMemory }
+      | {
+          readonly created: false;
+          readonly existing: PersistedMemory;
+          readonly replayed: boolean;
+          readonly receipt: MemoryIdempotencyReceipt;
+        }
     >
   >;
   get(
@@ -78,9 +84,12 @@ export interface MemoryPersistenceAdapter {
     kind: MemoryRecord["kind"],
     limit: number,
   ): Promise<MemoryPersistenceResult<readonly PersistedMemory[]>>;
-  saveReceipt(
-    receipt: MemoryIdempotencyReceipt,
-  ): Promise<MemoryPersistenceResult<void>>;
+  saveReceipt(receipt: MemoryIdempotencyReceipt): Promise<
+    MemoryPersistenceResult<{
+      readonly replayed: boolean;
+      readonly receipt: MemoryIdempotencyReceipt;
+    }>
+  >;
   update(
     entry: PersistedMemory,
     expectedRevision: number,
@@ -103,9 +112,15 @@ export interface MemoryPersistenceAdapter {
   savePreview(
     preview: MemoryImportPreview,
     receipt: MemoryIdempotencyReceipt,
+    limits: {
+      readonly now: number;
+      readonly maxCount: number;
+      readonly maxBytes: number;
+    },
   ): Promise<MemoryPersistenceResult<void>>;
   getPreview(
     id: string,
+    now: number,
   ): Promise<MemoryPersistenceResult<MemoryImportPreview | undefined>>;
   commitImport(
     previewId: string,
@@ -126,8 +141,71 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
   const entries = new Map<string, PersistedMemory>();
   const receipts = new Map<string, MemoryIdempotencyReceipt>();
   const previews = new Map<string, MemoryImportPreview>();
+  const scrubRelationshipTarget = (id: string) => {
+    for (const [targetId, target] of entries) {
+      const scrub = (memory: MemoryRecord): MemoryRecord => ({
+        ...memory,
+        relationships: memory.relationships.filter(
+          ({ targetId: relatedId }) => relatedId !== id,
+        ),
+      });
+      entries.set(targetId, {
+        ...target,
+        memory: scrub(target.memory),
+        revisions: target.revisions.map(scrub),
+      });
+    }
+  };
+  const purgeExpired = (now: number) => {
+    for (const [entryId, entry] of entries) {
+      if (entry.memory.expiresAt === undefined || entry.memory.expiresAt > now)
+        continue;
+      entries.delete(entryId);
+      scrubRelationshipTarget(entryId);
+    }
+  };
+  const purgePreviews = (now: number) => {
+    for (const [previewId, preview] of previews)
+      if (preview.expiresAt <= now) previews.delete(previewId);
+  };
   return {
+    async purgeExpired(now) {
+      purgeExpired(now);
+      return success(undefined);
+    },
     async create(entry, receipt, contradictionIds = []) {
+      const priorReceipt = receipts.get(receipt.requestId);
+      if (priorReceipt) {
+        if (
+          priorReceipt.operation !== receipt.operation ||
+          priorReceipt.fingerprint !== receipt.fingerprint ||
+          !priorReceipt.memoryId
+        )
+          return {
+            ok: false,
+            error: {
+              code: "revision_conflict",
+              message: "Memory request ID has conflicting intent.",
+              retryable: false,
+            },
+          };
+        const priorEntry = entries.get(priorReceipt.memoryId);
+        if (!priorEntry)
+          return {
+            ok: false,
+            error: {
+              code: "storage_failed",
+              message: "Memory receipt is inconsistent.",
+              retryable: true,
+            },
+          };
+        return success({
+          created: false as const,
+          existing: structuredClone(priorEntry),
+          replayed: true,
+          receipt: structuredClone(priorReceipt),
+        });
+      }
       const existing = [...entries.values()].find(
         (candidate) =>
           JSON.stringify(candidate.memory.scope) ===
@@ -137,15 +215,18 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
           candidate.contentDigest === entry.contentDigest,
       );
       if (existing) {
-        receipts.set(receipt.requestId, {
+        const duplicateReceipt = {
           ...structuredClone(receipt),
           memoryId: existing.memory.id,
-          state: "duplicate",
+          state: "duplicate" as const,
           duplicateOf: existing.memory.id,
-        });
+        };
+        receipts.set(receipt.requestId, duplicateReceipt);
         return success({
           created: false as const,
           existing: structuredClone(existing),
+          replayed: false,
+          receipt: structuredClone(duplicateReceipt),
         });
       }
       for (const targetId of contradictionIds) {
@@ -192,8 +273,30 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
       );
     },
     async saveReceipt(receipt) {
+      const prior = receipts.get(receipt.requestId);
+      if (prior) {
+        if (
+          prior.operation !== receipt.operation ||
+          prior.fingerprint !== receipt.fingerprint
+        )
+          return {
+            ok: false,
+            error: {
+              code: "revision_conflict",
+              message: "Memory request ID has conflicting intent.",
+              retryable: false,
+            },
+          };
+        return success({
+          replayed: true,
+          receipt: structuredClone(prior),
+        });
+      }
       receipts.set(receipt.requestId, structuredClone(receipt));
-      return success(undefined);
+      return success({
+        replayed: false,
+        receipt: structuredClone(receipt),
+      });
     },
     async update(entry, expectedRevision, receipt, contradictionIds) {
       const current = entries.get(entry.memory.id);
@@ -256,19 +359,7 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
           },
         };
       entries.delete(id);
-      for (const [targetId, target] of entries) {
-        const scrub = (memory: MemoryRecord): MemoryRecord => ({
-          ...memory,
-          relationships: memory.relationships.filter(
-            ({ targetId: relatedId }) => relatedId !== id,
-          ),
-        });
-        entries.set(targetId, {
-          ...target,
-          memory: scrub(target.memory),
-          revisions: target.revisions.map(scrub),
-        });
-      }
+      scrubRelationshipTarget(id);
       receipts.set(receipt.requestId, structuredClone(receipt));
       return success(undefined);
     },
@@ -295,12 +386,43 @@ export function createInMemoryMemoryPersistenceAdapter(): MemoryPersistenceAdapt
           .map((entry) => structuredClone(entry)),
       );
     },
-    async savePreview(preview, receipt) {
+    async savePreview(preview, receipt, limits) {
+      purgePreviews(limits.now);
+      const previewBytes = Buffer.byteLength(JSON.stringify(preview));
+      if (previewBytes > limits.maxBytes)
+        return {
+          ok: false,
+          error: {
+            code: "storage_failed",
+            message: "Import preview exceeds quota.",
+            retryable: false,
+          },
+        };
+      const ordered = () =>
+        [...previews.values()].sort(
+          (left, right) =>
+            left.expiresAt - right.expiresAt || left.id.localeCompare(right.id),
+        );
+      const totalBytes = () =>
+        [...previews.values()].reduce(
+          (total, current) =>
+            total + Buffer.byteLength(JSON.stringify(current)),
+          0,
+        );
+      while (
+        previews.size >= limits.maxCount ||
+        totalBytes() + previewBytes > limits.maxBytes
+      ) {
+        const oldest = ordered()[0];
+        if (!oldest) break;
+        previews.delete(oldest.id);
+      }
       previews.set(preview.id, structuredClone(preview));
       receipts.set(receipt.requestId, structuredClone(receipt));
       return success(undefined);
     },
-    async getPreview(id) {
+    async getPreview(id, now) {
+      purgePreviews(now);
       const preview = previews.get(id);
       return success(preview ? structuredClone(preview) : undefined);
     },

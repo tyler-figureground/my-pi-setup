@@ -1,4 +1,10 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  type Stats,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { success, type Outcome } from "../core/result.ts";
@@ -19,6 +25,7 @@ type SqliteRow = Record<string, unknown>;
 export interface SqliteMemoryPersistenceOptions {
   readonly path: string;
   readonly busyTimeoutMs?: number;
+  readonly clock?: () => number;
 }
 
 function persistenceFailure(
@@ -83,13 +90,123 @@ function scopeKey(scope: MemoryRecord["scope"]) {
   return `${scope.projectId}\0${scope.workspaceId}`;
 }
 
-function openDatabase(path: string, busyTimeoutMs: number) {
+interface DatabasePathIdentity {
+  readonly parent: Stats;
+  readonly file?: Stats;
+}
+
+function normalizedFileSystemPath(value: string) {
+  const normalized = resolve(value).replaceAll("\\", "/");
+  return process.platform === "win32"
+    ? normalized.toLocaleLowerCase()
+    : normalized;
+}
+
+function sameFileIdentity(left: Stats, right: Stats) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.birthtimeMs === right.birthtimeMs
+  );
+}
+
+function validateRegularCanonicalFile(candidate: string, volatile = false) {
+  let entry: Stats;
+  try {
+    entry = lstatSync(candidate);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return undefined;
+    throw error;
+  }
+  if (entry.isSymbolicLink() || !entry.isFile())
+    throw new Error("Memory database path is not a regular file");
+  let canonical: string;
+  try {
+    canonical = realpathSync.native(candidate);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" ||
+        (volatile && process.platform === "win32" && error.code === "EPERM"))
+    )
+      return error.code === "ENOENT" ? undefined : entry;
+    throw error;
+  }
+  if (
+    normalizedFileSystemPath(canonical) !== normalizedFileSystemPath(candidate)
+  )
+    throw new Error("Memory database path is not canonical");
+  return entry;
+}
+
+function validateDatabasePath(path: string, expected?: DatabasePathIdentity) {
+  const parentPath = dirname(path);
+  const parent = lstatSync(parentPath);
+  if (parent.isSymbolicLink() || !parent.isDirectory())
+    throw new Error("Memory database parent is not a real private directory");
+  if (
+    normalizedFileSystemPath(realpathSync.native(parentPath)) !==
+    normalizedFileSystemPath(parentPath)
+  )
+    throw new Error("Memory database parent path is not canonical");
+  if (process.platform !== "win32" && (parent.mode & 0o077) !== 0)
+    throw new Error("Memory database parent directory is not private");
+  const file = validateRegularCanonicalFile(path);
+  validateRegularCanonicalFile(`${path}-wal`, true);
+  validateRegularCanonicalFile(`${path}-shm`, true);
+  if (expected) {
+    if (!sameFileIdentity(expected.parent, parent))
+      throw new Error("Memory database parent was replaced");
+    if (expected.file && (!file || !sameFileIdentity(expected.file, file)))
+      throw new Error("Memory database file was replaced");
+  }
+  return { parent, ...(file ? { file } : {}) };
+}
+
+function ensurePrivateDatabaseParent(path: string) {
+  const parentPath = dirname(path);
+  let existingPath = parentPath;
+  for (;;) {
+    try {
+      const entry = lstatSync(existingPath);
+      if (entry.isSymbolicLink() || !entry.isDirectory())
+        throw new Error("Memory database ancestor is not a real directory");
+      if (
+        normalizedFileSystemPath(realpathSync.native(existingPath)) !==
+        normalizedFileSystemPath(existingPath)
+      )
+        throw new Error("Memory database ancestor path is not canonical");
+      break;
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
+      const ancestor = dirname(existingPath);
+      if (ancestor === existingPath) throw error;
+      existingPath = ancestor;
+    }
+  }
+  mkdirSync(parentPath, { recursive: true, mode: 0o700 });
+  validateDatabasePath(path);
+}
+
+function openDatabase(
+  path: string,
+  busyTimeoutMs: number,
+  identity = validateDatabasePath(path),
+) {
   const database = new DatabaseSync(path, {
     enableForeignKeyConstraints: true,
     enableDoubleQuotedStringLiterals: false,
     allowExtension: false,
   });
   try {
+    validateDatabasePath(path, identity);
     database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
     database.exec("PRAGMA foreign_keys = ON");
     database.exec("PRAGMA synchronous = NORMAL");
@@ -373,6 +490,59 @@ function updateCanonical(database: DatabaseSync, entry: PersistedMemory) {
     .run(rowid, entry.memory.id, entry.memory.content);
 }
 
+function purgeExpiredDatabase(database: DatabaseSync, now: number) {
+  const expiredRows = database
+    .prepare(
+      "SELECT id, rowid FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?",
+    )
+    .all(now) as SqliteRow[];
+  for (const expiredRow of expiredRows) {
+    const expiredId = text(expiredRow, "id");
+    const relatedRows = database
+      .prepare(
+        `SELECT DISTINCT source_id FROM memory_relationships
+         WHERE target_id = ? AND source_id <> ?`,
+      )
+      .all(expiredId, expiredId) as SqliteRow[];
+    for (const related of relatedRows) {
+      const relatedId = text(related, "source_id");
+      const relatedRow = memoryRow(database, relatedId);
+      if (!relatedRow) continue;
+      const target = persistedFromRow(database, relatedRow);
+      const scrub = (memory: MemoryRecord): MemoryRecord => ({
+        ...memory,
+        relationships: memory.relationships.filter(
+          ({ targetId }) => targetId !== expiredId,
+        ),
+      });
+      const scrubbed = {
+        ...target,
+        memory: scrub(target.memory),
+        revisions: target.revisions.map(scrub),
+      };
+      updateCanonical(database, scrubbed);
+      const updateRevision = database.prepare(
+        `UPDATE memory_revisions SET record_json = ?
+         WHERE memory_id = ? AND revision = ?`,
+      );
+      for (const revision of scrubbed.revisions)
+        updateRevision.run(
+          JSON.stringify(revision),
+          relatedId,
+          revision.revision,
+        );
+    }
+    database
+      .prepare("DELETE FROM memory_fts WHERE rowid = ?")
+      .run(number(expiredRow, "rowid"));
+    database
+      .prepare("DELETE FROM memory_relationships WHERE target_id = ?")
+      .run(expiredId);
+    database.prepare("DELETE FROM memories WHERE id = ?").run(expiredId);
+  }
+  return expiredRows.length > 0;
+}
+
 function withDatabase<T>(
   path: string,
   busyTimeoutMs: number,
@@ -380,8 +550,11 @@ function withDatabase<T>(
 ) {
   let database: DatabaseSync | undefined;
   try {
-    database = openDatabase(path, busyTimeoutMs);
-    return operation(database);
+    const identity = validateDatabasePath(path);
+    database = openDatabase(path, busyTimeoutMs, identity);
+    const result = operation(database);
+    validateDatabasePath(path, identity);
+    return result;
   } catch (error) {
     return sqliteFailure(error);
   } finally {
@@ -408,11 +581,87 @@ function literalFtsQuery(value: string) {
   return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
 }
 
+function ftsHasDrift(database: DatabaseSync) {
+  const counts = database
+    .prepare(
+      `SELECT (SELECT count(*) FROM memories) AS memory_count,
+              (SELECT count(*) FROM memory_fts) AS fts_count`,
+    )
+    .get() as SqliteRow;
+  if (number(counts, "memory_count") !== number(counts, "fts_count"))
+    return true;
+  const mismatch = database
+    .prepare(
+      `SELECT 1 AS drift
+       FROM memories m LEFT JOIN memory_fts f ON f.rowid = m.rowid
+       WHERE f.rowid IS NULL OR f.memory_id <> m.id
+          OR f.content <> json_extract(m.record_json, '$.content')
+       LIMIT 1`,
+    )
+    .get();
+  if (mismatch) return true;
+  return !!database
+    .prepare(
+      `SELECT 1 AS drift FROM memory_fts f
+       LEFT JOIN memories m ON m.rowid = f.rowid
+       WHERE m.rowid IS NULL LIMIT 1`,
+    )
+    .get();
+}
+
+function ensureFtsIntegrity(database: DatabaseSync) {
+  if (!ftsHasDrift(database)) return;
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec("DELETE FROM memory_fts");
+    const rows = database
+      .prepare("SELECT rowid, id, record_json FROM memories ORDER BY rowid")
+      .all() as SqliteRow[];
+    const insert = database.prepare(
+      "INSERT INTO memory_fts(rowid, memory_id, content) VALUES (?, ?, ?)",
+    );
+    for (const row of rows)
+      insert.run(
+        number(row, "rowid"),
+        text(row, "id"),
+        parseRecord(text(row, "record_json")).content,
+      );
+    if (ftsHasDrift(database))
+      throw new Error("Memory FTS rebuild did not converge");
+    database.exec("COMMIT");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  }
+}
+
+function contradictionClaim(content: string) {
+  const normalized = content
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[.!?]+$/, "");
+  const assignment = /^(.+?)\s+(?:should be|is|are|=|:)\s+(.+)$/.exec(
+    normalized,
+  );
+  if (assignment)
+    return { subject: assignment[1]!.trim(), value: assignment[2]!.trim() };
+  const positive = /^(?:use|prefer|enable|allow)\s+(.+)$/.exec(normalized);
+  if (positive) return { subject: positive[1]!.trim(), value: "enabled" };
+  const negative = /^(?:do not use|don't use|avoid|disable|deny)\s+(.+)$/.exec(
+    normalized,
+  );
+  if (negative) return { subject: negative[1]!.trim(), value: "disabled" };
+  return undefined;
+}
+
 export function createSqliteMemoryPersistenceAdapter(
   options: SqliteMemoryPersistenceOptions,
 ): Outcome<MemoryPersistenceAdapter, MemoryPersistenceError> {
   const path = resolve(options.path);
   const busyTimeoutMs = options.busyTimeoutMs ?? 5_000;
+  const clock = options.clock ?? Date.now;
   if (
     !options.path ||
     !Number.isSafeInteger(busyTimeoutMs) ||
@@ -422,12 +671,31 @@ export function createSqliteMemoryPersistenceAdapter(
     return persistenceFailure("Memory SQLite options are invalid.");
   let database: DatabaseSync | undefined;
   try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    database = openDatabase(path, busyTimeoutMs);
+    ensurePrivateDatabaseParent(path);
+    const identity = validateDatabasePath(path);
+    database = openDatabase(path, busyTimeoutMs, identity);
     migrate(database);
     database.exec("PRAGMA journal_mode = WAL");
+    let cleanedAtStart = false;
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      const now = clock();
+      cleanedAtStart = purgeExpiredDatabase(database, now);
+      const deletedPreviews = database
+        .prepare("DELETE FROM memory_import_previews WHERE expires_at <= ?")
+        .run(now);
+      cleanedAtStart ||= deletedPreviews.changes > 0;
+      database.exec("COMMIT");
+      if (cleanedAtStart) checkpoint(database);
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {}
+      if (!/busy|locked/i.test(errorText(error))) throw error;
+    }
     database.close();
     database = undefined;
+    validateDatabasePath(path);
     secureFiles(path);
   } catch (error) {
     database?.close();
@@ -435,13 +703,66 @@ export function createSqliteMemoryPersistenceAdapter(
   }
 
   const adapter: MemoryPersistenceAdapter = {
+    async purgeExpired(now) {
+      return withDatabase(path, busyTimeoutMs, (database) => {
+        database.exec("BEGIN IMMEDIATE");
+        try {
+          const changed = purgeExpiredDatabase(database, now);
+          database.exec("COMMIT");
+          if (changed) checkpoint(database);
+          return success(undefined);
+        } catch (error) {
+          try {
+            database.exec("ROLLBACK");
+          } catch {}
+          return sqliteFailure(error);
+        }
+      });
+    },
     async create(entry, receipt, contradictionIds = []) {
       return withDatabase<
         | { readonly created: true }
-        | { readonly created: false; readonly existing: PersistedMemory }
+        | {
+            readonly created: false;
+            readonly existing: PersistedMemory;
+            readonly replayed: boolean;
+            readonly receipt: MemoryIdempotencyReceipt;
+          }
       >(path, busyTimeoutMs, (database) => {
         database.exec("BEGIN IMMEDIATE");
         try {
+          const priorReceiptRow = database
+            .prepare("SELECT * FROM memory_receipts WHERE request_id = ?")
+            .get(receipt.requestId) as SqliteRow | undefined;
+          if (priorReceiptRow) {
+            const priorReceipt = receiptFromRow(priorReceiptRow);
+            if (
+              priorReceipt.operation !== receipt.operation ||
+              priorReceipt.fingerprint !== receipt.fingerprint ||
+              !priorReceipt.memoryId
+            ) {
+              database.exec("ROLLBACK");
+              return {
+                ok: false,
+                error: {
+                  code: "revision_conflict" as const,
+                  message: "Memory request ID has conflicting intent.",
+                  retryable: false,
+                },
+              };
+            }
+            const priorMemoryRow = memoryRow(database, priorReceipt.memoryId);
+            if (!priorMemoryRow)
+              throw new Error("Memory receipt is inconsistent");
+            const existing = persistedFromRow(database, priorMemoryRow);
+            database.exec("COMMIT");
+            return success({
+              created: false as const,
+              existing,
+              replayed: true,
+              receipt: priorReceipt,
+            });
+          }
           const existingRow = database
             .prepare(
               `SELECT rowid, * FROM memories
@@ -457,15 +778,64 @@ export function createSqliteMemoryPersistenceAdapter(
             ) as SqliteRow | undefined;
           if (existingRow) {
             const existing = persistedFromRow(database, existingRow);
-            writeReceipt(database, {
+            const duplicateReceipt = {
               ...receipt,
               memoryId: existing.memory.id,
-              state: "duplicate",
+              state: "duplicate" as const,
               duplicateOf: existing.memory.id,
-            });
+            };
+            writeReceipt(database, duplicateReceipt);
             database.exec("COMMIT");
-            return success({ created: false as const, existing });
+            return success({
+              created: false as const,
+              existing,
+              replayed: false,
+              receipt: duplicateReceipt,
+            });
           }
+          const reconciledIds = new Set(contradictionIds);
+          const claim =
+            entry.memory.status === "active"
+              ? contradictionClaim(entry.memory.content)
+              : undefined;
+          if (claim) {
+            const currentRows = database
+              .prepare(
+                `SELECT rowid, * FROM memories
+                 WHERE scope_kind = ? AND scope_key = ?
+                   AND kind_id = ? AND kind_version = ?
+                   AND status = 'active'
+                   AND (expires_at IS NULL OR expires_at > ?)`,
+              )
+              .all(
+                entry.memory.scope.kind,
+                scopeKey(entry.memory.scope),
+                entry.memory.kind.id,
+                entry.memory.kind.version,
+                entry.memory.updatedAt,
+              ) as SqliteRow[];
+            for (const currentRow of currentRows) {
+              const current = persistedFromRow(database, currentRow);
+              const other = contradictionClaim(current.memory.content);
+              if (
+                other?.subject === claim.subject &&
+                other.value !== claim.value
+              )
+                reconciledIds.add(current.memory.id);
+            }
+          }
+          const storedMemory: MemoryRecord = {
+            ...entry.memory,
+            relationships: [...reconciledIds].map((targetId) => ({
+              kind: "pi/contradicts",
+              targetId,
+            })),
+          };
+          const storedEntry: PersistedMemory = {
+            ...entry,
+            memory: storedMemory,
+            revisions: [storedMemory],
+          };
           database
             .prepare(
               `INSERT INTO memories
@@ -474,40 +844,40 @@ export function createSqliteMemoryPersistenceAdapter(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
-              entry.memory.id,
-              entry.memory.revision,
-              entry.memory.kind.id,
-              entry.memory.kind.version,
-              entry.memory.scope.kind,
-              scopeKey(entry.memory.scope),
-              entry.normalizedContent,
-              entry.contentDigest,
-              entry.memory.status,
-              entry.memory.updatedAt,
-              entry.memory.expiresAt ?? null,
-              JSON.stringify(entry.memory),
+              storedMemory.id,
+              storedMemory.revision,
+              storedMemory.kind.id,
+              storedMemory.kind.version,
+              storedMemory.scope.kind,
+              scopeKey(storedMemory.scope),
+              storedEntry.normalizedContent,
+              storedEntry.contentDigest,
+              storedMemory.status,
+              storedMemory.updatedAt,
+              storedMemory.expiresAt ?? null,
+              JSON.stringify(storedMemory),
             );
           const row = database
             .prepare("SELECT rowid FROM memories WHERE id = ?")
-            .get(entry.memory.id) as SqliteRow;
+            .get(storedMemory.id) as SqliteRow;
           database
             .prepare(
               "INSERT INTO memory_fts(rowid, memory_id, content) VALUES (?, ?, ?)",
             )
-            .run(number(row, "rowid"), entry.memory.id, entry.memory.content);
+            .run(number(row, "rowid"), storedMemory.id, storedMemory.content);
           database
             .prepare(
               `INSERT INTO memory_revisions (memory_id, revision, record_json)
                VALUES (?, ?, ?)`,
             )
             .run(
-              entry.memory.id,
-              entry.memory.revision,
-              JSON.stringify(entry.memory),
+              storedMemory.id,
+              storedMemory.revision,
+              JSON.stringify(storedMemory),
             );
-          insertCitations(database, entry.memory);
-          insertRelationships(database, entry.memory);
-          for (const targetId of contradictionIds) {
+          insertCitations(database, storedMemory);
+          insertRelationships(database, storedMemory);
+          for (const targetId of reconciledIds) {
             const targetRow = memoryRow(database, targetId);
             if (!targetRow) continue;
             const target = persistedFromRow(database, targetRow);
@@ -516,9 +886,9 @@ export function createSqliteMemoryPersistenceAdapter(
               revision: target.memory.revision + 1,
               relationships: [
                 ...target.memory.relationships,
-                { kind: "pi/contradicts", targetId: entry.memory.id },
+                { kind: "pi/contradicts", targetId: storedMemory.id },
               ],
-              updatedAt: entry.memory.updatedAt,
+              updatedAt: storedMemory.updatedAt,
             };
             const updated = {
               ...target,
@@ -581,11 +951,41 @@ export function createSqliteMemoryPersistenceAdapter(
       });
     },
     async saveReceipt(receipt) {
-      return withDatabase(path, busyTimeoutMs, (database) => {
+      return withDatabase<{
+        readonly replayed: boolean;
+        readonly receipt: MemoryIdempotencyReceipt;
+      }>(path, busyTimeoutMs, (database) => {
+        database.exec("BEGIN IMMEDIATE");
         try {
+          const row = database
+            .prepare("SELECT * FROM memory_receipts WHERE request_id = ?")
+            .get(receipt.requestId) as SqliteRow | undefined;
+          if (row) {
+            const prior = receiptFromRow(row);
+            if (
+              prior.operation !== receipt.operation ||
+              prior.fingerprint !== receipt.fingerprint
+            ) {
+              database.exec("ROLLBACK");
+              return {
+                ok: false,
+                error: {
+                  code: "revision_conflict" as const,
+                  message: "Memory request ID has conflicting intent.",
+                  retryable: false,
+                },
+              };
+            }
+            database.exec("COMMIT");
+            return success({ replayed: true, receipt: prior });
+          }
           writeReceipt(database, receipt);
-          return success(undefined);
+          database.exec("COMMIT");
+          return success({ replayed: false, receipt });
         } catch (error) {
+          try {
+            database.exec("ROLLBACK");
+          } catch {}
           return sqliteFailure(error);
         }
       });
@@ -793,10 +1193,41 @@ export function createSqliteMemoryPersistenceAdapter(
         return success(rows.map((row) => persistedFromRow(database, row)));
       });
     },
-    async savePreview(preview, receipt) {
+    async savePreview(preview, receipt, limits) {
       return withDatabase(path, busyTimeoutMs, (database) => {
         database.exec("BEGIN IMMEDIATE");
         try {
+          database
+            .prepare("DELETE FROM memory_import_previews WHERE expires_at <= ?")
+            .run(limits.now);
+          const previewJson = JSON.stringify(preview);
+          const previewBytes = Buffer.byteLength(previewJson);
+          if (previewBytes > limits.maxBytes)
+            throw new Error("Import preview exceeds quota");
+          while (true) {
+            const quota = database
+              .prepare(
+                `SELECT count(*) AS preview_count,
+                        coalesce(sum(length(CAST(preview_json AS BLOB))), 0) AS preview_bytes
+                 FROM memory_import_previews`,
+              )
+              .get() as SqliteRow;
+            if (
+              number(quota, "preview_count") < limits.maxCount &&
+              number(quota, "preview_bytes") + previewBytes <= limits.maxBytes
+            )
+              break;
+            const oldest = database
+              .prepare(
+                `SELECT id FROM memory_import_previews
+                 ORDER BY expires_at, id LIMIT 1`,
+              )
+              .get() as SqliteRow | undefined;
+            if (!oldest) break;
+            database
+              .prepare("DELETE FROM memory_import_previews WHERE id = ?")
+              .run(text(oldest, "id"));
+          }
           database
             .prepare(
               `INSERT INTO memory_import_previews
@@ -809,7 +1240,7 @@ export function createSqliteMemoryPersistenceAdapter(
               preview.scope.kind,
               scopeKey(preview.scope),
               preview.expiresAt,
-              JSON.stringify(preview),
+              previewJson,
             );
           writeReceipt(database, receipt);
           database.exec("COMMIT");
@@ -822,13 +1253,19 @@ export function createSqliteMemoryPersistenceAdapter(
         }
       });
     },
-    async getPreview(id) {
+    async getPreview(id, now) {
       return withDatabase(path, busyTimeoutMs, (database) => {
+        database.exec("BEGIN IMMEDIATE");
+        const deleted = database
+          .prepare("DELETE FROM memory_import_previews WHERE expires_at <= ?")
+          .run(now);
         const row = database
           .prepare(
             "SELECT preview_json FROM memory_import_previews WHERE id = ?",
           )
           .get(id) as SqliteRow | undefined;
+        database.exec("COMMIT");
+        if (deleted.changes > 0) checkpoint(database);
         return success(
           row
             ? (JSON.parse(text(row, "preview_json")) as MemoryImportPreview)
@@ -932,6 +1369,7 @@ export function createSqliteMemoryPersistenceAdapter(
     async search(input) {
       return withDatabase(path, busyTimeoutMs, (database) => {
         if (input.scopes.length === 0) return success([]);
+        ensureFtsIntegrity(database);
         const scopeSql = input.scopes
           .map(() => "(m.scope_kind = ? AND m.scope_key = ?)")
           .join(" OR ");

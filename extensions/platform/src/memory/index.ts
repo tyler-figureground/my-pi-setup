@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { EXECUTION_ROLES } from "../../../shared/execution-role.ts";
 import {
   failure,
   success,
@@ -8,6 +9,8 @@ import {
 import {
   coreMemoryKinds,
   type HostMemoryBinding,
+  type HostMemoryBindingAssertion,
+  type HostMemoryBindingFactoryOptions,
   type MemoryCitation,
   type MemoryCitationInput,
   type MemoryRecord,
@@ -21,6 +24,119 @@ const supportedKinds = new Set(
   Object.values(coreMemoryKinds).map(({ id, version }) => `${id}\0${version}`),
 );
 
+interface IssuedHostMemoryBinding {
+  readonly assertion: HostMemoryBindingAssertion;
+  readonly revalidate?: HostMemoryBindingFactoryOptions["revalidate"];
+}
+
+const issuedHostMemoryBindings = new WeakMap<object, IssuedHostMemoryBinding>();
+
+function validBoundText(value: unknown, maxBytes = 2_048) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value) <= maxBytes &&
+    !value.includes("\0")
+  );
+}
+
+function validHostBindingAssertion(
+  value: unknown,
+): value is HostMemoryBindingAssertion {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  if (
+    !hasOnlyKeys(binding, [
+      "executionRole",
+      "project",
+      "workspace",
+      "ingress",
+      "sessionId",
+      "sourceEntryId",
+    ]) ||
+    !EXECUTION_ROLES.includes(
+      binding.executionRole as (typeof EXECUTION_ROLES)[number],
+    ) ||
+    !["direct-user", "model-proposal", "automatic-proposal", "import"].includes(
+      String(binding.ingress),
+    ) ||
+    (binding.sessionId !== undefined && !validBoundText(binding.sessionId)) ||
+    (binding.sourceEntryId !== undefined &&
+      !validBoundText(binding.sourceEntryId))
+  )
+    return false;
+  const project = binding.project as Record<string, unknown> | undefined;
+  if (
+    project !== undefined &&
+    (!project ||
+      (project.kind !== "git" && project.kind !== "non-git") ||
+      !validBoundText(project.projectId) ||
+      !validBoundText(project.requestedCwd, 32 * 1024) ||
+      !validBoundText(project.canonicalCwd, 32 * 1024) ||
+      typeof project.cwdWasAliased !== "boolean")
+  )
+    return false;
+  const workspace = binding.workspace as Record<string, unknown> | undefined;
+  if (workspace === undefined) return true;
+  const owner = workspace.owner as Record<string, unknown> | undefined;
+  const snapshot = workspace.snapshot as Record<string, unknown> | undefined;
+  return !!(
+    project &&
+    validBoundText(workspace.workspaceId) &&
+    owner &&
+    validBoundText(owner.sessionId) &&
+    validBoundText(owner.agentId) &&
+    Number.isSafeInteger(workspace.fence) &&
+    Number(workspace.fence) > 0 &&
+    Number.isSafeInteger(workspace.expiresAt) &&
+    snapshot &&
+    snapshot.state === "leased" &&
+    snapshot.workspaceId === workspace.workspaceId &&
+    snapshot.projectId === project.projectId
+  );
+}
+
+function sameHostAuthority(
+  issued: HostMemoryBindingAssertion,
+  current: HostMemoryBindingAssertion,
+) {
+  return (
+    issued.executionRole === current.executionRole &&
+    issued.ingress === current.ingress &&
+    issued.sessionId === current.sessionId &&
+    issued.sourceEntryId === current.sourceEntryId &&
+    issued.project?.projectId === current.project?.projectId &&
+    issued.project?.canonicalCwd === current.project?.canonicalCwd &&
+    issued.workspace?.workspaceId === current.workspace?.workspaceId &&
+    issued.workspace?.owner.sessionId === current.workspace?.owner.sessionId &&
+    issued.workspace?.owner.agentId === current.workspace?.owner.agentId &&
+    issued.workspace?.fence === current.workspace?.fence &&
+    issued.workspace?.snapshot.projectId ===
+      current.workspace?.snapshot.projectId
+  );
+}
+
+export function createHostMemoryBindingFactory(
+  options: HostMemoryBindingFactoryOptions = {},
+) {
+  return {
+    issue(assertion: HostMemoryBindingAssertion): HostMemoryBinding {
+      if (!validHostBindingAssertion(assertion))
+        throw new TypeError("Host Memory binding assertion is invalid.");
+      if (assertion.workspace && !options.revalidate)
+        throw new TypeError(
+          "Workspace Memory binding requires a host revalidator.",
+        );
+      const capability = Object.freeze({});
+      issuedHostMemoryBindings.set(capability, {
+        assertion: structuredClone(assertion),
+        ...(options.revalidate ? { revalidate: options.revalidate } : {}),
+      });
+      return capability as HostMemoryBinding;
+    },
+  };
+}
+
 function memoryFailure(
   code: MemoryStoreErrorCode,
   message: string,
@@ -30,7 +146,7 @@ function memoryFailure(
 }
 
 function resolveScope(
-  binding: HostMemoryBinding,
+  binding: HostMemoryBindingAssertion,
   selector: MemoryScopeSelector,
   now: number,
 ) {
@@ -73,7 +189,7 @@ function resolveScope(
 }
 
 function canAccessMemory(
-  binding: HostMemoryBinding,
+  binding: HostMemoryBindingAssertion,
   memory: MemoryRecord,
   now: number,
 ) {
@@ -126,12 +242,13 @@ function hasOnlyKeys(value: object, allowed: readonly string[]) {
   return keys.every((key) => allowed.includes(key));
 }
 
-function validRequestId(value: unknown) {
+function validRequestId(value: unknown, exactCanaries: readonly string[]) {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     Buffer.byteLength(value) <= 512 &&
-    !value.includes("\0")
+    !value.includes("\0") &&
+    safePersistedText(value, exactCanaries)
   );
 }
 
@@ -217,32 +334,89 @@ function sameScope(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function editDistance(left: string, right: string) {
-  if (left === right) return 0;
-  if (left.length > right.length) [left, right] = [right, left];
-  let previous = Array.from(
-    { length: left.length + 1 },
-    (_unused, index) => index,
-  );
-  for (let row = 1; row <= right.length; row += 1) {
-    const current = [row];
-    for (let column = 1; column <= left.length; column += 1)
-      current[column] = Math.min(
-        current[column - 1]! + 1,
-        previous[column]! + 1,
-        previous[column - 1]! + (left[column - 1] === right[row - 1] ? 0 : 1),
-      );
-    previous = current;
+const oppositeTokens = [
+  ["always", "never"],
+  ["allow", "deny"],
+  ["allowed", "denied"],
+  ["enable", "disable"],
+  ["enabled", "disabled"],
+  ["must", "must-not"],
+  ["should", "should-not"],
+  ["true", "false"],
+] as const;
+
+function boundedTokens(value: string) {
+  if (Buffer.byteLength(value) > 4 * 1024) return undefined;
+  const tokens = value.match(/[\p{L}\p{N}_-]+/gu)?.slice(0, 256) ?? [];
+  return tokens.length <= 256 ? tokens : undefined;
+}
+
+function tokenEditDistanceAtMostOne(left: string, right: string) {
+  if (left === right) return true;
+  if (left.length > 64 || right.length > 64) return false;
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let differences = 0;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (left.length > right.length) leftIndex += 1;
+    else if (right.length > left.length) rightIndex += 1;
+    else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
   }
-  return previous[left.length]!;
+  return (
+    differences +
+      Number(leftIndex < left.length || rightIndex < right.length) <=
+    1
+  );
+}
+
+function hasOppositeTokens(left: readonly string[], right: readonly string[]) {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  const includesNot = (tokens: ReadonlySet<string>) =>
+    tokens.has("not") || tokens.has("never") || tokens.has("no");
+  if (includesNot(leftSet) !== includesNot(rightSet)) return true;
+  return oppositeTokens.some(
+    ([positive, negative]) =>
+      (leftSet.has(positive) && rightSet.has(negative)) ||
+      (leftSet.has(negative) && rightSet.has(positive)),
+  );
 }
 
 function isConservativeNearDuplicate(left: string, right: string) {
-  const longest = Math.max(left.length, right.length);
-  return (
-    longest >= 24 &&
-    editDistance(left, right) <= Math.max(1, Math.floor(longest * 0.04))
-  );
+  const leftTokens = boundedTokens(left);
+  const rightTokens = boundedTokens(right);
+  if (
+    !leftTokens ||
+    !rightTokens ||
+    leftTokens.length < 4 ||
+    leftTokens.length !== rightTokens.length ||
+    hasOppositeTokens(leftTokens, rightTokens)
+  )
+    return false;
+  let changed = 0;
+  for (let index = 0; index < leftTokens.length; index += 1) {
+    if (leftTokens[index] === rightTokens[index]) continue;
+    if (!tokenEditDistanceAtMostOne(leftTokens[index]!, rightTokens[index]!))
+      return false;
+    changed += 1;
+    if (changed > 1) return false;
+  }
+  return changed === 1;
+}
+
+function candidateLimit(options: MemoryStoreModuleOptions) {
+  return Math.min(options.limits?.maxCandidateIds ?? 500, 64);
 }
 
 function contradictionClaim(content: string) {
@@ -269,17 +443,23 @@ const secretCitationField =
 
 function sanitizeCitationJson(
   value: JsonValue,
+  exactCanaries: readonly string[],
   field?: string,
 ): MemoryStoreResult<JsonValue> {
+  if (field && !safePersistedText(field, exactCanaries))
+    return memoryFailure(
+      "secret_redaction_failed",
+      "Memory citation key contains sensitive data.",
+    );
   if (field && secretCitationField.test(field)) return success("[REDACTED]");
   if (typeof value === "string") {
-    const scanned = redactMemoryContent(value);
+    const scanned = redactMemoryContent(value, exactCanaries);
     return scanned.ok ? success(scanned.value.content) : scanned;
   }
   if (Array.isArray(value)) {
     const sanitized: JsonValue[] = [];
     for (const item of value) {
-      const result = sanitizeCitationJson(item);
+      const result = sanitizeCitationJson(item, exactCanaries);
       if (!result.ok) return result;
       sanitized.push(result.value);
     }
@@ -288,7 +468,7 @@ function sanitizeCitationJson(
   if (value && typeof value === "object") {
     const sanitized: Record<string, JsonValue> = {};
     for (const [key, item] of Object.entries(value)) {
-      const result = sanitizeCitationJson(item, key);
+      const result = sanitizeCitationJson(item, exactCanaries, key);
       if (!result.ok) return result;
       sanitized[key] = result.value;
     }
@@ -301,9 +481,12 @@ function sanitizeCitationInputs(
   citations: readonly MemoryCitationInput[] | undefined,
   maxCitations: number,
   maxBytes: number,
+  exactCanaries: readonly string[],
 ) {
   if (!citations) return success(undefined);
-  if (citations.length === 0 || citations.length > maxCitations)
+  if (citations.length === 0)
+    return success([] as readonly MemoryCitationInput[]);
+  if (citations.length > maxCitations)
     return memoryFailure("invalid_request", "Memory citations are invalid.");
   const sanitized: MemoryCitationInput[] = [];
   for (const citation of citations) {
@@ -312,11 +495,12 @@ function sanitizeCitationInputs(
       typeof citation.kind !== "string" ||
       !citation.kind ||
       Buffer.byteLength(citation.kind) > 128 ||
+      !safePersistedText(citation.kind, exactCanaries) ||
       !isJsonObject(citation.locator) ||
       (citation.excerpt !== undefined && typeof citation.excerpt !== "string")
     )
       return memoryFailure("invalid_request", "Memory citation is invalid.");
-    const locator = sanitizeCitationJson(citation.locator);
+    const locator = sanitizeCitationJson(citation.locator, exactCanaries);
     if (!locator.ok || !isJsonObject(locator.value))
       return locator.ok
         ? memoryFailure(
@@ -326,7 +510,7 @@ function sanitizeCitationInputs(
         : locator;
     let excerpt: string | undefined;
     if (citation.excerpt !== undefined) {
-      const scanned = redactMemoryContent(citation.excerpt);
+      const scanned = redactMemoryContent(citation.excerpt, exactCanaries);
       if (!scanned.ok) return scanned;
       excerpt = scanned.value.content;
     }
@@ -344,16 +528,36 @@ function sanitizeCitationInputs(
   return success(sanitized as readonly MemoryCitationInput[]);
 }
 
-function redactMemoryContent(content: string) {
+function escapeRegularExpression(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactMemoryContent(
+  content: string,
+  exactCanaries: readonly string[] = [],
+) {
   if (/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(content))
     return memoryFailure(
       "secret_redaction_failed",
       "Memory contains a private-key block that cannot be stored safely.",
     );
   const patterns = [
+    ...exactCanaries.map((canary) => ({
+      kind: "exact-canary",
+      pattern: new RegExp(escapeRegularExpression(canary), "g"),
+    })),
     { kind: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{20,255}\b/g },
     { kind: "openai-token", pattern: /\bsk-[A-Za-z0-9_-]{20,255}\b/g },
     { kind: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
+    {
+      kind: "jwt",
+      pattern:
+        /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g,
+    },
+    {
+      kind: "url-credentials",
+      pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,
+    },
     {
       kind: "authorization",
       pattern: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi,
@@ -385,17 +589,103 @@ function redactMemoryContent(content: string) {
   return success({ content: redacted, redactions: matches });
 }
 
+function safePersistedText(value: string, exactCanaries: readonly string[]) {
+  const scanned = redactMemoryContent(value, exactCanaries);
+  return scanned.ok && scanned.value.redactions.length === 0;
+}
+
+function safePersistedStructure(
+  value: unknown,
+  exactCanaries: readonly string[],
+  depth = 0,
+): boolean {
+  if (depth > 32) return false;
+  if (typeof value === "string") return safePersistedText(value, exactCanaries);
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === undefined
+  )
+    return true;
+  if (Array.isArray(value))
+    return value.every((item) =>
+      safePersistedStructure(item, exactCanaries, depth + 1),
+    );
+  if (typeof value !== "object") return false;
+  return Object.entries(value).every(
+    ([key, item]) =>
+      safePersistedText(key, exactCanaries) &&
+      safePersistedStructure(item, exactCanaries, depth + 1),
+  );
+}
+
 export function createMemoryStoreModule(
   options: MemoryStoreModuleOptions,
 ): import("./model.ts").MemoryStoreModule {
   const clock = options.clock ?? Date.now;
   const id = options.id ?? randomUUID;
+  const exactCanaries = [...new Set(options.secretCanaries ?? [])];
+  if (
+    exactCanaries.some(
+      (canary) =>
+        typeof canary !== "string" ||
+        !canary ||
+        Buffer.byteLength(canary) > 4 * 1024 ||
+        canary.includes("\0"),
+    )
+  )
+    throw new TypeError("Memory secret canaries are invalid.");
   return {
-    bind(binding: HostMemoryBinding) {
+    bind(capability: HostMemoryBinding) {
+      const issued =
+        capability && typeof capability === "object"
+          ? issuedHostMemoryBindings.get(capability)
+          : undefined;
+      if (!issued)
+        throw new TypeError(
+          "MemoryStore.bind requires a host-issued Memory capability.",
+        );
+      let binding = issued.assertion;
+      const refreshBinding = async () => {
+        const current = issued.revalidate
+          ? await issued.revalidate(structuredClone(issued.assertion))
+          : issued.assertion;
+        if (!current || !validHostBindingAssertion(current))
+          return memoryFailure(
+            "scope_unavailable",
+            "Host Memory authority is no longer valid.",
+          );
+        if (!sameHostAuthority(issued.assertion, current))
+          return memoryFailure(
+            issued.assertion.workspace
+              ? "workspace_lease_lost"
+              : "scope_unavailable",
+            issued.assertion.workspace
+              ? "Guarded Workspace lease is no longer current."
+              : "Host Memory authority changed.",
+          );
+        if (!safePersistedText(JSON.stringify(current), exactCanaries))
+          return memoryFailure(
+            "secret_redaction_failed",
+            "Host Memory binding contains sensitive data.",
+          );
+        binding = structuredClone(current);
+        const purged = await options.persistence.purgeExpired(clock());
+        if (!purged.ok)
+          return memoryFailure(
+            "storage_failed",
+            "Expired Memory cleanup failed.",
+            purged.error.retryable,
+          );
+        return success(undefined);
+      };
       return {
         async remember(
           request: Parameters<import("./model.ts").MemoryStore["remember"]>[0],
         ) {
+          const authority = await refreshBinding();
+          if (!authority.ok) return authority;
           if (
             !request ||
             typeof request !== "object" ||
@@ -408,7 +698,7 @@ export function createMemoryStoreModule(
               "expiresAt",
               "attributes",
             ]) ||
-            !validRequestId(request.requestId) ||
+            !validRequestId(request.requestId, exactCanaries) ||
             !request.kind ||
             typeof request.kind.id !== "string" ||
             !Number.isSafeInteger(request.kind.version)
@@ -458,7 +748,7 @@ export function createMemoryStoreModule(
               "invalid_request",
               "Memory content is invalid.",
             );
-          const scanned = redactMemoryContent(request.content);
+          const scanned = redactMemoryContent(request.content, exactCanaries);
           if (!scanned.ok) return scanned;
           const content = scanned.value.content.trim();
           if (
@@ -478,6 +768,7 @@ export function createMemoryStoreModule(
             request.citations,
             (options.limits?.maxCitations ?? 16) - 1,
             options.limits?.maxCitationBytes ?? 4 * 1024,
+            exactCanaries,
           );
           if (!sanitizedCitations.ok) return sanitizedCitations;
           const fingerprint = createHash("sha256")
@@ -498,7 +789,7 @@ export function createMemoryStoreModule(
           if (!priorReceipt.ok)
             return memoryFailure(
               "storage_failed",
-              "Memory persistence failed.",
+              "Memory receipt lookup failed.",
               priorReceipt.error.retryable,
             );
           if (priorReceipt.value) {
@@ -541,12 +832,12 @@ export function createMemoryStoreModule(
           const candidates = await options.persistence.findCandidates(
             scope.value,
             request.kind,
-            options.limits?.maxCandidateIds ?? 500,
+            candidateLimit(options),
           );
           if (!candidates.ok)
             return memoryFailure(
               "storage_failed",
-              "Memory persistence failed.",
+              "Memory candidate lookup failed.",
               candidates.error.retryable,
             );
           const claim = contradictionClaim(content);
@@ -571,6 +862,90 @@ export function createMemoryStoreModule(
             );
           });
           if (duplicate) {
+            if (
+              binding.ingress === "direct-user" &&
+              duplicate.memory.status === "review"
+            ) {
+              const authorityBeforeTakeover = await refreshBinding();
+              if (!authorityBeforeTakeover.ok) return authorityBeforeTakeover;
+              const takeover: MemoryRecord = {
+                ...duplicate.memory,
+                revision: duplicate.memory.revision + 1,
+                provenance: {
+                  ingress: "direct-user",
+                  ...(binding.sessionId
+                    ? { sessionId: binding.sessionId }
+                    : {}),
+                  executionRole: binding.executionRole,
+                },
+                confidence: 1,
+                status: "active",
+                relationships: [],
+                updatedAt: now,
+              };
+              if (!safePersistedStructure(takeover, exactCanaries))
+                return memoryFailure(
+                  "secret_redaction_failed",
+                  "Memory contains sensitive metadata.",
+                );
+              const updated = await options.persistence.update(
+                {
+                  ...duplicate,
+                  memory: takeover,
+                  revisions: [...duplicate.revisions, takeover],
+                },
+                duplicate.memory.revision,
+                {
+                  requestId: request.requestId,
+                  operation: "remember",
+                  fingerprint,
+                  memoryId: takeover.id,
+                  state: "created",
+                  revision: takeover.revision,
+                },
+                [],
+              );
+              if (!updated.ok) {
+                const raced = await options.persistence.getReceipt(
+                  request.requestId,
+                );
+                if (
+                  raced.ok &&
+                  raced.value?.operation === "remember" &&
+                  raced.value.fingerprint === fingerprint &&
+                  raced.value.memoryId === takeover.id
+                ) {
+                  const replayed = await options.persistence.get(takeover.id);
+                  if (replayed.ok && replayed.value)
+                    return success({
+                      state: raced.value.state ?? "created",
+                      memory: replayed.value.memory,
+                      contradictionIds: replayed.value.memory.relationships
+                        .filter(({ kind }) => kind === "pi/contradicts")
+                        .map(({ targetId }) => targetId),
+                      redactions: scanned.value.redactions,
+                      replayed: true,
+                    } as const);
+                }
+                if (raced.ok && raced.value)
+                  return memoryFailure(
+                    "invalid_request",
+                    "Memory request ID was already used for different intent.",
+                  );
+                return memoryFailure(
+                  "storage_failed",
+                  "Memory persistence failed.",
+                  updated.error.retryable,
+                );
+              }
+              return success({
+                state: "created" as const,
+                memory: takeover,
+                contradictionIds: [],
+                redactions: scanned.value.redactions,
+                replayed: false,
+              });
+            }
             const receipt = {
               requestId: request.requestId,
               operation: "remember" as const,
@@ -579,36 +954,46 @@ export function createMemoryStoreModule(
               state: "duplicate" as const,
               duplicateOf: duplicate.memory.id,
             };
+            const authorityBeforeReceipt = await refreshBinding();
+            if (!authorityBeforeReceipt.ok) return authorityBeforeReceipt;
             const saved = await options.persistence.saveReceipt(receipt);
             if (!saved.ok)
-              return memoryFailure(
-                "storage_failed",
-                "Memory persistence failed.",
-                saved.error.retryable,
-              );
+              return saved.error.code === "revision_conflict"
+                ? memoryFailure(
+                    "invalid_request",
+                    "Memory request ID was already used for different intent.",
+                  )
+                : memoryFailure(
+                    "storage_failed",
+                    "Memory persistence failed.",
+                    saved.error.retryable,
+                  );
             return success({
-              state: "duplicate" as const,
+              state: saved.value.receipt.state ?? "duplicate",
               memory: duplicate.memory,
-              duplicateOf: duplicate.memory.id,
+              ...(saved.value.receipt.duplicateOf
+                ? { duplicateOf: saved.value.receipt.duplicateOf }
+                : {}),
               contradictionIds: duplicate.memory.relationships
                 .filter(({ kind }) => kind === "pi/contradicts")
                 .map(({ targetId }) => targetId),
               redactions: scanned.value.redactions,
-              replayed: false,
+              replayed: saved.value.replayed,
             });
           }
-          const contradictionIds = claim
-            ? liveCandidates
-                .filter((candidate) => {
-                  if (candidate.memory.status !== "active") return false;
-                  const other = contradictionClaim(candidate.memory.content);
-                  return (
-                    other?.subject === claim.subject &&
-                    other.value !== claim.value
-                  );
-                })
-                .map(({ memory }) => memory.id)
-            : [];
+          const contradictionIds =
+            binding.ingress === "direct-user" && claim
+              ? liveCandidates
+                  .filter((candidate) => {
+                    if (candidate.memory.status !== "active") return false;
+                    const other = contradictionClaim(candidate.memory.content);
+                    return (
+                      other?.subject === claim.subject &&
+                      other.value !== claim.value
+                    );
+                  })
+                  .map(({ memory }) => memory.id)
+              : [];
           const memoryId = id();
           const citations: MemoryCitation[] = [
             ...(sanitizedCitations.value ?? []).map((citation) => ({
@@ -660,6 +1045,13 @@ export function createMemoryStoreModule(
             trust: "untrusted",
             authority: "none",
           };
+          if (!safePersistedStructure(memory, exactCanaries))
+            return memoryFailure(
+              "secret_redaction_failed",
+              "Memory contains sensitive metadata.",
+            );
+          const authorityBeforeCreate = await refreshBinding();
+          if (!authorityBeforeCreate.ok) return authorityBeforeCreate;
           const stored = await options.persistence.create(
             {
               memory,
@@ -680,21 +1072,28 @@ export function createMemoryStoreModule(
             contradictionIds,
           );
           if (!stored.ok)
-            return memoryFailure(
-              "storage_failed",
-              "Memory persistence failed.",
-              stored.error.retryable,
-            );
+            return stored.error.code === "revision_conflict"
+              ? memoryFailure(
+                  "invalid_request",
+                  "Memory request ID was already used for different intent.",
+                )
+              : memoryFailure(
+                  "storage_failed",
+                  "Memory creation failed.",
+                  stored.error.retryable,
+                );
           if (!stored.value.created)
             return success({
-              state: "duplicate" as const,
+              state: stored.value.receipt.state ?? "duplicate",
               memory: stored.value.existing.memory,
-              duplicateOf: stored.value.existing.memory.id,
+              ...(stored.value.receipt.duplicateOf
+                ? { duplicateOf: stored.value.receipt.duplicateOf }
+                : {}),
               contradictionIds: stored.value.existing.memory.relationships
                 .filter(({ kind }) => kind === "pi/contradicts")
                 .map(({ targetId }) => targetId),
               redactions: scanned.value.redactions,
-              replayed: false,
+              replayed: stored.value.replayed,
             });
           return success({
             state: memory.status === "active" ? "created" : "review-required",
@@ -707,6 +1106,8 @@ export function createMemoryStoreModule(
         async inspect(
           request: Parameters<import("./model.ts").MemoryStore["inspect"]>[0],
         ) {
+          const authority = await refreshBinding();
+          if (!authority.ok) return authority;
           if (!request || typeof request !== "object")
             return memoryFailure(
               "invalid_request",
@@ -820,6 +1221,8 @@ export function createMemoryStoreModule(
           request: Parameters<import("./model.ts").MemoryStore["search"]>[0],
           signal?: AbortSignal,
         ) {
+          const authority = await refreshBinding();
+          if (!authority.ok) return authority;
           if (signal?.aborted)
             return memoryFailure("cancelled", "Memory search was cancelled.");
           if (
@@ -907,7 +1310,6 @@ export function createMemoryStoreModule(
           const maxExcerptBytes = options.limits?.maxExcerptBytes ?? 1024;
           const maxContextBytes = options.limits?.maxContextBytes ?? 32 * 1024;
           const hits: import("./model.ts").MemoryHit[] = [];
-          let contextBytes = 0;
           for (const candidate of candidates.value) {
             const memory = candidate.entry.memory;
             if (
@@ -919,15 +1321,19 @@ export function createMemoryStoreModule(
             let excerpt = memory.content;
             while (Buffer.byteLength(excerpt) > maxExcerptBytes)
               excerpt = excerpt.slice(0, -1);
-            const bytes = Buffer.byteLength(excerpt);
-            if (contextBytes + bytes > maxContextBytes) break;
-            contextBytes += bytes;
-            hits.push({
+            const hit = {
               memory,
               rank: candidate.score,
               excerpt,
               reasons: candidate.reasons,
-            });
+            };
+            if (
+              Buffer.byteLength(
+                JSON.stringify(success([...hits, hit] as const)),
+              ) > maxContextBytes
+            )
+              break;
+            hits.push(hit);
           }
           return success(hits);
         },
@@ -935,12 +1341,14 @@ export function createMemoryStoreModule(
           request: Parameters<import("./model.ts").MemoryStore["change"]>[0],
           signal?: AbortSignal,
         ) {
+          const authority = await refreshBinding();
+          if (!authority.ok) return authority;
           if (signal?.aborted)
             return memoryFailure("cancelled", "Memory change was cancelled.");
           if (
             !request ||
             typeof request !== "object" ||
-            !validRequestId(request.requestId) ||
+            !validRequestId(request.requestId, exactCanaries) ||
             typeof request.id !== "string" ||
             !request.id ||
             !["replace", "forget", "promote"].includes(request.type) ||
@@ -1029,6 +1437,8 @@ export function createMemoryStoreModule(
                 "Memory revision changed.",
               );
             const forgottenAt = clock();
+            const authorityBeforeForget = await refreshBinding();
+            if (!authorityBeforeForget.ok) return authorityBeforeForget;
             const deleted = await options.persistence.forget(
               request.id,
               request.expectedRevision,
@@ -1040,7 +1450,28 @@ export function createMemoryStoreModule(
                 forgottenAt,
               },
             );
-            if (!deleted.ok)
+            if (!deleted.ok) {
+              const raced = await options.persistence.getReceipt(
+                request.requestId,
+              );
+              if (
+                raced.ok &&
+                raced.value?.operation === "forget" &&
+                raced.value.fingerprint === fingerprint &&
+                raced.value.memoryId === request.id &&
+                raced.value.forgottenAt !== undefined
+              )
+                return success({
+                  type: "forget" as const,
+                  id: request.id,
+                  forgottenAt: raced.value.forgottenAt,
+                  replayed: true,
+                });
+              if (raced.ok && raced.value)
+                return memoryFailure(
+                  "invalid_request",
+                  "Memory request ID was already used for different intent.",
+                );
               return deleted.error.code === "revision_conflict"
                 ? memoryFailure("revision_conflict", "Memory revision changed.")
                 : memoryFailure(
@@ -1048,6 +1479,7 @@ export function createMemoryStoreModule(
                     "Memory persistence failed before complete deletion.",
                     deleted.error.retryable,
                   );
+            }
             return success({
               type: "forget" as const,
               id: request.id,
@@ -1084,7 +1516,7 @@ export function createMemoryStoreModule(
                 "invalid_request",
                 "Memory content is invalid.",
               );
-            const scanned = redactMemoryContent(request.content);
+            const scanned = redactMemoryContent(request.content, exactCanaries);
             if (!scanned.ok) return scanned;
             content = scanned.value.content.trim();
             if (
@@ -1104,6 +1536,7 @@ export function createMemoryStoreModule(
               request.citations,
               (options.limits?.maxCitations ?? 16) - 1,
               options.limits?.maxCitationBytes ?? 4 * 1024,
+              exactCanaries,
             );
             if (!sanitized.ok) return sanitized;
             sanitizedCitations = sanitized.value;
@@ -1240,7 +1673,7 @@ export function createMemoryStoreModule(
             const candidates = await options.persistence.findCandidates(
               current.value.memory.scope,
               current.value.memory.kind,
-              options.limits?.maxCandidateIds ?? 500,
+              candidateLimit(options),
             );
             if (!candidates.ok)
               return memoryFailure(
@@ -1296,6 +1729,13 @@ export function createMemoryStoreModule(
               .digest("hex"),
             revisions: [...current.value.revisions, memory],
           };
+          if (!safePersistedStructure(entry, exactCanaries))
+            return memoryFailure(
+              "secret_redaction_failed",
+              "Memory contains sensitive metadata.",
+            );
+          const authorityBeforeUpdate = await refreshBinding();
+          if (!authorityBeforeUpdate.ok) return authorityBeforeUpdate;
           const updated = await options.persistence.update(
             entry,
             request.expectedRevision,
@@ -1308,7 +1748,35 @@ export function createMemoryStoreModule(
             },
             contradictionIds,
           );
-          if (!updated.ok)
+          if (!updated.ok) {
+            const raced = await options.persistence.getReceipt(
+              request.requestId,
+            );
+            if (
+              raced.ok &&
+              raced.value?.operation === request.type &&
+              raced.value.fingerprint === fingerprint &&
+              raced.value.memoryId === request.id &&
+              raced.value.revision !== undefined
+            ) {
+              const replayed = await options.persistence.get(request.id);
+              const replayedMemory = replayed.ok
+                ? replayed.value?.revisions.find(
+                    ({ revision }) => revision === raced.value!.revision,
+                  )
+                : undefined;
+              if (replayedMemory)
+                return success({
+                  type: request.type,
+                  memory: replayedMemory,
+                  replayed: true,
+                } as const);
+            }
+            if (raced.ok && raced.value)
+              return memoryFailure(
+                "invalid_request",
+                "Memory request ID was already used for different intent.",
+              );
             return updated.error.code === "revision_conflict"
               ? memoryFailure("revision_conflict", "Memory revision changed.")
               : memoryFailure(
@@ -1316,6 +1784,7 @@ export function createMemoryStoreModule(
                   "Memory persistence failed.",
                   updated.error.retryable,
                 );
+          }
           return success({
             type: request.type,
             memory,
@@ -1326,12 +1795,14 @@ export function createMemoryStoreModule(
           request: Parameters<import("./model.ts").MemoryStore["transfer"]>[0],
           signal?: AbortSignal,
         ) {
+          const authority = await refreshBinding();
+          if (!authority.ok) return authority;
           if (signal?.aborted)
             return memoryFailure("cancelled", "Memory transfer was cancelled.");
           if (
             !request ||
             typeof request !== "object" ||
-            !validRequestId(request.requestId) ||
+            !validRequestId(request.requestId, exactCanaries) ||
             !["export", "preview-import", "commit-import"].includes(
               request.type,
             ) ||
@@ -1529,6 +2000,8 @@ export function createMemoryStoreModule(
                 "import_too_large",
                 "Memory export exceeds transfer size limit.",
               );
+            const authorityBeforeArtifact = await refreshBinding();
+            if (!authorityBeforeArtifact.ok) return authorityBeforeArtifact;
             const artifact = await options.artifacts.put({
               body,
               filename: "memory-bundle-v1.jsonl",
@@ -1547,6 +2020,13 @@ export function createMemoryStoreModule(
                 "Memory export Artifact could not be persisted.",
                 artifact.error.retryable,
               );
+            if (!safePersistedText(artifact.value.id, exactCanaries))
+              return memoryFailure(
+                "secret_redaction_failed",
+                "Memory export identifier contains sensitive data.",
+              );
+            const authorityBeforeReceipt = await refreshBinding();
+            if (!authorityBeforeReceipt.ok) return authorityBeforeReceipt;
             const saved = await options.persistence.saveReceipt({
               requestId: request.requestId,
               operation: "export",
@@ -1557,16 +2037,21 @@ export function createMemoryStoreModule(
               },
             });
             if (!saved.ok)
-              return memoryFailure(
-                "storage_failed",
-                "Memory export receipt could not be persisted.",
-                saved.error.retryable,
-              );
+              return saved.error.code === "revision_conflict"
+                ? memoryFailure(
+                    "invalid_request",
+                    "Memory request ID was already used for different intent.",
+                  )
+                : memoryFailure(
+                    "storage_failed",
+                    "Memory export receipt could not be persisted.",
+                    saved.error.retryable,
+                  );
             return success({
               type: "export" as const,
               artifact: artifact.value,
               count: selected.length,
-              replayed: false,
+              replayed: saved.value.replayed,
             });
           }
 
@@ -1574,7 +2059,8 @@ export function createMemoryStoreModule(
             if (
               typeof request.artifactId !== "string" ||
               !request.artifactId ||
-              Buffer.byteLength(request.artifactId) > 512
+              Buffer.byteLength(request.artifactId) > 512 ||
+              !safePersistedText(request.artifactId, exactCanaries)
             )
               return memoryFailure(
                 "invalid_request",
@@ -1731,9 +2217,20 @@ export function createMemoryStoreModule(
                 unsupportedKinds += 1;
                 continue;
               }
-              const scanned = redactMemoryContent(parsed.content);
+              const scanned = redactMemoryContent(
+                parsed.content,
+                exactCanaries,
+              );
               if (!scanned.ok) return scanned;
               const content = scanned.value.content.trim();
+              if (
+                Buffer.byteLength(content) >
+                (options.limits?.maxContentBytes ?? 16 * 1024)
+              )
+                return memoryFailure(
+                  "content_too_large",
+                  "Imported Memory content exceeds size limit.",
+                );
               if (!content || content === "[REDACTED]")
                 return memoryFailure(
                   "content_empty_after_redaction",
@@ -1743,13 +2240,14 @@ export function createMemoryStoreModule(
                 parsed.citations,
                 (options.limits?.maxCitations ?? 16) - 1,
                 options.limits?.maxCitationBytes ?? 4 * 1024,
+                exactCanaries,
               );
               if (!importedCitations.ok) return importedCitations;
               const normalized = normalizedContent(content);
               const candidates = await options.persistence.findCandidates(
                 scope.value,
                 parsed.kind,
-                options.limits?.maxCandidateIds ?? 500,
+                candidateLimit(options),
               );
               if (!candidates.ok)
                 return memoryFailure(
@@ -1757,9 +2255,15 @@ export function createMemoryStoreModule(
                   "Memory persistence failed.",
                   candidates.error.retryable,
                 );
+              const comparisonCandidates = [
+                ...candidates.value,
+                ...staged
+                  .filter(({ collision }) => !collision)
+                  .map(({ entry }) => entry),
+              ];
               const claim = contradictionClaim(content);
               const contradictionIds = claim
-                ? candidates.value
+                ? comparisonCandidates
                     .filter((candidate) => {
                       const other = contradictionClaim(
                         candidate.memory.content,
@@ -1772,7 +2276,7 @@ export function createMemoryStoreModule(
                     .map(({ memory }) => memory.id)
                 : [];
               contradictions += contradictionIds.length > 0 ? 1 : 0;
-              const collision = candidates.value.some((candidate) => {
+              const collision = comparisonCandidates.some((candidate) => {
                 const other = contradictionClaim(candidate.memory.content);
                 if (
                   claim &&
@@ -1861,6 +2365,20 @@ export function createMemoryStoreModule(
               unsupportedKinds,
               expiresAt,
             };
+            if (!safePersistedStructure(preview, exactCanaries))
+              return memoryFailure(
+                "secret_redaction_failed",
+                "Memory import preview contains sensitive metadata.",
+              );
+            const maxImportPreviewBytes =
+              options.limits?.maxImportPreviewBytes ?? 8 * 1024 * 1024;
+            if (
+              Buffer.byteLength(JSON.stringify(preview)) > maxImportPreviewBytes
+            )
+              return memoryFailure(
+                "import_too_large",
+                "Memory import preview exceeds staged-body quota.",
+              );
             const details = {
               previewId,
               manifestSha256: calculatedManifest,
@@ -1870,18 +2388,61 @@ export function createMemoryStoreModule(
               unsupportedKinds,
               expiresAt,
             };
-            const saved = await options.persistence.savePreview(preview, {
-              requestId: request.requestId,
-              operation: "preview-import",
-              fingerprint,
-              details,
-            });
-            if (!saved.ok)
+            const authorityBeforePreview = await refreshBinding();
+            if (!authorityBeforePreview.ok) return authorityBeforePreview;
+            const saved = await options.persistence.savePreview(
+              preview,
+              {
+                requestId: request.requestId,
+                operation: "preview-import",
+                fingerprint,
+                details,
+              },
+              {
+                now,
+                maxCount: options.limits?.maxImportPreviewCount ?? 32,
+                maxBytes: maxImportPreviewBytes,
+              },
+            );
+            if (!saved.ok) {
+              const raced = await options.persistence.getReceipt(
+                request.requestId,
+              );
+              const racedDetails = raced.ok ? raced.value?.details : undefined;
+              if (
+                raced.ok &&
+                raced.value?.operation === "preview-import" &&
+                raced.value.fingerprint === fingerprint &&
+                typeof racedDetails?.previewId === "string" &&
+                typeof racedDetails.manifestSha256 === "string" &&
+                typeof racedDetails.accepted === "number" &&
+                typeof racedDetails.duplicates === "number" &&
+                typeof racedDetails.contradictions === "number" &&
+                typeof racedDetails.unsupportedKinds === "number" &&
+                typeof racedDetails.expiresAt === "number"
+              )
+                return success({
+                  type: "preview-import" as const,
+                  previewId: racedDetails.previewId,
+                  manifestSha256: racedDetails.manifestSha256,
+                  accepted: racedDetails.accepted,
+                  duplicates: racedDetails.duplicates,
+                  contradictions: racedDetails.contradictions,
+                  unsupportedKinds: racedDetails.unsupportedKinds,
+                  expiresAt: racedDetails.expiresAt,
+                  replayed: true,
+                });
+              if (raced.ok && raced.value)
+                return memoryFailure(
+                  "invalid_request",
+                  "Memory request ID was already used for different intent.",
+                );
               return memoryFailure(
                 "storage_failed",
                 "Memory import preview could not be persisted.",
                 saved.error.retryable,
               );
+            }
             return success({
               type: "preview-import" as const,
               ...details,
@@ -1945,6 +2506,7 @@ export function createMemoryStoreModule(
           }
           const preview = await options.persistence.getPreview(
             request.previewId,
+            clock(),
           );
           if (!preview.ok)
             return memoryFailure(
@@ -2023,6 +2585,13 @@ export function createMemoryStoreModule(
             reviewRequired,
             skipped,
           };
+          if (!safePersistedStructure(selected, exactCanaries))
+            return memoryFailure(
+              "secret_redaction_failed",
+              "Memory import contains sensitive metadata.",
+            );
+          const authorityBeforeImport = await refreshBinding();
+          if (!authorityBeforeImport.ok) return authorityBeforeImport;
           const committed = await options.persistence.commitImport(
             request.previewId,
             selected,
@@ -2033,12 +2602,37 @@ export function createMemoryStoreModule(
               details,
             },
           );
-          if (!committed.ok)
+          if (!committed.ok) {
+            const raced = await options.persistence.getReceipt(
+              request.requestId,
+            );
+            const racedDetails = raced.ok ? raced.value?.details : undefined;
+            if (
+              raced.ok &&
+              raced.value?.operation === "commit-import" &&
+              raced.value.fingerprint === fingerprint &&
+              typeof racedDetails?.imported === "number" &&
+              typeof racedDetails.reviewRequired === "number" &&
+              typeof racedDetails.skipped === "number"
+            )
+              return success({
+                type: "commit-import" as const,
+                imported: racedDetails.imported,
+                reviewRequired: racedDetails.reviewRequired,
+                skipped: racedDetails.skipped,
+                replayed: true,
+              });
+            if (raced.ok && raced.value)
+              return memoryFailure(
+                "invalid_request",
+                "Memory request ID was already used for different intent.",
+              );
             return memoryFailure(
               "storage_failed",
               "Memory import could not be committed atomically.",
               committed.error.retryable,
             );
+          }
           return success({
             type: "commit-import" as const,
             ...details,
@@ -2053,6 +2647,9 @@ export function createMemoryStoreModule(
 export { coreMemoryKinds } from "./model.ts";
 export type {
   HostMemoryBinding,
+  HostMemoryBindingAssertion,
+  HostMemoryBindingFactory,
+  HostMemoryBindingFactoryOptions,
   MemoryChange,
   MemoryChangeResult,
   MemoryCitation,
