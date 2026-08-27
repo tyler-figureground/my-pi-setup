@@ -19,10 +19,10 @@ Do not begin Phase 7 without explicit approval and accepted Phase 6 evidence.
 
 - [x] Fetch remote and verify live `main` is 0 ahead / 0 behind `fork/main`.
 - [x] Create external Phase 6 branch/worktree from accepted Phase 5 head.
-- [ ] Confirm public module interfaces and test seams before writing tests.
-- [ ] Research exact `pi-memory` package and messaging/storage alternatives; record confidence-tiered reports and ADRs.
+- [x] Confirm public module interfaces and test seams before writing tests: flexible host-bound `SessionBroker` and five-method `MemoryStore` selected; delivery/persistence adapters remain internal.
+- [x] Research exact `pi-memory@0.4.2`; reject adopt/wrap and select repository-owned `MemoryStore` over built-in FTS5. ADR remains to record.
 - [ ] Record Phase 6 domain language and threat model.
-- [ ] Run isolated baseline verification.
+- [x] Run isolated baseline verification: 239 unit passed; integration reached 187 pass/5 skip with one unrelated 60-second browser timeout under concurrent research load; isolated retry passed in 98.4 seconds; smoke passed.
 - [ ] Build F10 in vertical red-green slices through confirmed registry/mailbox interfaces.
 - [ ] Build F11 in vertical red-green slices through confirmed `MemoryStore` interface.
 - [ ] Add Pi command/tool wiring while preserving project identity, role, trust, direct authority, and plan mode.

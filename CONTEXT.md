@@ -103,3 +103,35 @@ _Avoid_: Click command, browser mutation
 **Origin Policy**:
 Canonical allow/deny decision for a browser or MCP network destination after URL normalization, DNS/IP safety checks, redirect handling, and project/user allowlist evaluation.
 _Avoid_: URL filter, CORS policy
+
+**Session Incarnation**:
+One live process attachment for a Pi session, derived from host-provided session identity plus process-held proof. A resumed session retains its logical identity but receives a new incarnation.
+_Avoid_: Agent identity, sender token
+
+**Session Presence**:
+Expiring host-stamped discovery data for one Session Incarnation, including name, cwd, Project Identity, Execution Role, status, visibility, capabilities, and heartbeat time.
+_Avoid_: Agent record, process row
+
+**Mailbox Message**:
+Durable ordered cross-session envelope whose sender provenance is host-stamped and whose summary, body, delivery options, names, and capabilities remain untrusted data.
+_Avoid_: Prompt, user message, queue row
+
+**Delivery Receipt**:
+Durable evidence that one Mailbox Message became visible in its recipient Pi transcript. It does not imply model obedience, trust, or user approval.
+_Avoid_: Acceptance, acknowledgement of authority
+
+**Memory**:
+Versioned, explicitly stored, scoped, source-cited untrusted knowledge that may inform a model but cannot grant authority or become a system instruction.
+_Avoid_: Learned fact, memory instruction
+
+**Memory Scope**:
+Host-resolved user, Project Identity, or explicit Guarded Workspace locality used for Memory storage and retrieval isolation.
+_Avoid_: Namespace string, cwd prefix
+
+**Memory Citation**:
+Bounded provenance describing where Memory content came from. Supports inspection without making the content true or authoritative.
+_Avoid_: Proof, approval
+
+**Contradiction Link**:
+Symmetric relationship between active Memories making incompatible claims in one Memory Scope. Neither side wins automatically.
+_Avoid_: Replacement, supersession
