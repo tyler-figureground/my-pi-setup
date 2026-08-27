@@ -57,14 +57,14 @@ The reviewed file contains 15 `[X]` selections.
 
 | ID | Capability | Phase | Status |
 |---|---|---:|---|
-| F02 | Guarded worktrees and isolated agent workspaces | 3 | [ ] |
+| F02 | Guarded worktrees and isolated agent workspaces | 3 | [x] |
 | F03 | Live browser control and visual verification | 5 | [x] |
-| F04 | LSP diagnostics and symbol navigation | 4 | [ ] |
+| F04 | LSP diagnostics and symbol navigation | 4 | [x] |
 | F05 | Read-only plan mode | 2 | [x] |
-| F06 | First-class local code review | 4 | [ ] |
+| F06 | First-class local code review | 4 | [x] |
 | F07 | MCP client and OAuth | 5 | [x] |
 | F08 | Declarative lifecycle hooks | 2, 7 | [ ] |
-| F09 | Persistent named custom-agent profiles | 3 | [ ] |
+| F09 | Persistent named custom-agent profiles | 3 | [x] |
 | F10 | Cross-session messaging and queue | 6 | [ ] |
 | F11 | Persistent memory | 6 | [ ] |
 | F13 | Persistent task graph and goal mode | 8 | [ ] |
@@ -1233,13 +1233,13 @@ Record durable decisions here, then link a full ADR when needed.
 | Windows process semantics remain broken | High | High | Phase 0 repair and real process tests | Mitigated; native tests green |
 | Junction cleanup deletes shared target | Medium | Critical | Never recursive delete; detach and verify | Open |
 | Cross-extension Effect incompatibility | Medium | High | One exact version per independent package; plain-data seams | Mitigated; topology verified |
-| MCP lifecycle hangs package commands | Medium | High | Disposable trial; supervisor-owned clients | Open |
-| OAuth/browser secrets leak | Medium | Critical | Dedicated stores/profiles; redaction canaries | Open |
-| Browser mutates remote system in plan mode | Medium | High | Side-effect policy and explicit approval | Open |
+| MCP lifecycle hangs package commands | Medium | High | Disposable trial; supervisor-owned clients | Mitigated in Phase 5 |
+| OAuth/browser secrets leak | Medium | Critical | Dedicated stores/profiles; structural and exact redaction canaries; binary evidence lockout after credential use | Mitigated in Phase 5 |
+| Browser mutates remote system in plan mode | Medium | High | Side-effect policy, one-shot page-bound network authority, and explicit approval | Mitigated in Phase 5 |
 | Memory poisoning/stale facts | High | Medium | Provenance, contradiction, review queue, auto off | Open |
 | Multi-process duplicate schedules/messages | Medium | High | Transactional claims and leases | Open |
-| Tool schema/context explosion | High | Medium | Deferred registration/activation | Mitigated for rules and Phase 2 tools; future adapters open |
-| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 2 |
+| Tool schema/context explosion | High | Medium | Deferred registration/activation | Mitigated through Phase 5 rules, language, review, MCP, and browser tools |
+| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 5 |
 | Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 
