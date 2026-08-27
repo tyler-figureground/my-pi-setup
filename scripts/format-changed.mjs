@@ -28,12 +28,17 @@ if (supported.length === 0) {
 const prettier = path.join(
   root,
   "node_modules",
-  ".bin",
-  process.platform === "win32" ? "prettier.cmd" : "prettier",
+  "prettier",
+  "bin",
+  "prettier.cjs",
 );
-const result = spawnSync(prettier, ["--write", ...supported], {
-  cwd: root,
-  stdio: "inherit",
-});
+const result = spawnSync(
+  process.execPath,
+  [prettier, "--write", ...supported],
+  {
+    cwd: root,
+    stdio: "inherit",
+  },
+);
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);

@@ -10,7 +10,13 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  decodeBrowserConfiguration,
+  defaultPlatformBrowserConfiguration,
+  type PlatformBrowserConfiguration,
+} from "./browser/config.ts";
 import { decodeLanguageServerConfiguration } from "./language/config.ts";
+import { decodeMcpServers, type ConfiguredMcpServer } from "./mcp/config.ts";
 import type { LanguageServerDefinition } from "./language/model.ts";
 import {
   decodePlatformFlags,
@@ -199,18 +205,32 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly flags: PlatformFlags;
   readonly plan: PlatformPlanConfiguration;
   readonly languageServers: readonly LanguageServerDefinition[];
+  readonly mcpServers: readonly ConfiguredMcpServer[];
+  readonly browser: PlatformBrowserConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
   const agentDir = resolve(location.agentDir ?? getAgentDir());
-  const sources = [{ path: join(agentDir, "platform.json"), root: agentDir }];
+  const sources: Array<{
+    path: string;
+    root: string;
+    scope: "user" | "project";
+  }> = [
+    {
+      path: join(agentDir, "platform.json"),
+      root: agentDir,
+      scope: "user",
+    },
+  ];
   if (location.projectTrusted) {
     const projectConfig = findProjectConfig(location.cwd);
-    if (projectConfig) sources.push(projectConfig);
+    if (projectConfig) sources.push({ ...projectConfig, scope: "project" });
   }
   const diagnostics: PlatformDiagnostic[] = [];
   let flags: PlatformFlags = defaultPlatformFlags;
   let plan = defaultPlatformPlanConfiguration;
   let languageServers: readonly LanguageServerDefinition[] = [];
+  let mcpServers: readonly ConfiguredMcpServer[] = [];
+  let browser = defaultPlatformBrowserConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
     try {
@@ -225,7 +245,13 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         object
           ? Object.fromEntries(
               Object.entries(object).filter(
-                ([key]) => key !== "plan" && key !== "languageServers",
+                ([key]) =>
+                  ![
+                    "plan",
+                    "languageServers",
+                    "mcpServers",
+                    "browserSettings",
+                  ].includes(key),
               ),
             )
           : parsed,
@@ -236,14 +262,27 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         object?.languageServers,
         languageServers,
       );
+      const decodedMcp = decodeMcpServers(object?.mcpServers, mcpServers, {
+        path: source.path,
+        scope: source.scope,
+      });
+      const decodedBrowser = decodeBrowserConfiguration(
+        object?.browserSettings,
+        browser,
+        source.scope,
+      );
       flags = decoded.flags;
       plan = decodedPlan.plan;
       languageServers = decodedLanguage.servers;
+      mcpServers = decodedMcp.servers;
+      browser = decodedBrowser.browser;
       diagnostics.push(
         ...[
           ...decoded.diagnostics,
           ...decodedPlan.diagnostics,
           ...decodedLanguage.diagnostics,
+          ...decodedMcp.diagnostics,
+          ...decodedBrowser.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
           message: diagnostic.message,
@@ -256,5 +295,12 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       });
     }
   }
-  return { flags, plan, languageServers, diagnostics };
+  return {
+    flags,
+    plan,
+    languageServers,
+    mcpServers,
+    browser,
+    diagnostics,
+  };
 }

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +21,14 @@ import {
   loadPlatformFlags,
   type PlatformPlanConfiguration,
 } from "./config.ts";
+import {
+  defaultPlatformBrowserConfiguration,
+  type PlatformBrowserConfiguration,
+} from "./browser/config.ts";
+import type { BrowserAdapter } from "./browser/index.ts";
+import type { CredentialVault } from "./external/credentials.ts";
+import { createExternalIntegrationControls } from "./external/index.ts";
+import type { McpServerDefinition, McpTransportAdapter } from "./mcp/index.ts";
 import { bindPlatformAgentServices } from "./agents/services.ts";
 import { createFileSystemArtifactStore } from "./core/artifacts/index.ts";
 import { createCapabilityPolicy } from "./core/policy/index.ts";
@@ -41,6 +51,8 @@ import type { LocalReview, ReviewRequest } from "./review/index.ts";
 import { localReviewerFor } from "./review/reviewer-service.ts";
 import { createLanguageCapability } from "./wiring/language.ts";
 import { createReviewCapability } from "./wiring/review.ts";
+import { createBrowserCapability } from "./wiring/browser.ts";
+import { createMcpCapability } from "./wiring/mcp.ts";
 import { createWorkspaceManager } from "./workspaces/index.ts";
 
 export function canOwnPlatformDaemons(role: ExecutionRole) {
@@ -60,6 +72,33 @@ export function platformArtifactRoot(agentDir: string) {
         "pi-agent",
         "artifacts",
       );
+}
+
+export function platformBrowserProfileRoot(agentDir: string) {
+  return process.platform === "win32"
+    ? path.join(
+        process.env.LOCALAPPDATA ?? os.tmpdir(),
+        "pi-agent",
+        "browser",
+        "profiles",
+      )
+    : path.join(agentDir, "browser", "profiles");
+}
+
+function installedBrowserExecutable(configured: string) {
+  if (configured) return configured;
+  const candidates =
+    process.platform === "win32"
+      ? [
+          "C:/Program Files/Google/Chrome/Application/chrome.exe",
+          "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+        ]
+      : [
+          "/usr/bin/google-chrome",
+          "/usr/bin/chromium",
+          "/usr/bin/chromium-browser",
+        ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "";
 }
 
 export function builtInLanguageServers(): readonly LanguageServerDefinition[] {
@@ -126,6 +165,11 @@ export interface PlatformExtensionOptions {
   flags?: unknown;
   plan?: Partial<PlatformPlanConfiguration>;
   languageServers?: readonly LanguageServerDefinition[];
+  mcpServers?: readonly McpServerDefinition[];
+  browser?: PlatformBrowserConfiguration;
+  mcpAdapter?: McpTransportAdapter;
+  browserAdapter?: BrowserAdapter;
+  credentialVault?: CredentialVault;
   agentDir?: string;
   createLifecycleSupervisor?: () => LifecycleSupervisor;
   createProjectIdentity?: () => ProjectIdentity;
@@ -144,6 +188,8 @@ export function createPlatformExtension(
             ...options.plan,
           },
           languageServers: options.languageServers ?? [],
+          mcpServers: options.mcpServers ?? [],
+          browser: options.browser ?? defaultPlatformBrowserConfiguration,
         };
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
@@ -154,6 +200,7 @@ export function createPlatformExtension(
   return (pi: ExtensionAPI) => {
     const role = executionRoleFor(pi.events);
     const policy = createCapabilityPolicy();
+    const authorityValue = randomUUID();
     type PlatformRuntime = {
       role: ExecutionRole;
       lifecycle: LifecycleSupervisor;
@@ -163,6 +210,8 @@ export function createPlatformExtension(
       hooks?: ReturnType<typeof createHooksCapability>;
       language?: ReturnType<typeof createLanguageCapability>;
       review?: ReturnType<typeof createReviewCapability>;
+      mcp?: ReturnType<typeof createMcpCapability>;
+      browser?: ReturnType<typeof createBrowserCapability>;
       unbindAgentServices?: () => void;
     };
     let runtime: PlatformRuntime | undefined;
@@ -172,6 +221,9 @@ export function createPlatformExtension(
     let languageCapability:
       ReturnType<typeof createLanguageCapability> | undefined;
     let reviewCapability: ReturnType<typeof createReviewCapability> | undefined;
+    let mcpCapability: ReturnType<typeof createMcpCapability> | undefined;
+    let browserCapability:
+      ReturnType<typeof createBrowserCapability> | undefined;
 
     const teardown = async (
       current: PlatformRuntime,
@@ -179,6 +231,16 @@ export function createPlatformExtension(
       event: unknown,
     ) => {
       const failures: unknown[] = [];
+      try {
+        await current.browser?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.mcp?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await current.language?.stop();
       } catch (error) {
@@ -259,7 +321,9 @@ export function createPlatformExtension(
         configuration.flags.profiles ||
         configuration.flags.workspaces ||
         configuration.flags.languageIntelligence ||
-        configuration.flags.review;
+        configuration.flags.review ||
+        configuration.flags.mcp ||
+        configuration.flags.browser;
       if (!platformEnabled || role !== "parent") return;
 
       const resolved = await makeProjectIdentity().resolve(ctx.cwd);
@@ -271,11 +335,187 @@ export function createPlatformExtension(
       }
       const project = resolved.value;
       const artifacts =
-        configuration.flags.languageIntelligence || configuration.flags.review
+        configuration.flags.languageIntelligence ||
+        configuration.flags.review ||
+        configuration.flags.mcp ||
+        configuration.flags.browser
           ? createFileSystemArtifactStore({
               root: platformArtifactRoot(agentDir),
             })
           : undefined;
+      const platformMode = () => {
+        const state = runtime?.plan?.mode()?.status().state;
+        return state === "planning" || state === "approval-pending"
+          ? ("plan" as const)
+          : ("normal" as const);
+      };
+      const externalControls = createExternalIntegrationControls({
+        policy,
+        authority: {
+          verify: (token) => token.value === authorityValue,
+        },
+      });
+      let credentialVault = options.credentialVault;
+      if (
+        !credentialVault &&
+        (configuration.flags.mcp || configuration.flags.browser)
+      ) {
+        const { createKeyringCredentialVault } =
+          await import("./external/keyring-credentials.ts");
+        credentialVault = createKeyringCredentialVault();
+      }
+
+      if (configuration.flags.mcp) {
+        const oauthServers = configuration.mcpServers.flatMap((server) =>
+          "oauth" in server && server.oauth ? [server.oauth] : [],
+        );
+        let authorization:
+          import("./mcp/oauth.ts").McpAuthorization | undefined;
+        if (oauthServers.length > 0 && credentialVault) {
+          const state = createSqliteStateStore({
+            path: path.join(agentDir, "state", "platform.sqlite"),
+          });
+          if (state.ok) {
+            const [
+              { createMcpCredentialReferences },
+              oauthModule,
+              protocolModule,
+            ] = await Promise.all([
+              import("./mcp/references.ts"),
+              import("./mcp/oauth.ts"),
+              import("./mcp/official-oauth.ts"),
+            ]);
+            const references = createMcpCredentialReferences({
+              store: state.value,
+              scope: project.projectId,
+            });
+            const authorizationOrigins = oauthServers.map(
+              (server) => new URL(server.authorizationServer).origin,
+            );
+            const protocol = protocolModule.createOfficialMcpOAuthProtocol({
+              authorizeUrl: async (url) => {
+                const decision = await externalControls.assess({
+                  integration: "mcp",
+                  operation: "oauth",
+                  effect: "credential-use",
+                  actor: role,
+                  mode: platformMode(),
+                  destination: {
+                    url,
+                    allowedOrigins: authorizationOrigins,
+                    allowLoopback: false,
+                  },
+                });
+                return decision.kind !== "deny";
+              },
+            });
+            authorization = oauthModule.createMcpAuthorization({
+              vault: credentialVault,
+              references,
+              protocol,
+            });
+          } else if (ctx.hasUI) {
+            ctx.ui.notify(state.error.message, "error");
+          }
+        }
+        mcpCapability ??= createMcpCapability(pi, {
+          issueAuthority: () => ({
+            kind: "external-user-authority",
+            value: authorityValue,
+          }),
+        });
+        current.mcp = mcpCapability;
+        const adapter =
+          options.mcpAdapter ??
+          (await import("./mcp/official-adapter.ts")).createOfficialMcpAdapter({
+            authorizeUrl: async (server, url) => {
+              if (server.transport.kind !== "http") return false;
+              const decision = await externalControls.assess({
+                integration: "mcp",
+                operation: "http-request",
+                effect: "network-read",
+                actor: role,
+                mode: platformMode(),
+                destination: {
+                  url,
+                  allowedOrigins: server.transport.allowedOrigins,
+                  allowLoopback: server.transport.allowLoopback ?? false,
+                },
+              });
+              return decision.kind === "allow";
+            },
+            tokenFor: async (server) => {
+              if ("oauth" in server && server.oauth && authorization)
+                return authorization.token(server.oauth);
+              const reference =
+                "credentialReference" in server
+                  ? server.credentialReference
+                  : undefined;
+              if (typeof reference !== "string" || !credentialVault)
+                return undefined;
+              return credentialVault.resolve(reference, {
+                integration: "mcp",
+                resourceId: server.id,
+                ...(server.transport.kind === "http"
+                  ? { origin: new URL(server.transport.url).origin }
+                  : {}),
+              });
+            },
+          });
+        const { createToolFederation } = await import("./mcp/index.ts");
+        mcpCapability.start(
+          createToolFederation({
+            servers: configuration.mcpServers,
+            adapter,
+            controls: externalControls,
+            context: { actor: role, mode: platformMode },
+          }),
+          { authorization, oauthServers },
+        );
+      }
+
+      if (configuration.flags.browser) {
+        browserCapability ??= createBrowserCapability(pi, {
+          issueAuthority: () => ({
+            kind: "external-user-authority",
+            value: authorityValue,
+          }),
+        });
+        current.browser = browserCapability;
+        const executablePath = installedBrowserExecutable(
+          configuration.browser.executablePath,
+        );
+        if (!executablePath) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Browser capability is enabled but no configured Chrome/Edge executable exists.",
+              "warning",
+            );
+        } else {
+          const adapter =
+            options.browserAdapter ??
+            (
+              await import("./browser/playwright.ts")
+            ).createPlaywrightBrowserAdapter();
+          const { createBrowserControl } = await import("./browser/index.ts");
+          browserCapability.start(
+            createBrowserControl({
+              profileDirectory: path.join(
+                platformBrowserProfileRoot(agentDir),
+                configuration.browser.profileName,
+              ),
+              executablePath,
+              allowedOrigins: configuration.browser.allowedOrigins,
+              allowLoopback: configuration.browser.allowLoopback,
+              controls: externalControls,
+              ...(credentialVault ? { credentials: credentialVault } : {}),
+              artifacts: artifacts!,
+              adapter,
+              context: { actor: role, mode: platformMode },
+            }),
+          );
+        }
+      }
 
       if (configuration.flags.profiles || configuration.flags.workspaces) {
         const profiles = configuration.flags.profiles
