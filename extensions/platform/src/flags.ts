@@ -29,6 +29,8 @@ export const availablePlatformFlags = Object.freeze([
   "review",
   "mcp",
   "browser",
+  "messaging",
+  "memory",
 ] as const satisfies readonly PlatformFlagName[]);
 
 const availablePlatformFlagSet = new Set<PlatformFlagName>(

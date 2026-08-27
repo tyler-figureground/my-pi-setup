@@ -17,6 +17,16 @@ import {
 } from "./browser/config.ts";
 import { decodeLanguageServerConfiguration } from "./language/config.ts";
 import { decodeMcpServers, type ConfiguredMcpServer } from "./mcp/config.ts";
+import {
+  decodeMemoryConfiguration,
+  defaultPlatformMemoryConfiguration,
+  type PlatformMemoryConfiguration,
+} from "./memory/config.ts";
+import {
+  decodeMessagingConfiguration,
+  defaultPlatformMessagingConfiguration,
+  type PlatformMessagingConfiguration,
+} from "./messaging/config.ts";
 import type { LanguageServerDefinition } from "./language/model.ts";
 import {
   decodePlatformFlags,
@@ -207,6 +217,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly languageServers: readonly LanguageServerDefinition[];
   readonly mcpServers: readonly ConfiguredMcpServer[];
   readonly browser: PlatformBrowserConfiguration;
+  readonly messaging: PlatformMessagingConfiguration;
+  readonly memory: PlatformMemoryConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
   const agentDir = resolve(location.agentDir ?? getAgentDir());
@@ -231,6 +243,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   let languageServers: readonly LanguageServerDefinition[] = [];
   let mcpServers: readonly ConfiguredMcpServer[] = [];
   let browser = defaultPlatformBrowserConfiguration;
+  let messaging = defaultPlatformMessagingConfiguration;
+  let memory = defaultPlatformMemoryConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
     try {
@@ -251,6 +265,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
                     "languageServers",
                     "mcpServers",
                     "browserSettings",
+                    "messagingSettings",
+                    "memorySettings",
                   ].includes(key),
               ),
             )
@@ -271,11 +287,22 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         browser,
         source.scope,
       );
+      const decodedMessaging = decodeMessagingConfiguration(
+        object?.messagingSettings,
+        messaging,
+        source.scope,
+      );
+      const decodedMemory = decodeMemoryConfiguration(
+        object?.memorySettings,
+        memory,
+      );
       flags = decoded.flags;
       plan = decodedPlan.plan;
       languageServers = decodedLanguage.servers;
       mcpServers = decodedMcp.servers;
       browser = decodedBrowser.browser;
+      messaging = decodedMessaging.messaging;
+      memory = decodedMemory.memory;
       diagnostics.push(
         ...[
           ...decoded.diagnostics,
@@ -283,6 +310,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
           ...decodedLanguage.diagnostics,
           ...decodedMcp.diagnostics,
           ...decodedBrowser.diagnostics,
+          ...decodedMessaging.diagnostics,
+          ...decodedMemory.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
           message: diagnostic.message,
@@ -301,6 +330,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
     languageServers,
     mcpServers,
     browser,
+    messaging,
+    memory,
     diagnostics,
   };
 }
