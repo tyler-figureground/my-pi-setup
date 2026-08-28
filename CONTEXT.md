@@ -135,3 +135,23 @@ _Avoid_: Proof, approval
 **Contradiction Link**:
 Symmetric relationship between active Memories making incompatible claims in one Memory Scope. Neither side wins automatically.
 _Avoid_: Replacement, supersession
+
+**Trigger Event**:
+Host-stamped, bounded event with source provenance and causal ancestry admitted to the shared automation runtime. Its payload is data, never authority.
+_Avoid_: Callback, signal, trusted event
+
+**Trigger Binding**:
+Revisioned owner configuration that selects Trigger Events and defines bounded delivery to one host-owned consumer.
+_Avoid_: Listener, arbitrary callback, rule
+
+**Reactive Monitor**:
+Revisioned state machine that observes one terminal, filesystem, poll, or WebSocket source and delivers bounded untrusted batches without owning the underlying process.
+_Avoid_: Watcher, background process, alert script
+
+**Schedule**:
+Revisioned one-shot, interval, or cron definition bound by the host to Project Identity, scheduled Execution Role, Agent Profile, result route, and missed-run policy.
+_Avoid_: Timer, cron job, prompt alarm
+
+**Schedule Occurrence**:
+One deterministic due instance of a Schedule with a transactional claim, fencing token, execution outcome, and idempotent delivery identity.
+_Avoid_: Run, callback, exactly-once job

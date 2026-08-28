@@ -1,0 +1,3 @@
+# Unify Phase 7 automation through TriggerEngine
+
+Phase 7 uses one Parent-owned TriggerEngine for event admission, provenance, causal suppression, queueing, coalescing, deadlines, restart replay, and shutdown fencing while Hooks, MonitorRegistry, and Scheduler retain separate state-machine interfaces. Independent loops or one broad AutomationManager were rejected because they either duplicate cross-cutting safety behavior or spread source-, hook-, and occurrence-specific rules across a shallow interface. Scheduled execution guarantees one fenced current claimant and idempotent state/delivery, not exactly-once external effects.

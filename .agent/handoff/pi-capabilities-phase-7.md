@@ -22,9 +22,9 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 
 - [x] Fetch remotes before survey; confirm live `main` is 0 ahead / 0 behind `fork/main`.
 - [x] Create isolated Phase 7 branch/worktree from `4ee0cb6`.
-- [ ] Survey existing hooks, lifecycle, policy, mailbox, background-terminal, profiles, projects, persistence, and child-session seams.
-- [ ] Compare radically different interface designs; confirm external seams before tests.
-- [ ] Record Phase 7 architecture/domain language and package/adopt-wrap-build decisions.
+- [x] Survey existing hooks, lifecycle, policy, mailbox, background-terminal, profiles, projects, persistence, and child-session seams.
+- [x] Compare three radically different interface designs; user confirmed external seams before tests.
+- [ ] Record Phase 7 architecture/domain language and package/adopt-wrap-build decisions. Architecture, glossary, ADR 0009, and package research recorded; dependency trials/ADR remain.
 - [ ] Build shared TriggerEngine test-first: provenance, queue bounds, coalescing, recursion suppression, concurrency, deadlines, persistence, fake clock/watchers.
 - [ ] Build F15 MonitorRegistry test-first: terminal log subscriptions, filesystem, bounded poll, policy-safe WebSocket, batching, pause/resume/inspect/stop, explicit durability.
 - [ ] Complete F08 test-first: remaining host-supported events, policy-gated actions, history/errors, trust/config revalidation, recursion limits, migration guide.
@@ -36,7 +36,16 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 
 ## Current status
 
-Setup complete. Interface/seam survey and design comparison next. No implementation tests written yet.
+Setup and baseline complete. User confirmed minimal/caller hybrid seams: TriggerEngine (`reconcile`, `publish`, `inspect`), MonitorRegistry (`change`, `inspect`), Hooks (`configure`, `handle`, `inspect`), Scheduler (`change`, `inspect`), plus production/fake internal adapters. Four independent TDD foundation slices are running.
+
+### Dependency research run
+
+- [x] Fetch remotes and inventory repository manifests, lockfiles, Phase 7 seams, and Node runtime.
+- [x] Verify Node 26 built-ins and exact package metadata/source for cron, watching, WebSocket, and queue candidates.
+- [x] Run survivorship-bias searches and disposable no-repository-code package trials.
+- [x] Write and verify `docs/research/phase-7-trigger-packages.md`.
+
+Dependency research complete. Conditional `cron-parser@5.10.0`, wrapped `@parcel/watcher@2.6.0`, wrapped `ws@8.21.3`, and repository-owned queue recommended. DST semantics and minimum-Node matrix remain implementation preflight gates.
 
 ## Key constraints
 
