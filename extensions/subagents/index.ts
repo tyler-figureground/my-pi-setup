@@ -81,6 +81,11 @@ import type { ProfileCatalog } from "../platform/src/profiles/index.ts";
 import { platformAgentServices } from "../platform/src/agents/services.ts";
 import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
 import { bindLocalReviewer } from "../platform/src/review/reviewer-service.ts";
+import { bindScheduledAgentExecutor } from "../shared/scheduled-agent.ts";
+import {
+  createScheduledAgentExecutor,
+  type ScheduledSubagentManager,
+} from "./src/scheduled-agent.ts";
 import type {
   WorkspaceInventory,
   WorkspaceLease,
@@ -152,6 +157,7 @@ function truncatedOutput(
 
 export interface SubagentsExtensionOptions {
   profileCatalog?: ProfileCatalog;
+  scheduledAgentManager?: () => Promise<ScheduledSubagentManager>;
   spawn?: (
     harness: BackendName,
     task: SpawnTask,
@@ -169,6 +175,12 @@ export default function subagentsExtension(
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   let unbindLocalReviewer: (() => void) | undefined;
+  let unbindScheduledAgentExecutor: (() => void) | undefined;
+  let scheduledManagerPromise: Promise<ScheduledSubagentManager> | undefined;
+  let scheduledGeneration = 0;
+  const scheduledLifecycle = new AbortController();
+  const scheduledTitles = new Set<string>();
+  const scheduledChildTitles = new Map<string, string>();
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -250,6 +262,10 @@ export default function subagentsExtension(
     // A shutdown can settle children while disposing their scopes. Never
     // append into a session whose extension runtime is already closing.
     if (!sessionContext) return;
+    if (scheduledTitles.has(snap.title) || scheduledChildTitles.has(snap.id)) {
+      resultDelivery.consume([snap.id]);
+      return;
+    }
     if (snap.origin === "btw") {
       deliverBtwResult({ ...snap, meta: { ...snap.meta } });
       return;
@@ -265,6 +281,89 @@ export default function subagentsExtension(
     resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
     if (sessionContext?.isIdle()) flushResults();
   };
+
+  const getScheduledManager = () => {
+    scheduledManagerPromise ??= (async () => {
+      const base = options.scheduledAgentManager
+        ? await options.scheduledAgentManager()
+        : await (async () => {
+            const activeRuntime = getRuntime();
+            const manager = await getManager();
+            return {
+              spawn: (backend, task, signal) =>
+                runTool(activeRuntime, manager.spawn(backend, task), {
+                  signal,
+                  interruptMessage: "Scheduled Agent spawn cancelled.",
+                }),
+              waitFor: (ids) => runTool(activeRuntime, manager.waitFor(ids)),
+              get: (id) => runTool(activeRuntime, manager.get(id)),
+              cancel: (ids) => runTool(activeRuntime, manager.cancel(ids)),
+            } satisfies ScheduledSubagentManager;
+          })();
+      const untrack = (id: string) => {
+        const title = scheduledChildTitles.get(id);
+        if (title) scheduledTitles.delete(title);
+        scheduledChildTitles.delete(id);
+      };
+      return {
+        async spawn(backend, task, signal) {
+          scheduledTitles.add(task.title);
+          try {
+            const started = await base.spawn(backend, task, signal);
+            scheduledChildTitles.set(started.id, task.title);
+            resultDelivery.consume([started.id]);
+            return started;
+          } catch (error) {
+            scheduledTitles.delete(task.title);
+            throw error;
+          }
+        },
+        waitFor: (ids) => base.waitFor(ids),
+        async get(id) {
+          try {
+            return await base.get(id);
+          } finally {
+            untrack(id);
+          }
+        },
+        async cancel(ids) {
+          try {
+            return await base.cancel(ids);
+          } finally {
+            for (const id of ids) untrack(id);
+          }
+        },
+      } satisfies ScheduledSubagentManager;
+    })();
+    return scheduledManagerPromise;
+  };
+
+  const scheduledExecutor = createScheduledAgentExecutor({
+    manager: getScheduledManager,
+    parent: () => {
+      const current = sessionContext;
+      if (!current) {
+        throw new Error(
+          "Scheduled Agent executor is unavailable outside an active session.",
+        );
+      }
+      return {
+        parentCwd: current.cwd,
+        projectTrusted: false,
+        inheritedModel: current.model
+          ? { provider: current.model.provider, id: current.model.id }
+          : undefined,
+        inheritedThinkingLevel: pi.getThinkingLevel(),
+        modelRegistry: current.modelRegistry,
+      };
+    },
+    generation: () => scheduledGeneration,
+    lifecycleSignal: () => scheduledLifecycle.signal,
+  });
+  unbindScheduledAgentExecutor = bindScheduledAgentExecutor(
+    pi.events,
+    scheduledExecutor,
+  );
 
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
@@ -355,6 +454,10 @@ export default function subagentsExtension(
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
+    unbindScheduledAgentExecutor?.();
+    unbindScheduledAgentExecutor = undefined;
+    scheduledGeneration++;
+    scheduledLifecycle.abort();
     unbindLocalReviewer?.();
     unbindLocalReviewer = undefined;
     sessionContext = undefined;
@@ -366,6 +469,9 @@ export default function subagentsExtension(
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;
+    scheduledManagerPromise = undefined;
+    scheduledTitles.clear();
+    scheduledChildTitles.clear();
     // Disposing the runtime runs the manager finalizer, which tears down all
     // subagent scopes (and, later, their real child processes).
     await closing?.dispose();

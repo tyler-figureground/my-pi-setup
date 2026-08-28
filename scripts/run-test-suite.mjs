@@ -57,6 +57,7 @@ const unit = [
   "extensions/subagents/local-review.test.ts",
   "extensions/subagents/profile-policy.test.ts",
   "extensions/subagents/result-delivery.test.ts",
+  "extensions/subagents/scheduled-agent.test.ts",
   "extensions/subagents/takeover.test.ts",
   "extensions/summaries/config.test.ts",
   "extensions/summaries/index.test.ts",

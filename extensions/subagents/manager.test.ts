@@ -11,9 +11,10 @@ import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
+import {
+  createEventBus,
+  type ExtensionAPI,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import subagentsExtension from "./index.ts";
@@ -438,6 +439,7 @@ test("subagent_spawn resolves a named profile while keeping explicit model overr
     };
     subagentsExtension(
       {
+        events: createEventBus(),
         on() {},
         registerTool(definition: ToolDefinition) {
           tools.set(definition.name, definition);
@@ -520,6 +522,7 @@ test("subagent_spawn passes canonical cwd and resolved trust to the backend", as
       | undefined;
     subagentsExtension(
       {
+        events: createEventBus(),
         on() {},
         registerTool(definition: ToolDefinition) {
           tools.set(definition.name, definition);
