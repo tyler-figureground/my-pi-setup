@@ -1,6 +1,6 @@
 # Pi capabilities program handoff
 
-Updated: 2026-08-26
+Updated: 2026-08-27
 
 ## Objective
 
@@ -8,50 +8,50 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 5 complete and live-integrated. F07 MCP client/OAuth and F03 browser control/visual verification accepted. Phase 6 remains out of scope until Tyler explicitly approves it.
+Phase 6 isolated-complete. F10 cross-session messaging and F11 explicit persistent Memory accepted. Publication and live-main verification remain. Phase 7 must not start without explicit approval.
 
 ## Completed this phase
 
-- [x] `ExternalIntegrationControls`: exact origins, private-network/offline policy, address pinning, direct authority, plan-mode backstop, structural/string/exact redaction.
-- [x] F07 `ToolFederation`: lazy namespaced discovery/activation, official MCP v2 STDIO and Streamable HTTP, official dialect schemas, protected effects, bounded results/artifacts, cancellation/reload/shutdown.
-- [x] OAuth: PKCE/state, issuer/server/config binding, per-server origins, single-flight serialized refresh/logout, OS credential references, revoke, no ambiguous 401 mutation replay.
-- [x] F03 `BrowserControl`: project/profile-scoped persistent Chrome, atomic leases, owned/opener-bound pages, 16-page caps, AI refs, prepared target identity, action approval, observations, screenshots, upload/download artifacts.
-- [x] Browser network hardening: Chromium host pinning, no proxy, service-worker/WebSocket/WebRTC restrictions, one-shot page-bound non-GET authority including HEAD.
-- [x] Visual verification skill and evidence on fixture and repository pages.
-- [x] Official MCP and `playwright-core` package decisions recorded in ADRs 0006 and 0007; broader wrappers rejected as production boundaries.
-- [x] Repeated adversarial review resolved all high/critical findings. Final MCP sign-off `sa-64` and browser/security sign-off `sa-66`: no blockers.
+- [x] F10 host-bound `SessionBroker`: process proof, fenced Presence, opt-in visibility/acceptance, ordered durable mailbox, explicit fanout, offline catch-up, retention, and bounded recovery.
+- [x] Pi delivery adapter: strict UTF-8 custom inbox, fsync/readback receipt, restart dedupe, structural/reload gates, and durable-first inbox/idle/follow-up/steer behavior.
+- [x] Real two-process Pi exchange produced ordered inbox positions 1 and 2 without network/provider credentials.
+- [x] F11 host-bound `MemoryStore`: user/project/workspace scopes, typed kinds/citations, revisions, expiry, dedupe, contradiction links, FTS5 retrieval, import/export, and managed deletion.
+- [x] Exact `pi-memory@0.4.2` audit; adopt/wrap rejected. Repository-owned `node:sqlite` FTS5 selected in ADR 0008.
+- [x] Automatic extraction evaluation fails recall gate and remains absent/off. No model-callable Memory write tool.
+- [x] Repeated adversarial review closed identity, authority, secret, scope, race, cleanup, deletion, retention, lifecycle, and Windows path/process blockers.
+- [x] Final critical/high sign-off `sa-101`: no blockers.
 
 ## Verification
 
-Authoritative details: `docs/verification/phase-5-acceptance.md`.
+Authoritative details: `docs/verification/phase-6-acceptance.md`.
 
-- Post-sign-off isolated `npm run verify`: 239 unit; 188 integration with 5 platform skips; 22 delegated; smoke; Claude 2/2; Codex 2/2; Pi 1/1.
-- Real Chrome, keyring, MCP STDIO/HTTP/OAuth, pinned-host, profile collision/persistence, detached descendant, and secret-canary fixtures pass.
-- Repository visual artifacts: snapshot `c05b9157...4b061`; screenshot `fa670da7...f4d5`.
-- Startup median 4,170.4 ms versus matched Phase 4 4,061.4 ms: +2.7%.
-- Platform audit: zero vulnerabilities.
-- Live clean platform install, typecheck, formatting, 61/61 focused Phase 5 tests, and repository smoke passed.
+- Final isolated `npm run verify`: 299 unit; 283 integration with 5 platform skips; 22 delegated; smoke; Claude 2/2; Codex 2/2; Pi 1/1.
+- Full log: `C:/Users/Tyler/AppData/Local/Temp/pi-phase6-verify-final.log`.
+- Memory evaluation: recall@3/MRR 0.9167, zero scope leaks/forbidden hits, bounded context and latency.
+- Real Pi exchange: `C:/Users/Tyler/AppData/Local/Temp/pi-phase6-real-process-acceptance.json`.
+- Startup median: Phase 6 5,720.6 ms versus Phase 5 control 5,468.1 ms, +4.6%.
+- Real terminal-keystroke checklist remains manual; automated TUI/RPC paths pass.
 
 ## Key references
 
-- `docs/architecture/phase-5-mcp-browser.md`
-- `docs/adr/0006-build-tool-federation-on-official-mcp-v2.md`
-- `docs/adr/0007-build-browser-control-on-playwright-core.md`
-- `docs/phase-5-configuration.md`
-- `docs/security/phase-5-threat-model.md`
-- `docs/verification/phase-5-acceptance.md`
-- `docs/verification/phase-5-performance.md`
-- `docs/verification/phase-5-tui-smoke.md`
-- `.agent/handoff/pi-capabilities-phase-5.md`
+- `docs/architecture/phase-6-messaging-memory.md`
+- `docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md`
+- `docs/research/phase-6-memory-packages.md`
+- `docs/phase-6-configuration.md`
+- `docs/security/phase-6-threat-model.md`
+- `docs/verification/phase-6-acceptance.md`
+- `docs/verification/phase-6-memory-quality.md`
+- `docs/verification/phase-6-performance.md`
+- `.agent/handoff/pi-capabilities-phase-6.md`
 
 ## Repository state
 
-- Live `main` fast-forwarded through Phase 5 implementation/evidence at `f1603a9`; final integration documentation commit follows this handoff update.
-- Published branch: `pi-capabilities-phase-5`
-- External worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-5`
-- Live deleted `AGENTS.md` and untracked `skills/impeccable/` remain untouched.
-- Preserve DLL backup at `C:/Users/Tyler/AppData/Local/Temp/pi-capabilities-phase1-live-backup-20260825-144510`.
+- Branch: `pi-capabilities-phase-6`
+- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-6`
+- Base: accepted Phase 5 head `c08835e`
+- Isolated implementation/evidence through `935816e`; publication/live integration commits follow.
+- Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL safety backup.
 
 ## Next exact action
 
-Wait for explicit Phase 6 approval. If approved: fetch first, create isolated Phase 6 branch/worktree and checkpoint, then design F10 cross-session messaging and F11 persistent memory test seams before implementation.
+Fetch publication preflight, confirm ahead/behind, publish Phase 6 branch, fast-forward live `main`, install/verify live checkout while preserving user state, record live evidence, then stop before Phase 7.
