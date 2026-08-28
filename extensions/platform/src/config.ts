@@ -29,6 +29,16 @@ import {
 } from "./messaging/config.ts";
 import type { LanguageServerDefinition } from "./language/model.ts";
 import {
+  decodeMonitorConfiguration,
+  defaultPlatformMonitorConfiguration,
+  type PlatformMonitorConfiguration,
+} from "./automation/monitors/config.ts";
+import {
+  decodeSchedulerConfiguration,
+  defaultPlatformSchedulerConfiguration,
+  type PlatformSchedulerConfiguration,
+} from "./automation/scheduler/config.ts";
+import {
   decodePlatformFlags,
   defaultPlatformFlags,
   type PlatformDiagnostic,
@@ -219,6 +229,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly browser: PlatformBrowserConfiguration;
   readonly messaging: PlatformMessagingConfiguration;
   readonly memory: PlatformMemoryConfiguration;
+  readonly monitors: PlatformMonitorConfiguration;
+  readonly scheduler: PlatformSchedulerConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
   const agentDir = resolve(location.agentDir ?? getAgentDir());
@@ -245,6 +257,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   let browser = defaultPlatformBrowserConfiguration;
   let messaging = defaultPlatformMessagingConfiguration;
   let memory = defaultPlatformMemoryConfiguration;
+  let monitors = defaultPlatformMonitorConfiguration;
+  let scheduler = defaultPlatformSchedulerConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
     try {
@@ -267,6 +281,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
                     "browserSettings",
                     "messagingSettings",
                     "memorySettings",
+                    "monitorSettings",
+                    "schedulerSettings",
                   ].includes(key),
               ),
             )
@@ -296,6 +312,16 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         object?.memorySettings,
         memory,
       );
+      const decodedMonitors = decodeMonitorConfiguration(
+        object?.monitorSettings,
+        monitors,
+        source.scope,
+      );
+      const decodedScheduler = decodeSchedulerConfiguration(
+        object?.schedulerSettings,
+        scheduler,
+        source.scope,
+      );
       flags = decoded.flags;
       plan = decodedPlan.plan;
       languageServers = decodedLanguage.servers;
@@ -303,6 +329,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       browser = decodedBrowser.browser;
       messaging = decodedMessaging.messaging;
       memory = decodedMemory.memory;
+      monitors = decodedMonitors.monitors;
+      scheduler = decodedScheduler.scheduler;
       diagnostics.push(
         ...[
           ...decoded.diagnostics,
@@ -312,6 +340,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
           ...decodedBrowser.diagnostics,
           ...decodedMessaging.diagnostics,
           ...decodedMemory.diagnostics,
+          ...decodedMonitors.diagnostics,
+          ...decodedScheduler.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
           message: diagnostic.message,
@@ -332,6 +362,8 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
     browser,
     messaging,
     memory,
+    monitors,
+    scheduler,
     diagnostics,
   };
 }

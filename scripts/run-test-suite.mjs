@@ -35,6 +35,7 @@ const unit = [
   "extensions/platform/messaging-wiring.test.ts",
   "extensions/platform/phase5-config.test.ts",
   "extensions/platform/phase6-config.test.ts",
+  "extensions/platform/phase7-config.test.ts",
   "extensions/platform/plan-mode.test.ts",
   "extensions/platform/platform-config.test.ts",
   "extensions/platform/platform.test.ts",
