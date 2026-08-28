@@ -43,6 +43,7 @@ const unit = [
   "extensions/platform/review-wiring.test.ts",
   "extensions/platform/reviewer-service.test.ts",
   "extensions/platform/rules.test.ts",
+  "extensions/platform/scheduler-calendar.test.ts",
   "extensions/platform/state-store.test.ts",
   "extensions/platform/tool-federation.test.ts",
   "extensions/shared/context-utilization.test.ts",
