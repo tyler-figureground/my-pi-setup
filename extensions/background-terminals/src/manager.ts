@@ -30,9 +30,17 @@ import {
   formatExit,
   SpawnError,
   UnknownTerminalError,
+  type TerminalObservation,
+  type TerminalObservationOptions,
+  type TerminalOutputStream,
   type TerminalSnapshot,
   type TerminalStatus,
 } from "./domain.ts";
+import {
+  snapshotWindowsProcessTree,
+  terminateWindowsProcessTreeByIdentity,
+  type WindowsProcessIdentity,
+} from "../../platform/src/core/processes/windows-tree.ts";
 import { OutputBuffer } from "./output.ts";
 
 export const MAX_RUNNING = 8;
@@ -54,6 +62,8 @@ const SETTLE_GRACE_MS = 1_000;
  * scope-close bound, so teardown remains bounded end to end. */
 const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
+const MAX_OBSERVATION_HISTORY = 128;
+const MAX_OBSERVATION_FRAME_BYTES = 16 * 1024;
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
@@ -61,6 +71,19 @@ function bounded(text: string) {
 
 function boundedError(error: unknown) {
   return bounded(error instanceof Error ? error.message : String(error));
+}
+
+function splitOutputFrames(text: string) {
+  const bytes = Buffer.from(text, "utf8");
+  const frames: Array<{ text: string; byteLength: number }> = [];
+  for (let start = 0; start < bytes.length;) {
+    let end = Math.min(start + MAX_OBSERVATION_FRAME_BYTES, bytes.length);
+    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+    const frame = bytes.subarray(start, end);
+    frames.push({ text: frame.toString("utf8"), byteLength: frame.length });
+    start = end;
+  }
+  return frames;
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -102,6 +125,11 @@ interface Entry {
   /** Completed exactly once when the entry settles. Kill callers and the scope
    * finalizer can all await the same result without missing a notification. */
   settled: Deferred.Deferred<void>;
+  observationSequence: number;
+  observations: TerminalObservation[];
+  observers: Set<(event: TerminalObservation) => unknown>;
+  /** Captured immediately after spawn; termination revalidates this identity. */
+  windowsRootIdentity?: Promise<WindowsProcessIdentity | undefined>;
 }
 
 export interface StartOptions {
@@ -135,6 +163,12 @@ export interface TerminalReadModel {
   subscribe(listener: () => void): () => void;
   /** Per-terminal notification (/ps detail view). */
   subscribeTo(id: string, listener: () => void): () => void;
+  /** Replay and follow one terminal's ordered output/settlement observations. */
+  observe(
+    id: string,
+    listener: (event: TerminalObservation) => unknown,
+    options?: TerminalObservationOptions,
+  ): () => void;
   /** Fire-and-forget kill (dashboard/detail `x`). Not marked consumed: the
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
@@ -178,36 +212,8 @@ function shellInvocation(command: string) {
 
 /** Signal the whole process group on POSIX so descendants (servers a shell
  * command spawned) die with it; a wedged child must not orphan its tree. */
-function killTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (process.platform === "win32" && child.pid) {
-    try {
-      const killer = spawn(
-        "taskkill",
-        ["/pid", String(child.pid), "/T", "/F"],
-        { stdio: "ignore", windowsHide: true },
-      );
-      killer.once("error", () => {
-        try {
-          child.kill(signal);
-        } catch {
-          // Process may already be gone.
-        }
-      });
-      killer.once("exit", (code) => {
-        if (code === 0) return;
-        try {
-          child.kill(signal);
-        } catch {
-          // Process may already be gone.
-        }
-      });
-      killer.unref();
-      return;
-    } catch {
-      // Fall through to the direct signal when taskkill cannot be launched.
-    }
-  }
-  if (process.platform !== "win32" && child.pid) {
+function signalPosixTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid) {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -242,20 +248,53 @@ function terminateChild(
   child: ChildProcess,
   closed: () => boolean,
   onSignal: () => void,
+  windowsRootIdentity: Promise<WindowsProcessIdentity | undefined> | undefined,
+  onFailure: (error: unknown) => void,
 ) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;
+    if (process.platform === "win32") {
+      return Effect.promise(async () => {
+        try {
+          const identity = await windowsRootIdentity;
+          if (!identity) {
+            if (closed()) return;
+            throw new Error(
+              "Background terminal Windows creation identity was unavailable; refusing PID-only termination.",
+            );
+          }
+          if (closed()) return;
+          onSignal();
+          await terminateWindowsProcessTreeByIdentity(identity);
+          await new Promise<void>((resolve) => {
+            if (closed()) return resolve();
+            const timer = setTimeout(resolve, FORCE_KILL_AFTER_MS + 500);
+            child.once("close", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          if (!closed()) {
+            throw new Error(
+              `Background terminal process ${identity.pid} remained open after identity-validated tree termination.`,
+            );
+          }
+        } catch (error) {
+          onFailure(error);
+        }
+      });
+    }
     return Effect.gen(function* () {
       yield* Effect.sync(() => {
         onSignal();
-        killTree(child, "SIGTERM");
+        signalPosixTree(child, "SIGTERM");
       });
       yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(FORCE_KILL_AFTER_MS),
         Effect.ignore,
       );
       if (closed()) return;
-      yield* Effect.sync(() => killTree(child, "SIGKILL"));
+      yield* Effect.sync(() => signalPosixTree(child, "SIGKILL"));
       yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(500),
         Effect.ignore,
@@ -290,6 +329,68 @@ const makeManager = Effect.gen(function* () {
   let spillDir: string | undefined | null;
   let onSettled:
     ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
+
+  const immutableSnapshot = (snapshot: TerminalSnapshot) =>
+    Object.freeze({
+      ...snapshot,
+      stdout: Object.freeze({ ...snapshot.stdout }),
+      stderr: Object.freeze({ ...snapshot.stderr }),
+    });
+
+  const notifyObserver = (
+    observer: (event: TerminalObservation) => unknown,
+    event: TerminalObservation,
+  ) => {
+    try {
+      const result = observer(event);
+      if (
+        result &&
+        (typeof result === "object" || typeof result === "function") &&
+        "then" in result &&
+        typeof result.then === "function"
+      ) {
+        void Promise.resolve(result).catch(() => undefined);
+      }
+    } catch {
+      // Observation failures cannot corrupt terminal lifecycle state.
+    }
+  };
+
+  const publishObservation = (entry: Entry, event: TerminalObservation) => {
+    if (disposed) return;
+    entry.observations.push(event);
+    while (entry.observations.length > MAX_OBSERVATION_HISTORY) {
+      entry.observations.shift();
+    }
+    for (const observer of [...entry.observers]) {
+      notifyObserver(observer, event);
+    }
+  };
+
+  const publishOutput = (
+    entry: Entry,
+    stream: TerminalOutputStream,
+    text: string,
+    startByte: number,
+  ) => {
+    let offset = startByte;
+    for (const frame of splitOutputFrames(text)) {
+      publishObservation(
+        entry,
+        Object.freeze({
+          kind: "output",
+          terminalId: entry.snapshot.id,
+          sequence: ++entry.observationSequence,
+          stream,
+          text: frame.text,
+          byteLength: frame.byteLength,
+          startByte: offset,
+          endByte: offset + frame.byteLength,
+        }),
+      );
+      offset += frame.byteLength;
+    }
+  };
 
   const notify = (id?: string) => {
     for (const listener of [...listeners]) {
@@ -405,6 +506,16 @@ const makeManager = Effect.gen(function* () {
     // ensuring blocks release interest. Snapshot consumption first so the
     // settle hook observes the interest that existed when settlement won.
     const consumed = (killInterest.get(s.id) ?? 0) > 0;
+    publishObservation(
+      entry,
+      Object.freeze({
+        kind: "settled",
+        terminalId: s.id,
+        sequence: ++entry.observationSequence,
+        snapshot: immutableSnapshot(s),
+        consumed,
+      }),
+    );
     Deferred.doneUnsafe(entry.settled, Effect.void);
     notify(s.id);
     try {
@@ -564,6 +675,16 @@ const makeManager = Effect.gen(function* () {
           catch: (error) => new SpawnError({ message: boundedError(error) }),
         });
 
+        const windowsRootIdentity =
+          process.platform === "win32" && child.pid
+            ? snapshotWindowsProcessTree(child.pid).then(
+                (snapshot) => snapshot.root,
+              )
+            : undefined;
+        // Inspection starts immediately after spawn. Attach a rejection handler
+        // now so a later termination can report it without an unhandled promise.
+        void windowsRootIdentity?.catch(() => undefined);
+
         const id = `bt-${++counter}`;
         const entryRef = () => entries.get(id);
         const stdoutSpill = makeSpill(entryRef, id, "stdout", () =>
@@ -617,6 +738,10 @@ const makeManager = Effect.gen(function* () {
           settling: false,
           exitCleanupStarted: false,
           settled,
+          observationSequence: 0,
+          observations: [],
+          observers: new Set(),
+          ...(windowsRootIdentity ? { windowsRootIdentity } : {}),
         };
 
         // Plain-callback stream plumbing (the codex-backend precedent):
@@ -624,12 +749,16 @@ const makeManager = Effect.gen(function* () {
         // chunk boundaries.
         child.stdout?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: string) => {
+          const startByte = stdoutBuf.totalBytes;
           if (!stdoutBuf.push(chunk)) child.stdout?.pause();
+          publishOutput(entry, "stdout", chunk, startByte);
           notify(id);
         });
         child.stderr?.setEncoding("utf8");
         child.stderr?.on("data", (chunk: string) => {
+          const startByte = stderrBuf.totalBytes;
           if (!stderrBuf.push(chunk)) child.stderr?.pause();
+          publishOutput(entry, "stderr", chunk, startByte);
           notify(id);
         });
         // Spawn failures (ENOENT etc.) arrive via 'error', not a throw. Node
@@ -678,6 +807,13 @@ const makeManager = Effect.gen(function* () {
                 () => {
                   entry.killSignaled ||=
                     !entry.exited && entry.snapshot.status === "running";
+                },
+                entry.windowsRootIdentity,
+                (error) => {
+                  entry.processErrored = true;
+                  entry.snapshot.errorText ??= bounded(
+                    `Identity-safe process-tree termination failed: ${boundedError(error)}`,
+                  );
                 },
               );
               // Give the natural close→flush→settle path a bounded grace,
@@ -872,6 +1008,44 @@ const makeManager = Effect.gen(function* () {
         set.delete(listener);
         if (set.size === 0) idListeners.delete(id);
       };
+    },
+    observe: (id, listener, options) => {
+      if (disposed) return () => {};
+      const entry = entries.get(id);
+      if (!entry) {
+        throw new UnknownTerminalError({
+          message: `Unknown terminal id ${JSON.stringify(id)}.`,
+        });
+      }
+      const afterSequence = options?.afterSequence ?? 0;
+      if (
+        !Number.isSafeInteger(afterSequence) ||
+        afterSequence < 0 ||
+        afterSequence > entry.observationSequence
+      ) {
+        throw new RangeError(
+          `Observation cursor must be an integer from 0 through ${entry.observationSequence}.`,
+        );
+      }
+      entry.observers.add(listener);
+      const oldest = entry.observations[0];
+      if (oldest && afterSequence < oldest.sequence - 1) {
+        notifyObserver(
+          listener,
+          Object.freeze({
+            kind: "gap",
+            terminalId: id,
+            sequence: oldest.sequence - 1,
+            fromSequence: afterSequence + 1,
+            toSequence: oldest.sequence - 1,
+          }),
+        );
+      }
+      for (const event of entry.observations) {
+        if (event.sequence <= afterSequence) continue;
+        notifyObserver(listener, event);
+      }
+      return () => entry.observers.delete(listener);
     },
     requestKill: (id) => {
       const entry = entries.get(id);

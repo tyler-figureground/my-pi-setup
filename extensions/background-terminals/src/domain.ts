@@ -50,6 +50,50 @@ export interface TerminalSnapshot {
   readonly stderr: OutputView;
 }
 
+export type TerminalOutputStream = "stdout" | "stderr";
+
+export interface TerminalOutputObservation {
+  readonly kind: "output";
+  readonly terminalId: string;
+  /** Per-terminal sequence. Starts at 1 and increases across both streams. */
+  readonly sequence: number;
+  readonly stream: TerminalOutputStream;
+  /** Immutable decoded UTF-8 text received in this frame. */
+  readonly text: string;
+  readonly byteLength: number;
+  /** Half-open byte range within this output stream. */
+  readonly startByte: number;
+  readonly endByte: number;
+}
+
+export interface TerminalSettledObservation {
+  readonly kind: "settled";
+  readonly terminalId: string;
+  readonly sequence: number;
+  readonly snapshot: TerminalSnapshot;
+  readonly consumed: boolean;
+}
+
+export interface TerminalObservationGap {
+  readonly kind: "gap";
+  readonly terminalId: string;
+  /** Cursor immediately before the first retained observation. */
+  readonly sequence: number;
+  /** Inclusive unavailable sequence range. */
+  readonly fromSequence: number;
+  readonly toSequence: number;
+}
+
+export type TerminalObservation =
+  | TerminalOutputObservation
+  | TerminalSettledObservation
+  | TerminalObservationGap;
+
+export interface TerminalObservationOptions {
+  /** Resume strictly after this per-terminal sequence. Defaults to 0. */
+  readonly afterSequence?: number;
+}
+
 export function formatElapsed(snap: TerminalSnapshot) {
   const end = snap.settledAt ?? Date.now();
   const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));

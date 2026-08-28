@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { Effect } from "effect";
-import type { TerminalSnapshot } from "./src/domain.ts";
+import type { TerminalObservation, TerminalSnapshot } from "./src/domain.ts";
 import {
   MAX_RUNNING,
   MAX_TRACKED,
@@ -133,6 +133,262 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
       );
     }
   });
+});
+
+test("observers multicast ordered immutable output frames and settlement without displacing the settle hook", async () => {
+  await withManager(async (manager, runtime) => {
+    const legacySettled: string[] = [];
+    manager.view.setOnSettled((snap) => legacySettled.push(snap.id));
+
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(
+          'process.stdout.write("alpha"); setTimeout(() => process.stderr.write("beta"), 25);',
+        ),
+        title: "observed",
+        cwd,
+      }),
+    );
+    const first: TerminalObservation[] = [];
+    const second: typeof first = [];
+    manager.view.observe(snap.id, (event) => first.push(event));
+    manager.view.observe(snap.id, (event) => second.push(event));
+
+    await settlement(manager, snap.id);
+
+    assert.deepEqual(second, first);
+    assert.ok(first.length >= 3);
+    assert.deepEqual(
+      first.map((event) => event.sequence),
+      first.map((_, index) => index + 1),
+    );
+    assert.equal(
+      first
+        .filter((event) => event.kind === "output")
+        .filter((event) => event.stream === "stdout")
+        .map((event) => event.text)
+        .join(""),
+      "alpha",
+    );
+    assert.equal(
+      first
+        .filter((event) => event.kind === "output")
+        .filter((event) => event.stream === "stderr")
+        .map((event) => event.text)
+        .join(""),
+      "beta",
+    );
+    for (const event of first.filter((event) => event.kind === "output")) {
+      assert.equal(event.byteLength, Buffer.byteLength(event.text, "utf8"));
+      assert.equal(event.endByte - event.startByte, event.byteLength);
+    }
+    const settled = first.at(-1);
+    assert.equal(settled?.kind, "settled");
+    if (settled?.kind === "settled") {
+      assert.equal(settled.snapshot.status, "done");
+      assert.ok(Object.isFrozen(settled.snapshot));
+      assert.ok(Object.isFrozen(settled.snapshot.stdout));
+      assert.ok(Object.isFrozen(settled.snapshot.stderr));
+    }
+    assert.ok(first.every(Object.isFrozen));
+    assert.deepEqual(legacySettled, [snap.id]);
+  });
+});
+
+test("observation rejects unknown terminals explicitly", async () => {
+  await withManager(async (manager) => {
+    assert.throws(
+      () => manager.view.observe("bt-unknown", () => {}),
+      /Unknown terminal/i,
+    );
+  });
+});
+
+test("rejected async observers cannot become unhandled process failures", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd('process.stdout.write("observed")'),
+        title: "rejected-observer",
+        cwd,
+      }),
+    );
+    let unhandled = false;
+    const onUnhandled = () => {
+      unhandled = true;
+    };
+    process.once("unhandledRejection", onUnhandled);
+    try {
+      manager.view.observe(snap.id, async () => {
+        throw new Error("observer rejected");
+      });
+      await settlement(manager, snap.id);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(unhandled, false);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
+test("an observer resumes after its monotonic sequence cursor", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(
+          'process.stdout.write("one"); process.stderr.write("two");',
+        ),
+        title: "cursor",
+        cwd,
+      }),
+    );
+    const all: TerminalObservation[] = [];
+    manager.view.observe(snap.id, (event) => all.push(event));
+    await settlement(manager, snap.id);
+    assert.ok(all.length >= 3);
+
+    const cursor = all[0].sequence;
+    const resumed: typeof all = [];
+    manager.view.observe(snap.id, (event) => resumed.push(event), {
+      afterSequence: cursor,
+    });
+
+    assert.deepEqual(
+      resumed,
+      all.filter((event) => event.sequence > cursor),
+    );
+  });
+});
+
+test("an expired observation cursor receives one bounded gap before retained history", async () => {
+  await withManager(async (manager, runtime) => {
+    const bytes = 3 * 1024 * 1024;
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(
+          `const chunk = "x".repeat(65536); for (let sent = 0; sent < ${bytes}; sent += chunk.length) process.stdout.write(chunk);`,
+        ),
+        title: "history-gap",
+        cwd,
+      }),
+    );
+    await settlement(manager, snap.id);
+
+    const replayed: TerminalObservation[] = [];
+    manager.view.observe(snap.id, (event) => replayed.push(event), {
+      afterSequence: 0,
+    });
+
+    const gap = replayed[0];
+    assert.equal(gap?.kind, "gap");
+    if (gap?.kind !== "gap") return;
+    assert.equal(gap.fromSequence, 1);
+    assert.equal(gap.sequence, gap.toSequence);
+    assert.ok(gap.toSequence > 0);
+    assert.ok(Object.isFrozen(gap));
+    assert.ok(replayed.length <= 129, "gap plus at most 128 retained events");
+    assert.deepEqual(
+      replayed.slice(1).map((event) => event.sequence),
+      Array.from(
+        { length: replayed.length - 1 },
+        (_, index) => gap.toSequence + index + 1,
+      ),
+    );
+    assert.equal(replayed.at(-1)?.kind, "settled");
+  });
+});
+
+test("unsubscribing stops observations without stopping the terminal", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(
+          'setTimeout(() => process.stdout.write("first"), 50); setTimeout(() => process.stdout.write("second"), 150);',
+        ),
+        title: "unsubscribe",
+        cwd,
+      }),
+    );
+    const observed: TerminalObservation[] = [];
+    let resolveFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const unsubscribe = manager.view.observe(snap.id, (event) => {
+      observed.push(event);
+      if (event.kind === "output") resolveFirst();
+    });
+
+    await first;
+    unsubscribe();
+    const countAtUnsubscribe = observed.length;
+    const { snap: done } = await settlement(manager, snap.id);
+
+    assert.equal(done.status, "done");
+    assert.equal(done.stdout.text, "firstsecond");
+    assert.equal(observed.length, countAtUnsubscribe);
+  });
+});
+
+test("an async slow observer cannot backpressure terminal output or settlement", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd('process.stdout.write("complete")'),
+        title: "slow-observer",
+        cwd,
+      }),
+    );
+    const never = new Promise<void>(() => {});
+    const kinds: string[] = [];
+    manager.view.observe(snap.id, async (event) => {
+      kinds.push(event.kind);
+      await never;
+    });
+
+    const { snap: done } = await settlement(manager, snap.id);
+
+    assert.equal(done.status, "done");
+    assert.deepEqual(kinds, ["output", "settled"]);
+  });
+});
+
+test("observers receive no callbacks after manager disposal begins", async () => {
+  const runtime = createTerminalRuntime();
+  const manager = await runtime.runPromise(TerminalManager);
+  const snap = await runTool(
+    runtime,
+    manager.start({
+      command: nodeCmd(
+        'process.stdout.write("ready"); setInterval(() => process.stdout.write("tick"), 10);',
+      ),
+      title: "dispose-observer",
+      cwd,
+    }),
+  );
+  const observed: string[] = [];
+  manager.view.observe(snap.id, (event) => observed.push(event.kind));
+  assert.ok(
+    await pollUntil(() => observed.includes("output")),
+    "observer saw output before disposal",
+  );
+
+  const countBeforeDispose = observed.length;
+  await runtime.dispose();
+  assert.equal(observed.length, countBeforeDispose);
+  const countAfterDispose = observed.length;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(observed.length, countAfterDispose);
+  assert.equal(observed.includes("settled"), false);
+  manager.view.observe(snap.id, (event) => observed.push(event.kind));
+  assert.equal(observed.length, countAfterDispose);
 });
 
 test("non-zero exit settles as failed with the exit code", async () => {
