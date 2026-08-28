@@ -52,6 +52,10 @@ import {
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
+import {
+  bindTerminalObservationSource,
+  type TerminalObservationSourceOutcome,
+} from "./src/observation-service.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
@@ -63,6 +67,7 @@ export default function (pi: ExtensionAPI) {
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  let shuttingDown = false;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
 
   const getRuntime = () => (runtime ??= createTerminalRuntime());
@@ -168,7 +173,54 @@ export default function (pi: ExtensionAPI) {
     if (sessionContext?.isIdle()) flushResults();
   };
 
+  const unbindObservationSource = bindTerminalObservationSource(pi.events, {
+    async observe(
+      request,
+      listener,
+    ): Promise<TerminalObservationSourceOutcome> {
+      if (shuttingDown) {
+        return {
+          ok: false,
+          error: {
+            code: "shutting_down",
+            message: "Background terminal observation is shutting down.",
+            retryable: true,
+          },
+        };
+      }
+      try {
+        const manager = await getManager();
+        const unsubscribe = manager.view.observe(
+          request.terminalId,
+          listener,
+          request.afterSequence === undefined
+            ? undefined
+            : { afterSequence: request.afterSequence },
+        );
+        return {
+          ok: true,
+          value: { close: unsubscribe },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          ok: false,
+          error: {
+            code: message.includes("Unknown terminal")
+              ? "terminal_not_found"
+              : message.includes("cursor")
+                ? "cursor_invalid"
+                : "source_unavailable",
+            message: message.slice(0, 2_048),
+            retryable: !message.includes("Unknown terminal"),
+          },
+        };
+      }
+    },
+  });
+
   pi.on("session_start", (_event, ctx) => {
+    shuttingDown = false;
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
   });
@@ -184,6 +236,8 @@ export default function (pi: ExtensionAPI) {
   // disposeAll → every entry scope → SIGTERM→SIGKILL tree kill, each close
   // bounded so a wedged process cannot hang shutdown.
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
+    unbindObservationSource();
     sessionContext = undefined;
     resultDelivery.clear();
     unsubStatus?.();

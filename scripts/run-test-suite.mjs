@@ -5,6 +5,7 @@ import * as path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const unit = [
+  "extensions/background-terminals/observation-service.test.ts",
   "extensions/background-terminals/output.test.ts",
   "extensions/background-terminals/prompt.test.ts",
   "extensions/background-terminals/ps.test.ts",
