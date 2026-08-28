@@ -14,6 +14,7 @@ import { createLifecycleSupervisor } from "./src/core/lifecycle/supervisor.ts";
 import {
   createMemoryStateStore,
   createSqliteStateStore,
+  type StateStore,
 } from "./src/core/persistence/index.ts";
 import type { ResolvedProjectIdentity } from "./src/core/projects/index.ts";
 import { CHILD_EXECUTION_ROLES } from "../shared/execution-role.ts";
@@ -3021,6 +3022,11 @@ test("delivery finish retries a concurrent enqueue and keeps the immediate pump 
 test("bounded retention removes old terminal history without losing pending mail", async () => {
   let now = 0;
   const state = createMemoryStateStore({ now: () => now });
+  const workspaceReceipt = await state.transact({
+    transactionId: "workspace.retention:preserved",
+    operations: [],
+  });
+  assert.equal(workspaceReceipt.ok, true);
   const lifecycle = createLifecycleSupervisor();
   const module = createSessionBrokerModule({
     state,
@@ -3153,6 +3159,14 @@ test("bounded retention removes old terminal history without losing pending mail
       true,
     );
   }
+  const preservedWorkspaceReceipt = await state.transact({
+    transactionId: "workspace.retention:preserved",
+    operations: [],
+  });
+  assert.equal(
+    preservedWorkspaceReceipt.ok && preservedWorkspaceReceipt.value.replayed,
+    true,
+  );
 
   const replacementDelivered = await attach("retention-delivered");
   assert.equal(replacementDelivered.ok, true);
@@ -3200,6 +3214,216 @@ test("bounded retention removes old terminal history without losing pending mail
     assert.equal(resumedMailbox.value[0]?.lastErrorCode, "artifact_expired");
   }
   await lifecycle.shutdown("quit");
+});
+
+test("later broker maintenance recovers event cleanup after compaction failure", async () => {
+  let now = 0;
+  const state = createMemoryStateStore({ now: () => now });
+  let failEventCompaction = true;
+  let eventCompactionAttempts = 0;
+  const failingState: StateStore = {
+    ...state,
+    async compact(request) {
+      if (request?.eventIdsBefore !== undefined) {
+        eventCompactionAttempts += 1;
+        if (failEventCompaction) {
+          failEventCompaction = false;
+          return {
+            ok: false as const,
+            error: {
+              code: "STORAGE_FAILED" as const,
+              message: "Injected event compaction failure.",
+              retryable: true,
+            },
+          };
+        }
+      }
+      return state.compact(request);
+    },
+  };
+  const firstLifecycle = createLifecycleSupervisor();
+  const firstModule = createSessionBrokerModule({
+    state: failingState,
+    artifacts: createInMemoryArtifactStore({ clock: () => now }),
+    lifecycle: firstLifecycle,
+    clock: () => now,
+    limits: {
+      heartbeatMs: 1_000_000_000,
+      sessionTtlMs: 90 * 24 * 60 * 60 * 1_000,
+    },
+  });
+  const attach = (piSessionId: string) =>
+    firstModule.attach(
+      {
+        piSessionId,
+        proof: issueHostSessionProof(),
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      delivery(piSessionId),
+    );
+  const sender = await attach("recovery-sender");
+  const deliveredRecipient = await attach("recovery-delivered");
+  const pendingRecipient = await attach("recovery-pending");
+  assert.equal(sender.ok, true);
+  assert.equal(deliveredRecipient.ok, true);
+  assert.equal(pendingRecipient.ok, true);
+  if (!sender.ok || !deliveredRecipient.ok || !pendingRecipient.ok) return;
+  await pendingRecipient.value.close("quit");
+
+  const terminal = await sender.value.send({
+    requestId: "recovery-terminal-request",
+    recipients: [{ piSessionId: "recovery-delivered" }],
+    summary: "recover terminal cleanup",
+    body: { kind: "text", text: "terminal" },
+  });
+  const pending = await sender.value.send({
+    requestId: "recovery-pending-request",
+    recipients: [{ piSessionId: "recovery-pending" }],
+    summary: "retain pending cleanup",
+    body: { kind: "text", text: "pending" },
+  });
+  assert.equal(terminal.ok, true);
+  assert.equal(pending.ok, true);
+  if (!terminal.ok || !pending.ok) return;
+  let history = await sender.value.messages({ direction: "outbound" });
+  while (
+    history.ok &&
+    history.value.find(
+      ({ envelope }) => envelope.id === terminal.value.deliveries[0]?.messageId,
+    )?.state !== "delivered"
+  ) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    history = await sender.value.messages({ direction: "outbound" });
+  }
+  await deliveredRecipient.value.close("quit");
+
+  now = 30 * 24 * 60 * 60 * 1_000 + 1;
+  const firstJanitor = await attach("recovery-first-janitor");
+  assert.equal(firstJanitor.ok, true);
+  assert.equal(eventCompactionAttempts, 1);
+  const afterFailure = await state.export({ format: "snapshot" });
+  assert.equal(afterFailure.ok, true);
+  if (!afterFailure.ok || afterFailure.value.format !== "snapshot") return;
+  const terminalMessageId = terminal.value.deliveries[0]!.messageId;
+  const pendingMessageId = pending.value.deliveries[0]!.messageId;
+  const terminalEventIds = afterFailure.value.snapshot.events
+    .filter(({ metadata }) => metadata.messageId === terminalMessageId)
+    .map(({ eventId }) => eventId);
+  const pendingEventIds = afterFailure.value.snapshot.events
+    .filter(({ metadata }) => metadata.messageId === pendingMessageId)
+    .map(({ eventId }) => eventId);
+  assert.equal(
+    afterFailure.value.snapshot.records.some(
+      ({ collection, key }) =>
+        collection === "session-broker.messages" && key === terminalMessageId,
+    ),
+    false,
+  );
+  assert.equal(terminalEventIds.length >= 2, true);
+  assert.equal(pendingEventIds.length >= 2, true);
+  await firstLifecycle.shutdown("quit");
+
+  const secondLifecycle = createLifecycleSupervisor();
+  const secondModule = createSessionBrokerModule({
+    state,
+    artifacts: createInMemoryArtifactStore({ clock: () => now }),
+    lifecycle: secondLifecycle,
+    clock: () => now,
+    limits: {
+      heartbeatMs: 1_000_000_000,
+      sessionTtlMs: 90 * 24 * 60 * 60 * 1_000,
+    },
+  });
+  const secondJanitor = await secondModule.attach(
+    {
+      piSessionId: "recovery-second-janitor",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("project-one"),
+      cwd: "C:/project-one",
+      exposure: {
+        discoverableBy: "same-project",
+        acceptsFrom: "same-project",
+      },
+    },
+    delivery("recovery-second-janitor"),
+  );
+  assert.equal(secondJanitor.ok, true);
+
+  const recovered = await state.export({ format: "snapshot" });
+  assert.equal(recovered.ok, true);
+  if (!recovered.ok || recovered.value.format !== "snapshot") return;
+  assert.deepEqual(
+    recovered.value.snapshot.events
+      .filter(({ eventId }) => terminalEventIds.includes(eventId))
+      .map(({ eventId }) => eventId),
+    [],
+  );
+  assert.deepEqual(
+    recovered.value.snapshot.events
+      .filter(({ eventId }) => pendingEventIds.includes(eventId))
+      .map(({ eventId }) => eventId)
+      .sort(),
+    [...pendingEventIds].sort(),
+  );
+  assert.equal(
+    recovered.value.snapshot.records.some(
+      ({ collection, key }) =>
+        collection === "session-broker.messages" && key === pendingMessageId,
+    ),
+    true,
+  );
+
+  const reusedTerminalIds = await state.transact({
+    transactionId: "recovery-reuse-terminal-event-ids",
+    operations: terminalEventIds.map((eventId, index) => ({
+      type: "append-event" as const,
+      stream: "recovery-reused-events",
+      eventId,
+      eventType: "test.reused",
+      metadata: { index },
+    })),
+  });
+  assert.equal(reusedTerminalIds.ok, true);
+  const duplicatePendingId = await state.transact({
+    transactionId: "recovery-retain-pending-event-id",
+    operations: [
+      {
+        type: "append-event",
+        stream: "recovery-pending-events",
+        eventId: pendingEventIds[0]!,
+        eventType: "test.pending",
+        metadata: {},
+      },
+    ],
+  });
+  assert.equal(duplicatePendingId.ok, false);
+  if (!duplicatePendingId.ok) {
+    assert.equal(duplicatePendingId.error.code, "EVENT_CONFLICT");
+  }
+  const recreatedMessage = await state.transact({
+    transactionId: "recovery-recreate-message-head",
+    operations: [
+      {
+        type: "put-record",
+        collection: "session-broker.messages",
+        key: terminalMessageId,
+        metadata: {},
+        expectedVersion: null,
+      },
+    ],
+  });
+  assert.equal(recreatedMessage.ok, true);
+  if (recreatedMessage.ok) {
+    assert.equal(recreatedMessage.value.records[0]?.version, 1);
+  }
+  await secondLifecycle.shutdown("quit");
 });
 
 test("native SQLite retention removes terminal records and outbound index events", async (t) => {

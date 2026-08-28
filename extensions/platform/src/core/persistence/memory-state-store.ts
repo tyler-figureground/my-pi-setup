@@ -597,9 +597,19 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
           "Event ID compaction requires a tombstone cutoff",
         );
       }
+      if (
+        (request.transactionIdPrefixes === undefined) !==
+        (request.transactionsBefore === undefined)
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          "Transaction compaction requires both a cutoff and explicit ID prefixes",
+        );
+      }
       for (const identifiers of [
         request.eventIds,
         request.recordHeadCollections,
+        request.transactionIdPrefixes,
       ]) {
         if (
           identifiers !== undefined &&
@@ -619,7 +629,8 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
       const limit =
         request.limit ??
         (request.eventIdsBefore !== undefined ||
-        request.recordHeadCollections !== undefined
+        request.recordHeadCollections !== undefined ||
+        request.transactionIdPrefixes !== undefined
           ? DEFAULT_COMPACT_MAX_LIMIT
           : Number.POSITIVE_INFINITY);
       const requestedEventIds =
@@ -681,10 +692,18 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
       }
 
       const beforeTransactions = state.receipts.size;
-      if (request.transactionsBefore !== undefined) {
+      if (
+        request.transactionsBefore !== undefined &&
+        request.transactionIdPrefixes !== undefined
+      ) {
         for (const [id, receipt] of state.receipts) {
           if (beforeTransactions - state.receipts.size >= limit) break;
-          if (receipt.result.committedAt < request.transactionsBefore) {
+          if (
+            receipt.result.committedAt < request.transactionsBefore &&
+            request.transactionIdPrefixes.some((prefix) =>
+              id.startsWith(prefix),
+            )
+          ) {
             state.receipts.delete(id);
           }
         }

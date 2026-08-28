@@ -20,6 +20,7 @@ const PRESENCE_COLLECTION = "session-broker.presence";
 const MESSAGE_COLLECTION = "session-broker.messages";
 const REQUEST_COLLECTION = "session-broker.requests";
 const MAILBOX_COLLECTION = "session-broker.mailboxes";
+const OUTBOUND_RETENTION_STREAM = "session-broker.outbound-retention";
 const MESSAGING_RECORD_COLLECTIONS = [
   PRESENCE_COLLECTION,
   MESSAGE_COLLECTION,
@@ -426,6 +427,10 @@ function outboundStream(
 
 function outboundEventId(messageId: string) {
   return `session-broker.outbound:${messageId}`;
+}
+
+function outboundRetentionEventId(messageId: string) {
+  return `session-broker.outbound-retention:${messageId}`;
 }
 
 function deliveryLeaseResource(piSessionId: string, position: number) {
@@ -1056,7 +1061,6 @@ export function createSessionBrokerModule(
 
   const maintainRecords = async () => {
     const cutoff = clock() - RECORD_RETENTION_MS;
-    const expiredEventIds: string[] = [];
     for (let page = 0; page < MAINTENANCE_MAX_PAGES; page += 1) {
       const messageRecords = await maintenancePage(MESSAGE_COLLECTION);
       const expiredMessages = messageRecords.filter((candidate) => {
@@ -1069,7 +1073,7 @@ export function createSessionBrokerModule(
         );
       });
       if (expiredMessages.length > 0) {
-        const removed = await options.state.transact({
+        await options.state.transact({
           transactionId: `session-broker.maintenance.messages:${id()}`,
           operations: expiredMessages.map((candidate) => ({
             type: "delete-record" as const,
@@ -1078,15 +1082,6 @@ export function createSessionBrokerModule(
             expectedVersion: candidate.version,
           })),
         });
-        if (removed.ok) {
-          for (const candidate of expiredMessages) {
-            const message = parseMessage(candidate);
-            expiredEventIds.push(
-              message.envelope.id,
-              outboundEventId(message.envelope.id),
-            );
-          }
-        }
       }
       if (messageRecords.length < MAINTENANCE_BATCH_SIZE) break;
     }
@@ -1159,22 +1154,52 @@ export function createSessionBrokerModule(
       if (presenceRecords.length < MAINTENANCE_BATCH_SIZE) break;
     }
 
-    for (
-      let offset = 0;
-      offset < expiredEventIds.length;
-      offset += COMPACTION_BATCH_SIZE
-    ) {
-      await options.state.compact({
-        eventIdsBefore: cutoff,
-        eventIds: expiredEventIds.slice(offset, offset + COMPACTION_BATCH_SIZE),
-        limit: COMPACTION_BATCH_SIZE,
+    let afterOutboundRetentionPosition = 0;
+    for (let page = 0; page < MAINTENANCE_MAX_PAGES; page += 1) {
+      const indexed = await options.state.query({
+        type: "events",
+        stream: OUTBOUND_RETENTION_STREAM,
+        afterPosition: afterOutboundRetentionPosition,
+        limit: MAINTENANCE_BATCH_SIZE,
       });
+      if (!indexed.ok || indexed.value.type !== "events") return;
+      const eventIds: string[] = [];
+      for (const event of indexed.value.events) {
+        if (event.occurredAt >= cutoff) continue;
+        const messageId = event.metadata.messageId;
+        if (typeof messageId !== "string") continue;
+        const message = await record(
+          options.state,
+          MESSAGE_COLLECTION,
+          messageId,
+        );
+        if (!message.ok) return;
+        if (!message.value) {
+          eventIds.push(event.eventId, outboundEventId(messageId), messageId);
+        }
+      }
+      for (
+        let offset = 0;
+        offset < eventIds.length;
+        offset += COMPACTION_BATCH_SIZE
+      ) {
+        const compacted = await options.state.compact({
+          eventIdsBefore: cutoff,
+          eventIds: eventIds.slice(offset, offset + COMPACTION_BATCH_SIZE),
+          limit: COMPACTION_BATCH_SIZE,
+        });
+        if (!compacted.ok) return;
+      }
+      const last = indexed.value.events.at(-1);
+      if (!last || indexed.value.events.length < MAINTENANCE_BATCH_SIZE) break;
+      afterOutboundRetentionPosition = last.position;
     }
 
     const transactionsBefore = clock() - TRANSACTION_RECEIPT_RETENTION_MS;
     for (let pass = 0; pass < COMPACTION_MAX_PASSES; pass += 1) {
       const compacted = await options.state.compact({
         transactionsBefore,
+        transactionIdPrefixes: ["session-broker."],
         recordHeadCollections: MESSAGING_RECORD_COLLECTIONS,
         limit: COMPACTION_BATCH_SIZE,
       });
@@ -2374,6 +2399,13 @@ export function createSessionBrokerModule(
                         ),
                         eventId: outboundEventId(message.envelope.id),
                         eventType: "mailbox.message-sent",
+                        metadata: { messageId: message.envelope.id },
+                      },
+                      {
+                        type: "append-event" as const,
+                        stream: OUTBOUND_RETENTION_STREAM,
+                        eventId: outboundRetentionEventId(message.envelope.id),
+                        eventType: "mailbox.message-indexed",
                         metadata: { messageId: message.envelope.id },
                       },
                       {

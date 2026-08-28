@@ -5,6 +5,7 @@ import {
   createMemoryStateStore,
   type StateStore,
 } from "./src/core/persistence/index.ts";
+import { DEFAULT_COMPACT_MAX_LIMIT } from "./src/core/persistence/state-store.ts";
 import type { JsonObject } from "./src/core/result.ts";
 
 async function value<T>(outcome: Awaited<ReturnType<StateStore["query"]>>) {
@@ -230,6 +231,30 @@ test("runtime validation returns errors consistently", async () => {
   const compacted = await store.compact({ eventsBefore: Number.NaN });
   assert.equal(compacted.ok, false);
   if (!compacted.ok) assert.equal(compacted.error.code, "INVALID_REQUEST");
+
+  const unsafeTransactions = await store.compact({ transactionsBefore: 1 });
+  assert.equal(unsafeTransactions.ok, false);
+  if (!unsafeTransactions.ok) {
+    assert.equal(unsafeTransactions.error.code, "INVALID_REQUEST");
+  }
+  const cutofflessPrefixes = await store.compact({
+    transactionIdPrefixes: ["session-broker."],
+  });
+  assert.equal(cutofflessPrefixes.ok, false);
+  if (!cutofflessPrefixes.ok) {
+    assert.equal(cutofflessPrefixes.error.code, "INVALID_REQUEST");
+  }
+  const excessivePrefixes = await store.compact({
+    transactionsBefore: 1,
+    transactionIdPrefixes: Array.from(
+      { length: DEFAULT_COMPACT_MAX_LIMIT + 1 },
+      (_, index) => `prefix-${index}`,
+    ),
+  });
+  assert.equal(excessivePrefixes.ok, false);
+  if (!excessivePrefixes.ok) {
+    assert.equal(excessivePrefixes.error.code, "INVALID_REQUEST");
+  }
 });
 
 test("record versions never repeat across delete and recreation", async () => {
@@ -379,6 +404,7 @@ test("query, compaction, snapshot export, and diagnostics stay plain-data", asyn
   const compacted = await store.compact({
     eventsBefore: 15,
     transactionsBefore: 15,
+    transactionIdPrefixes: ["tx-"],
   });
   assert.deepEqual(compacted, {
     ok: true,
@@ -408,6 +434,45 @@ test("query, compaction, snapshot export, and diagnostics stay plain-data", asyn
       transactions: 1,
     });
   }
+});
+
+test("transaction compaction deletes only receipts with explicit ID prefixes", async () => {
+  let now = 1;
+  const store = createMemoryStateStore({ now: () => now });
+  for (const transactionId of [
+    "session-broker.send:old",
+    "session-broker.heartbeat:old",
+    "workspace.cleanup:old",
+  ]) {
+    const committed = await store.transact({ transactionId, operations: [] });
+    assert.equal(committed.ok, true);
+  }
+
+  now = 2;
+  const compacted = await store.compact({
+    transactionsBefore: 2,
+    transactionIdPrefixes: ["session-broker."],
+  });
+  assert.deepEqual(compacted, {
+    ok: true,
+    value: { deletedEvents: 0, deletedTransactions: 2 },
+  });
+
+  const workspace = await store.transact({
+    transactionId: "workspace.cleanup:old",
+    operations: [],
+  });
+  const messaging = await store.transact({
+    transactionId: "session-broker.send:old",
+    operations: [],
+  });
+  const heartbeat = await store.transact({
+    transactionId: "session-broker.heartbeat:old",
+    operations: [],
+  });
+  assert.equal(workspace.ok && workspace.value.replayed, true);
+  assert.equal(messaging.ok && messaging.value.replayed, false);
+  assert.equal(heartbeat.ok && heartbeat.value.replayed, false);
 });
 
 test("event positions remain monotonic after compaction removes a stream history", async () => {
@@ -520,6 +585,7 @@ test("targeted compaction removes retired event IDs and only explicit orphan rec
     eventIds: ["retired-event"],
     recordHeadCollections: ["session-broker.messages"],
     transactionsBefore: 2,
+    transactionIdPrefixes: ["tx-targeted-compaction-"],
     limit: 100,
   });
   assert.deepEqual(compacted, {

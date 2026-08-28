@@ -155,6 +155,8 @@ export type StateQueryResult =
 export interface StateCompactRequest {
   readonly eventsBefore?: number;
   readonly transactionsBefore?: number;
+  /** Restrict transaction receipt cleanup to these exact ID prefixes. */
+  readonly transactionIdPrefixes?: readonly string[];
   /** Retire event-ID tombstones and their event rows older than this cutoff. */
   readonly eventIdsBefore?: number;
   /** Restrict tombstone-aware event cleanup to these event IDs. */

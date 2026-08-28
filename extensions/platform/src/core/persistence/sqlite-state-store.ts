@@ -1095,9 +1095,19 @@ function createAdapter(
           "Event ID compaction requires a tombstone cutoff",
         );
       }
+      if (
+        (request.transactionIdPrefixes === undefined) !==
+        (request.transactionsBefore === undefined)
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          "Transaction compaction requires both a cutoff and explicit ID prefixes",
+        );
+      }
       for (const identifiers of [
         request.eventIds,
         request.recordHeadCollections,
+        request.transactionIdPrefixes,
       ]) {
         if (
           identifiers !== undefined &&
@@ -1117,7 +1127,8 @@ function createAdapter(
       const compactLimit =
         request.limit ??
         (request.eventIdsBefore !== undefined ||
-        request.recordHeadCollections !== undefined
+        request.recordHeadCollections !== undefined ||
+        request.transactionIdPrefixes !== undefined
           ? DEFAULT_COMPACT_MAX_LIMIT
           : undefined);
       let database: DatabaseSync | undefined;
@@ -1213,26 +1224,31 @@ function createAdapter(
               ).changes,
           );
         }
-        const deletedTransactions =
-          request.transactionsBefore === undefined
-            ? 0
-            : compactLimit === undefined
-              ? Number(
-                  database
-                    .prepare("DELETE FROM transactions WHERE committed_at < ?")
-                    .run(request.transactionsBefore).changes,
-                )
-              : Number(
-                  database
-                    .prepare(
-                      `DELETE FROM transactions WHERE transaction_id IN (
-                       SELECT transaction_id FROM transactions
-                       WHERE committed_at < ?
-                       ORDER BY committed_at, transaction_id LIMIT ?
-                     )`,
-                    )
-                    .run(request.transactionsBefore, compactLimit).changes,
-                );
+        let deletedTransactions = 0;
+        if (
+          request.transactionsBefore !== undefined &&
+          request.transactionIdPrefixes !== undefined &&
+          request.transactionIdPrefixes.length > 0
+        ) {
+          const prefixFilter = request.transactionIdPrefixes
+            .map(() => "instr(transaction_id, ?) = 1")
+            .join(" OR ");
+          deletedTransactions = Number(
+            database
+              .prepare(
+                `DELETE FROM transactions WHERE transaction_id IN (
+                   SELECT transaction_id FROM transactions
+                   WHERE committed_at < ? AND (${prefixFilter})
+                   ORDER BY committed_at, transaction_id LIMIT ?
+                 )`,
+              )
+              .run(
+                request.transactionsBefore,
+                ...request.transactionIdPrefixes,
+                compactLimit ?? DEFAULT_COMPACT_MAX_LIMIT,
+              ).changes,
+          );
+        }
         database.exec("COMMIT");
         transactionOpen = false;
         database.exec("PRAGMA wal_checkpoint(PASSIVE)");

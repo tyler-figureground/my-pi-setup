@@ -288,6 +288,7 @@ if (isContentionWorker) {
         eventIds: ["native-retired-event"],
         recordHeadCollections: ["session-broker.messages"],
         transactionsBefore: 2,
+        transactionIdPrefixes: ["tx-native-compact-"],
         limit: 100,
       });
       assert.deepEqual(compacted, {
@@ -374,6 +375,49 @@ if (isContentionWorker) {
     }
   });
 
+  test("node:sqlite transaction compaction honors explicit ID prefixes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-state-receipts-"));
+    const path = join(directory, "state.sqlite");
+    let now = 1;
+    try {
+      const store = opened(createSqliteStateStore({ path, now: () => now }));
+      for (const transactionId of [
+        "session-broker.send:old",
+        "session-broker.heartbeat:old",
+        "workspace.cleanup:old",
+      ]) {
+        const committed = await store.transact({
+          transactionId,
+          operations: [],
+        });
+        assert.equal(committed.ok, true);
+      }
+
+      now = 2;
+      const compacted = await store.compact({
+        transactionsBefore: 2,
+        transactionIdPrefixes: ["session-broker."],
+      });
+      assert.equal(compacted.ok, true);
+      if (compacted.ok) assert.equal(compacted.value.deletedTransactions, 2);
+
+      const database = new DatabaseSync(path);
+      try {
+        const transactionIds = database
+          .prepare(
+            "SELECT transaction_id FROM transactions ORDER BY transaction_id",
+          )
+          .all()
+          .map((row) => (row as { transaction_id: string }).transaction_id);
+        assert.deepEqual(transactionIds, ["workspace.cleanup:old"]);
+      } finally {
+        database.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("node:sqlite runtime validation rejects unknown mutations and invalid compaction", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-state-validation-"));
     const path = join(directory, "state.sqlite");
@@ -388,6 +432,13 @@ if (isContentionWorker) {
       const compacted = await store.compact({ eventsBefore: Number.NaN });
       assert.equal(compacted.ok, false);
       if (!compacted.ok) assert.equal(compacted.error.code, "INVALID_REQUEST");
+      const unsafeTransactions = await store.compact({
+        transactionsBefore: 1,
+      });
+      assert.equal(unsafeTransactions.ok, false);
+      if (!unsafeTransactions.ok) {
+        assert.equal(unsafeTransactions.error.code, "INVALID_REQUEST");
+      }
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
