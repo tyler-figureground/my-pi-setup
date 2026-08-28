@@ -1,6 +1,6 @@
 # Pi capabilities Phase 6 checkpoint
 
-Updated: 2026-08-26
+Updated: 2026-08-27
 Branch: `pi-capabilities-phase-6`
 Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-6`
 Base: `c08835e`
@@ -20,21 +20,24 @@ Do not begin Phase 7 without explicit approval and accepted Phase 6 evidence.
 - [x] Fetch remote and verify live `main` is 0 ahead / 0 behind `fork/main`.
 - [x] Create external Phase 6 branch/worktree from accepted Phase 5 head.
 - [x] Confirm public module interfaces and test seams before writing tests: flexible host-bound `SessionBroker` and five-method `MemoryStore` selected; delivery/persistence adapters remain internal.
-- [x] Research exact `pi-memory@0.4.2`; reject adopt/wrap and select repository-owned `MemoryStore` over built-in FTS5. ADR remains to record.
-- [ ] Record Phase 6 domain language and threat model.
+- [x] Research exact `pi-memory@0.4.2`; reject adopt/wrap and select repository-owned `MemoryStore` over built-in FTS5; ADR 0008 recorded.
+- [x] Record Phase 6 domain language, architecture, configuration, and threat model.
 - [x] Run isolated baseline verification: 239 unit passed; integration reached 187 pass/5 skip with one unrelated 60-second browser timeout under concurrent research load; isolated retry passed in 98.4 seconds; smoke passed.
-- [ ] Build F10 in vertical red-green slices through confirmed registry/mailbox interfaces.
+- [x] Build F10 in vertical red-green slices through confirmed registry/mailbox interfaces: host proof/fencing, opt-in Presence, ordered mailbox, Artifact bodies, delivery receipts, safe notification modes, retention, and native multi-process races.
 - [x] Build F11 in vertical red-green slices through confirmed `MemoryStore` interface.
   - [x] Slice 1: host-resolved typed remember/inspect with citations, provenance, confidence, expiry, and idempotency.
   - [x] Slice 2: secret redaction/rejection, exact/conservative near dedupe, review ingress, and symmetric contradictions.
   - [x] Slice 3: bounded scoped search, expiry exclusion, optimistic revisions, promotion, and complete managed-body forget.
   - [x] Slice 4: versioned export plus digest-bound preview/commit import.
   - [x] Slice 5: dedicated `node:sqlite` FTS5 adapter, restart/isolation/contention/deletion integration evidence.
-- [ ] Add Pi command/tool wiring while preserving project identity, role, trust, direct authority, and plan mode.
-- [ ] Run native Windows multi-process, crash/restart, contention, isolation, deletion, redaction, and prompt-injection fixtures.
-- [ ] Run repeated independent adversarial review; fix every material finding with regression coverage.
-- [ ] Run full isolated verification, performance checks, live backend checks, and acceptance evidence.
-- [ ] Fetch publication preflight, publish branch, fast-forward live `main`, preserve live user state, and verify live checkout.
+- [x] Add Pi command/tool wiring while preserving project identity, role, trust, direct authority, and plan mode.
+- [x] Run native Windows multi-process, crash/restart, contention, isolation, deletion, redaction, and prompt-injection fixtures.
+- [x] Run repeated independent adversarial review; all reported blockers have regression fixes; final critical/high sign-off `sa-101`: no blockers.
+- [x] Run full isolated verification, performance checks, live backend checks, and acceptance evidence.
+  - [x] Add versioned Memory retrieval/extraction evaluation dataset.
+  - [x] Benchmark current SQLite-backed `MemoryStore` through its public interface; record precision@k, recall@k, MRR, scope leaks, latency, and context bytes.
+  - [x] Record absent automatic extractor as no-write (zero false positives/false memories, zero recall); verify review-state and direct-user promotion guard; keep automatic extraction off.
+- [ ] Fetch publication preflight, publish branch, fast-forward live `main`, preserve live user state, and verify live checkout. Isolated branch is ready.
 - [ ] Update authoritative tracker/program handoff and stop before Phase 7.
 
 ## Confirmed constraints

@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 6 in progress**
+Status: **Phase 6 isolated-complete; publication and live integration pending**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -65,8 +65,8 @@ The reviewed file contains 15 `[X]` selections.
 | F07 | MCP client and OAuth | 5 | [x] |
 | F08 | Declarative lifecycle hooks | 2, 7 | [ ] |
 | F09 | Persistent named custom-agent profiles | 3 | [x] |
-| F10 | Cross-session messaging and queue | 6 | [ ] |
-| F11 | Persistent memory | 6 | [ ] |
+| F10 | Cross-session messaging and queue | 6 | [x] |
+| F11 | Persistent memory | 6 | [x] |
 | F13 | Persistent task graph and goal mode | 8 | [ ] |
 | F14 | Path-scoped lazy project rules | 2 | [x] |
 | F15 | Reactive monitor | 7 | [ ] |
@@ -820,81 +820,81 @@ Features: F10, F11.
 
 ### Identity and registry
 
-- [ ] Define session identity from Pi session ID plus process-held proof
-- [ ] Register heartbeat, cwd, project identity, name, status, and capabilities
-- [ ] Expire stale sessions safely
-- [ ] Make discovery opt-in
-- [ ] Keep project boundaries visible
+- [x] Define session identity from Pi session ID plus process-held proof
+- [x] Register heartbeat, cwd, project identity, name, status, and capabilities
+- [x] Expire stale sessions safely
+- [x] Make discovery opt-in
+- [x] Keep project boundaries visible
 
 ### Durable mailbox
 
-- [ ] Define ordered message envelope: id, sender, recipient, timestamp, summary, body artifact, delivery mode
-- [ ] Transactionally claim and acknowledge messages
-- [ ] Support online and offline delivery
-- [ ] Prevent duplicate delivery after crash/restart
-- [ ] Support send, broadcast-to-explicit-list, and notify-when-idle
-- [ ] Queue through Pi follow-up/steering mechanisms without forging user approval
-- [ ] Preserve sender provenance in transcript
-- [ ] Add `/sessions` and `/messages` UIs
-- [ ] Add model tools for list/send with policy limits
+- [x] Define ordered message envelope: id, sender, recipient, timestamp, summary, body artifact, delivery mode
+- [x] Transactionally claim and acknowledge messages
+- [x] Support online and offline delivery
+- [x] Prevent duplicate delivery after crash/restart
+- [x] Support send, broadcast-to-explicit-list, and notify-when-idle
+- [x] Queue through Pi follow-up/steering mechanisms without forging user approval
+- [x] Preserve sender provenance in transcript
+- [x] Add `/sessions` and `/messages` UIs
+- [x] Add model tools for list/send with policy limits
 
 ### Acceptance
 
-- [ ] Two Pi processes exchange ordered messages
-- [ ] Offline recipient catches up once
-- [ ] Crash between claim/ack does not lose message
-- [ ] Duplicate delivery prevented
-- [ ] Sender identity cannot be spoofed through tool input
-- [ ] Message cannot approve a protected action
-- [ ] Native Windows transport/store behavior verified
+- [x] Two Pi processes exchange ordered messages
+- [x] Offline recipient catches up once
+- [x] Crash between claim/ack does not lose message
+- [x] Duplicate delivery prevented
+- [x] Sender identity cannot be spoofed through tool input
+- [x] Message cannot approve a protected action
+- [x] Native Windows transport/store behavior verified
 
 ## F11 persistent memory
 
 ### Package trial
 
-- [ ] Trial exact pinned `pi-memory` version with automatic generation disabled
-- [ ] Audit scope, retrieval, dependencies, storage, deletion, redaction, and prompt injection handling
-- [ ] Decide adopt/wrap/build
-- [ ] Record ADR
+- [x] Trial exact pinned `pi-memory` version with automatic generation disabled
+- [x] Audit scope, retrieval, dependencies, storage, deletion, redaction, and prompt injection handling
+- [x] Decide adopt/wrap/build
+- [x] Record ADR
 
 ### `MemoryStore`
 
-- [ ] Define memory kinds: preference, project fact, decision, procedure, ephemeral note
-- [ ] Require scope: user, stable project identity, or explicit workspace
-- [ ] Store source citation, created/updated time, confidence, expiry, and contradiction links
-- [ ] Add explicit `/remember`, `/memories`, `/forget`, `/memory edit`
-- [ ] Add full-text retrieval with bounded results
-- [ ] Quote retrieved memory as untrusted context
-- [ ] Redact likely secrets before storage
-- [ ] Deduplicate near-identical entries
-- [ ] Detect contradictory active memories
-- [ ] Never retrieve unrelated project memory
-- [ ] Add export/import and complete deletion
+- [x] Define memory kinds: preference, project fact, decision, procedure, ephemeral note
+- [x] Require scope: user, stable project identity, or explicit workspace
+- [x] Store source citation, created/updated time, confidence, expiry, and contradiction links
+- [x] Add explicit `/remember`, `/memories`, `/forget`, `/memory edit`
+- [x] Add full-text retrieval with bounded results
+- [x] Quote retrieved memory as untrusted context
+- [x] Redact likely secrets before storage
+- [x] Deduplicate near-identical entries
+- [x] Detect contradictory active memories
+- [x] Never retrieve unrelated project memory
+- [x] Add export/import and complete deletion
 
 ### Automatic extraction gate
 
-- [ ] Build labeled evaluation set of should-remember/should-not-remember examples
-- [ ] Measure false-positive and false-memory rate
-- [ ] Require user review queue before promotion
-- [ ] Enable auto-extraction only if threshold is met
-- [ ] Keep generation off by default until validated
+- [x] Build labeled evaluation set of should-remember/should-not-remember examples
+- [x] Measure false-positive and false-memory rate
+- [x] Require user review queue before promotion
+- [x] Enable auto-extraction only if threshold is met
+- [x] Keep generation off by default until validated
 
 ### Acceptance
 
-- [ ] Restart persistence passes
-- [ ] Project isolation passes
-- [ ] Dedupe/contradiction/expiry passes
-- [ ] Secret redaction passes
-- [ ] Malicious memory cannot become system instruction
-- [ ] Forget removes retrieval and underlying body
-- [ ] Retrieval quality benchmark recorded
+- [x] Restart persistence passes
+- [x] Project isolation passes
+- [x] Dedupe/contradiction/expiry passes
+- [x] Secret redaction passes
+- [x] Malicious memory cannot become system instruction
+- [x] Forget removes retrieval and underlying body
+- [x] Retrieval quality benchmark recorded
 
 ## Phase 6 exit gate
 
-- [ ] F10 acceptance complete
-- [ ] F11 explicit-memory acceptance complete
-- [ ] Automatic memory remains off unless evaluation gate passes
-- [ ] Multi-process contention and recovery tests pass
+- [x] F10 acceptance complete
+- [x] F11 explicit-memory acceptance complete
+- [x] Automatic memory remains off unless evaluation gate passes
+- [x] Multi-process contention and recovery tests pass
 
 ---
 
@@ -1195,6 +1195,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-26 | Phase 4 late sign-off hardening | `425145b`, `ba54adc` | real `core.autocrlf` and empty-repository fixtures; filter non-execution regression; live Windows creation-identity termination; repeated adversarial review; live fast-forward verification | 202 unit; 176 integration + 22 delegated; 5 platform skips; smoke; Claude 2/2; Codex 2/2; Pi 1/1; live focused 28 pass + 1 opt-in skip | Pass | False review changes eliminated without clean filters; every Windows language-server kill is creation-identity validated; final independent review found no blockers |
 | 2026-08-26 | Phase 5 MCP and browser adapters | `55e9b34`, `64af98d`, `f1603a9` | official package trials; repeated adversarial security reviews; address/credential/process/profile probes; paired startup benchmark; post-sign-off `npm run verify`; repository visual artifact | 239 unit; 188 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass | F07 and F03 complete; official MCP v2 and thin Playwright adapter selected; final MCP and browser/security reviews reported no blockers |
 | 2026-08-26 | Phase 5 live integration | `55e9b34`, `64af98d`, `f1603a9` | fast-forward live main; platform clean install/audit; live check/format; 61 focused Phase 5 tests; repository smoke | 61/61 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; live config enables inert unconfigured MCP/browser surfaces; Phase 6 not started |
+| 2026-08-27 | Phase 6 messaging and explicit Memory | `ec8fe0c` through `9a4434a` | exact package audit; interface comparison; repeated adversarial review/fix cycles; native Windows process/SQLite/JSONL/junction/sidecar/secret/deletion/retention probes; real two-Pi process exchange; retrieval evaluation; paired startup benchmark; post-sign-off `npm run verify` | 299 unit; 283 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass isolated | F10 and explicit F11 complete; automatic extraction fails recall gate and remains absent/off; final critical/high review `sa-101` found no blockers; live integration pending |
 
 # Decision log
 
@@ -1222,6 +1223,8 @@ Record durable decisions here, then link a full ADR when needed.
 | D018 | 2026-08-25 | Hook and read-only Git commands use one bounded no-shell process module with minimal environment and native tree termination | Accepted | Generic `pi.exec` buffers output and cannot guarantee Windows descendant cleanup |
 | D019 | 2026-08-26 | Build ToolFederation on exact official MCP v2 client/core instead of adopting `pi-mcp-adapter` wholesale | Accepted | Native argument fidelity and lifecycle verified; platform must retain policy, OAuth binding, lazy publication, and identity-safe cleanup; ADR `docs/adr/0006-build-tool-federation-on-official-mcp-v2.md` |
 | D020 | 2026-08-26 | Build BrowserControl as a thin internal module over exact `playwright-core` instead of adopting broader wrappers | Accepted | Dedicated profile ownership, address policy, direct authority, artifacts, and lifecycle remain host-controlled; ADR `docs/adr/0007-build-browser-control-on-playwright-core.md` |
+| D021 | 2026-08-27 | Use host-bound flexible `SessionBroker` and `MemoryStore` interfaces; keep delivery, claims, SQLite, FTS, and transcript reconciliation internal | Accepted | Interface comparison selected flexibility while preserving identity and authority locality; callers/tests cross the same seams |
+| D022 | 2026-08-27 | Reject `pi-memory@0.4.2` adopt/wrap; build explicit scoped Memory on dedicated `node:sqlite` FTS5 | Accepted | Package defaults conflict with scope, deletion, redaction, trust, generation, and multi-process requirements; ADR `docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md` |
 
 # Risk register
 
@@ -1236,10 +1239,10 @@ Record durable decisions here, then link a full ADR when needed.
 | MCP lifecycle hangs package commands | Medium | High | Disposable trial; supervisor-owned clients | Mitigated in Phase 5 |
 | OAuth/browser secrets leak | Medium | Critical | Dedicated stores/profiles; structural and exact redaction canaries; binary evidence lockout after credential use | Mitigated in Phase 5 |
 | Browser mutates remote system in plan mode | Medium | High | Side-effect policy, one-shot page-bound network authority, and explicit approval | Mitigated in Phase 5 |
-| Memory poisoning/stale facts | High | Medium | Provenance, contradiction, review queue, auto off | Open |
-| Multi-process duplicate schedules/messages | Medium | High | Transactional claims and leases | Open |
-| Tool schema/context explosion | High | Medium | Deferred registration/activation | Mitigated through Phase 5 rules, language, review, MCP, and browser tools |
-| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 5 |
+| Memory poisoning/stale facts | High | Medium | Scoped citations, untrusted rendering, contradiction links, review-only proposals, automatic extraction off | Mitigated for explicit Phase 6 Memory; future extraction remains closed |
+| Multi-process duplicate schedules/messages | Medium | High | Fenced claims, idempotent receipts, Pi JSONL readback/dedupe, native crash races | Messaging mitigated in Phase 6; scheduling remains open |
+| Tool schema/context explosion | High | Medium | Deferred registration/activation and bounded result rendering | Mitigated through Phase 6 rules, language, review, MCP, browser, messaging, and Memory tools |
+| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 6 |
 | Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 

@@ -19,6 +19,8 @@ This setup is fairly opinionated, it:
 - runs read-only local review with validated findings and immutable artifacts
 - federates trusted MCP tools with lazy schemas, scoped OAuth, and protected side effects
 - verifies live web interfaces in a dedicated, allowlisted browser profile with artifact evidence
+- exchanges ordered, project-bound messages between opted-in Pi sessions with explicit provenance
+- stores scoped, cited, searchable Memory as untrusted data with contradiction and deletion controls
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 
