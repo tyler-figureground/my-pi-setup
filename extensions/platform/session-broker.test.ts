@@ -3091,6 +3091,8 @@ test("bounded retention removes old terminal history without losing pending mail
     terminalHistory = await sender.value.messages({ direction: "outbound" });
   }
   await deliveredRecipient.value.close("quit");
+  const beforeMaintenance = await state.diagnose();
+  assert.equal(beforeMaintenance.ok, true);
 
   now = 30 * 24 * 60 * 60 * 1_000 + 1;
   const janitor = await attach("retention-janitor");
@@ -3142,6 +3144,15 @@ test("bounded retention removes old terminal history without losing pending mail
       collection === "session-broker.mailboxes" && key === "retention-pending",
   );
   assert.equal(mailbox?.metadata.pending, 1);
+  const afterMaintenance = await state.diagnose();
+  assert.equal(afterMaintenance.ok, true);
+  if (beforeMaintenance.ok && afterMaintenance.ok) {
+    assert.equal(
+      afterMaintenance.value.counts.transactions <
+        beforeMaintenance.value.counts.transactions,
+      true,
+    );
+  }
 
   const replacementDelivered = await attach("retention-delivered");
   assert.equal(replacementDelivered.ok, true);
@@ -3265,5 +3276,115 @@ test("native SQLite retention removes terminal records and outbound index events
   const history = await sender.value.messages({ direction: "outbound" });
   assert.equal(history.ok, true);
   if (history.ok) assert.deepEqual(history.value, []);
+
+  const database = new DatabaseSync(join(directory, "state.sqlite"));
+  try {
+    const count = (sql: string, ...parameters: string[]) =>
+      Number(
+        (database.prepare(sql).get(...parameters) as { count: number }).count,
+      );
+    assert.equal(
+      count(
+        `SELECT COUNT(*) AS count FROM transactions
+         WHERE request_json LIKE ? OR result_json LIKE ?`,
+        "%Native retention%",
+        "%Native retention%",
+      ),
+      0,
+    );
+    assert.equal(
+      count(
+        `SELECT COUNT(*) AS count FROM event_ids ids
+         WHERE NOT EXISTS (
+           SELECT 1 FROM events WHERE events.event_id = ids.event_id
+         )`,
+      ),
+      0,
+    );
+    assert.equal(
+      count(
+        `SELECT COUNT(*) AS count FROM record_heads heads
+         WHERE heads.collection IN (
+           'session-broker.messages',
+           'session-broker.requests',
+           'session-broker.presence',
+           'session-broker.mailboxes'
+         ) AND NOT EXISTS (
+           SELECT 1 FROM records
+           WHERE records.collection = heads.collection
+             AND records.record_key = heads.record_key
+         )`,
+      ),
+      0,
+    );
+  } finally {
+    database.close();
+  }
+  await lifecycle.shutdown("quit");
+});
+
+test("hourly messaging maintenance bounds heartbeat transaction receipts", async () => {
+  let now = 0;
+  const state = createMemoryStateStore({ now: () => now });
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state,
+    artifacts: createInMemoryArtifactStore({ clock: () => now }),
+    lifecycle,
+    clock: () => now,
+    limits: {
+      heartbeatMs: 1,
+      sessionTtlMs: 90 * 24 * 60 * 60 * 1_000,
+    },
+  });
+  const attached = await module.attach(
+    {
+      piSessionId: "heartbeat-retention",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("project-one"),
+      cwd: "C:/project-one",
+      exposure: {
+        discoverableBy: "same-project",
+        acceptsFrom: "same-project",
+      },
+    },
+    delivery("heartbeat-retention"),
+  );
+  assert.equal(attached.ok, true);
+  if (!attached.ok) return;
+
+  const growthDeadline = Date.now() + 2_000;
+  let before = await state.diagnose();
+  while (
+    before.ok &&
+    before.value.counts.transactions < 25 &&
+    Date.now() < growthDeadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    before = await state.diagnose();
+  }
+  assert.equal(before.ok, true);
+  if (!before.ok) return;
+  assert.equal(before.value.counts.transactions >= 25, true);
+
+  now = 31 * 24 * 60 * 60 * 1_000;
+  const cleanupDeadline = Date.now() + 2_000;
+  let after = await state.diagnose();
+  while (
+    after.ok &&
+    after.value.counts.transactions >= before.value.counts.transactions / 2 &&
+    Date.now() < cleanupDeadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    after = await state.diagnose();
+  }
+  assert.equal(after.ok, true);
+  if (after.ok) {
+    assert.equal(
+      after.value.counts.transactions < before.value.counts.transactions / 2,
+      true,
+    );
+  }
   await lifecycle.shutdown("quit");
 });

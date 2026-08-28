@@ -15,6 +15,7 @@ import { backup, DatabaseSync } from "node:sqlite";
 import { failure, success, type JsonObject } from "../result.ts";
 import {
   CURRENT_SCHEMA_VERSION,
+  DEFAULT_COMPACT_MAX_LIMIT,
   DEFAULT_METADATA_MAX_BYTES,
   DEFAULT_QUERY_MAX_LIMIT,
   DEFAULT_SNAPSHOT_MAX_ENTRIES,
@@ -1065,6 +1066,7 @@ function createAdapter(
     async compact(request: StateCompactRequest = {}) {
       for (const threshold of [
         request.eventsBefore,
+        request.eventIdsBefore,
         request.transactionsBefore,
       ]) {
         if (threshold !== undefined && !Number.isSafeInteger(threshold)) {
@@ -1074,32 +1076,174 @@ function createAdapter(
           );
         }
       }
+      if (
+        request.limit !== undefined &&
+        (!isPositiveSafeInteger(request.limit) ||
+          request.limit > DEFAULT_COMPACT_MAX_LIMIT)
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          `Compaction limit must be between 1 and ${DEFAULT_COMPACT_MAX_LIMIT}`,
+        );
+      }
+      if (
+        request.eventIds !== undefined &&
+        request.eventIdsBefore === undefined
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          "Event ID compaction requires a tombstone cutoff",
+        );
+      }
+      for (const identifiers of [
+        request.eventIds,
+        request.recordHeadCollections,
+      ]) {
+        if (
+          identifiers !== undefined &&
+          (!Array.isArray(identifiers) ||
+            identifiers.length > DEFAULT_COMPACT_MAX_LIMIT ||
+            !identifiers.every(
+              (identifier) =>
+                typeof identifier === "string" && validName(identifier),
+            ))
+        ) {
+          return stateFailure(
+            "INVALID_REQUEST",
+            `Compaction identifiers must contain at most ${DEFAULT_COMPACT_MAX_LIMIT} valid names`,
+          );
+        }
+      }
+      const compactLimit =
+        request.limit ??
+        (request.eventIdsBefore !== undefined ||
+        request.recordHeadCollections !== undefined
+          ? DEFAULT_COMPACT_MAX_LIMIT
+          : undefined);
       let database: DatabaseSync | undefined;
       let transactionOpen = false;
       try {
         database = openDatabase(path, busyTimeoutMs);
         database.exec("BEGIN IMMEDIATE");
         transactionOpen = true;
-        const deletedEvents =
-          request.eventsBefore === undefined
-            ? 0
-            : Number(
-                database
-                  .prepare("DELETE FROM events WHERE occurred_at < ?")
-                  .run(request.eventsBefore).changes,
-              );
+        let deletedEventIds = 0;
+        let deletedEvents = 0;
+        if (request.eventIdsBefore !== undefined) {
+          if (request.eventIds === undefined || request.eventIds.length > 0) {
+            const hasEventIds = request.eventIds !== undefined;
+            const placeholders = hasEventIds
+              ? request.eventIds!.map(() => "?").join(", ")
+              : "";
+            const eventIdFilter = hasEventIds
+              ? ` AND event_id IN (${placeholders})`
+              : "";
+            const limit = compactLimit ?? DEFAULT_COMPACT_MAX_LIMIT;
+            deletedEventIds = Number(
+              database
+                .prepare(
+                  `DELETE FROM event_ids WHERE event_id IN (
+                     SELECT event_id FROM events
+                     WHERE occurred_at < ?${eventIdFilter}
+                     ORDER BY sequence LIMIT ?
+                   )`,
+                )
+                .run(request.eventIdsBefore, ...(request.eventIds ?? []), limit)
+                .changes,
+            );
+            deletedEvents = Number(
+              database
+                .prepare(
+                  `DELETE FROM events WHERE sequence IN (
+                     SELECT sequence FROM events
+                     WHERE occurred_at < ?${eventIdFilter}
+                     ORDER BY sequence LIMIT ?
+                   )`,
+                )
+                .run(request.eventIdsBefore, ...(request.eventIds ?? []), limit)
+                .changes,
+            );
+          }
+        }
+        if (request.eventsBefore !== undefined) {
+          if (compactLimit === undefined) {
+            deletedEvents += Number(
+              database
+                .prepare("DELETE FROM events WHERE occurred_at < ?")
+                .run(request.eventsBefore).changes,
+            );
+          } else {
+            deletedEvents += Number(
+              database
+                .prepare(
+                  `DELETE FROM events WHERE sequence IN (
+                     SELECT sequence FROM events WHERE occurred_at < ?
+                     ORDER BY sequence LIMIT ?
+                   )`,
+                )
+                .run(request.eventsBefore, compactLimit).changes,
+            );
+          }
+        }
+
+        let deletedRecordHeads = 0;
+        if (
+          request.recordHeadCollections !== undefined &&
+          request.recordHeadCollections.length > 0
+        ) {
+          const placeholders = request.recordHeadCollections
+            .map(() => "?")
+            .join(", ");
+          deletedRecordHeads = Number(
+            database
+              .prepare(
+                `DELETE FROM record_heads WHERE rowid IN (
+                   SELECT heads.rowid FROM record_heads heads
+                   WHERE heads.collection IN (${placeholders})
+                     AND NOT EXISTS (
+                       SELECT 1 FROM records
+                       WHERE records.collection = heads.collection
+                         AND records.record_key = heads.record_key
+                     )
+                   ORDER BY heads.collection, heads.record_key LIMIT ?
+                 )`,
+              )
+              .run(
+                ...request.recordHeadCollections,
+                compactLimit ?? DEFAULT_COMPACT_MAX_LIMIT,
+              ).changes,
+          );
+        }
         const deletedTransactions =
           request.transactionsBefore === undefined
             ? 0
-            : Number(
-                database
-                  .prepare("DELETE FROM transactions WHERE committed_at < ?")
-                  .run(request.transactionsBefore).changes,
-              );
+            : compactLimit === undefined
+              ? Number(
+                  database
+                    .prepare("DELETE FROM transactions WHERE committed_at < ?")
+                    .run(request.transactionsBefore).changes,
+                )
+              : Number(
+                  database
+                    .prepare(
+                      `DELETE FROM transactions WHERE transaction_id IN (
+                       SELECT transaction_id FROM transactions
+                       WHERE committed_at < ?
+                       ORDER BY committed_at, transaction_id LIMIT ?
+                     )`,
+                    )
+                    .run(request.transactionsBefore, compactLimit).changes,
+                );
         database.exec("COMMIT");
         transactionOpen = false;
         database.exec("PRAGMA wal_checkpoint(PASSIVE)");
-        return success({ deletedEvents, deletedTransactions });
+        return success({
+          deletedEvents,
+          deletedTransactions,
+          ...(request.eventIdsBefore === undefined ? {} : { deletedEventIds }),
+          ...(request.recordHeadCollections === undefined
+            ? {}
+            : { deletedRecordHeads }),
+        });
       } catch (error) {
         if (transactionOpen && database) {
           try {

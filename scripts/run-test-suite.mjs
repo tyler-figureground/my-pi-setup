@@ -17,6 +17,7 @@ const unit = [
   "extensions/platform/browser-wiring.test.ts",
   "extensions/platform/capability-policy.test.ts",
   "extensions/platform/credential-vault.test.ts",
+  "extensions/platform/current-workspace-lease.test.ts",
   "extensions/platform/external-controls.test.ts",
   "extensions/platform/hooks.test.ts",
   "extensions/platform/language-config.test.ts",

@@ -6,6 +6,7 @@ export const DEFAULT_TRANSACTION_MAX_BYTES = 1024 * 1024;
 export const DEFAULT_TRANSACTION_MAX_OPERATIONS = 256;
 export const DEFAULT_QUERY_MAX_LIMIT = 1_000;
 export const DEFAULT_SNAPSHOT_MAX_ENTRIES = 10_000;
+export const DEFAULT_COMPACT_MAX_LIMIT = 10_000;
 
 export type StateStoreErrorCode =
   | "INVALID_REQUEST"
@@ -154,11 +155,21 @@ export type StateQueryResult =
 export interface StateCompactRequest {
   readonly eventsBefore?: number;
   readonly transactionsBefore?: number;
+  /** Retire event-ID tombstones and their event rows older than this cutoff. */
+  readonly eventIdsBefore?: number;
+  /** Restrict tombstone-aware event cleanup to these event IDs. */
+  readonly eventIds?: readonly string[];
+  /** Remove orphan version heads only from these explicitly disposable collections. */
+  readonly recordHeadCollections?: readonly string[];
+  /** Bound each requested cleanup category. Existing unbounded calls remain compatible. */
+  readonly limit?: number;
 }
 
 export interface StateCompactResult {
   readonly deletedEvents: number;
   readonly deletedTransactions: number;
+  readonly deletedEventIds?: number;
+  readonly deletedRecordHeads?: number;
 }
 
 export interface StateSnapshot {

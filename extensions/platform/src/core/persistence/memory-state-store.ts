@@ -1,6 +1,7 @@
 import { failure, success, type JsonObject } from "../result.ts";
 import {
   CURRENT_SCHEMA_VERSION,
+  DEFAULT_COMPACT_MAX_LIMIT,
   DEFAULT_METADATA_MAX_BYTES,
   DEFAULT_QUERY_MAX_LIMIT,
   DEFAULT_SNAPSHOT_MAX_ENTRIES,
@@ -567,6 +568,7 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
     async compact(request: StateCompactRequest = {}) {
       for (const threshold of [
         request.eventsBefore,
+        request.eventIdsBefore,
         request.transactionsBefore,
       ]) {
         if (threshold !== undefined && !Number.isSafeInteger(threshold)) {
@@ -576,22 +578,124 @@ export function createMemoryStateStore(options: StateStoreOptions = {}) {
           );
         }
       }
-      const beforeEvents = state.events.length;
-      const beforeTransactions = state.receipts.size;
-      if (request.eventsBefore !== undefined) {
-        state.events = state.events.filter(
-          (event) => event.occurredAt >= request.eventsBefore!,
+      if (
+        request.limit !== undefined &&
+        (!isPositiveSafeInteger(request.limit) ||
+          request.limit > DEFAULT_COMPACT_MAX_LIMIT)
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          `Compaction limit must be between 1 and ${DEFAULT_COMPACT_MAX_LIMIT}`,
         );
       }
+      if (
+        request.eventIds !== undefined &&
+        request.eventIdsBefore === undefined
+      ) {
+        return stateFailure(
+          "INVALID_REQUEST",
+          "Event ID compaction requires a tombstone cutoff",
+        );
+      }
+      for (const identifiers of [
+        request.eventIds,
+        request.recordHeadCollections,
+      ]) {
+        if (
+          identifiers !== undefined &&
+          (!Array.isArray(identifiers) ||
+            identifiers.length > DEFAULT_COMPACT_MAX_LIMIT ||
+            !identifiers.every(
+              (identifier) =>
+                typeof identifier === "string" && validName(identifier),
+            ))
+        ) {
+          return stateFailure(
+            "INVALID_REQUEST",
+            `Compaction identifiers must contain at most ${DEFAULT_COMPACT_MAX_LIMIT} valid names`,
+          );
+        }
+      }
+      const limit =
+        request.limit ??
+        (request.eventIdsBefore !== undefined ||
+        request.recordHeadCollections !== undefined
+          ? DEFAULT_COMPACT_MAX_LIMIT
+          : Number.POSITIVE_INFINITY);
+      const requestedEventIds =
+        request.eventIds === undefined ? undefined : new Set(request.eventIds);
+      const retiredEvents =
+        request.eventIdsBefore === undefined
+          ? []
+          : state.events
+              .filter(
+                (event) =>
+                  event.occurredAt < request.eventIdsBefore! &&
+                  (requestedEventIds === undefined ||
+                    requestedEventIds.has(event.eventId)),
+              )
+              .slice(0, limit);
+      const retiredSequences = new Set(
+        retiredEvents.map(({ sequence }) => sequence),
+      );
+      let deletedEventIds = 0;
+      if (request.eventIdsBefore !== undefined) {
+        for (const { eventId } of retiredEvents) {
+          if (state.eventIds.delete(eventId)) deletedEventIds += 1;
+        }
+      }
+      if (retiredSequences.size > 0) {
+        state.events = state.events.filter(
+          ({ sequence }) => !retiredSequences.has(sequence),
+        );
+      }
+      const compactedEvents =
+        request.eventsBefore === undefined
+          ? []
+          : state.events
+              .filter((event) => event.occurredAt < request.eventsBefore!)
+              .slice(0, limit);
+      if (compactedEvents.length > 0) {
+        const sequences = new Set(
+          compactedEvents.map(({ sequence }) => sequence),
+        );
+        state.events = state.events.filter(
+          ({ sequence }) => !sequences.has(sequence),
+        );
+      }
+
+      let deletedRecordHeads = 0;
+      if (request.recordHeadCollections !== undefined) {
+        const collections = new Set(request.recordHeadCollections);
+        for (const id of state.recordVersions.keys()) {
+          if (deletedRecordHeads >= limit) break;
+          const separator = id.indexOf("\u0000");
+          if (
+            collections.has(id.slice(0, separator)) &&
+            !state.records.has(id)
+          ) {
+            state.recordVersions.delete(id);
+            deletedRecordHeads += 1;
+          }
+        }
+      }
+
+      const beforeTransactions = state.receipts.size;
       if (request.transactionsBefore !== undefined) {
         for (const [id, receipt] of state.receipts) {
-          if (receipt.result.committedAt < request.transactionsBefore)
+          if (beforeTransactions - state.receipts.size >= limit) break;
+          if (receipt.result.committedAt < request.transactionsBefore) {
             state.receipts.delete(id);
+          }
         }
       }
       return success({
-        deletedEvents: beforeEvents - state.events.length,
+        deletedEvents: retiredEvents.length + compactedEvents.length,
         deletedTransactions: beforeTransactions - state.receipts.size,
+        ...(request.eventIdsBefore === undefined ? {} : { deletedEventIds }),
+        ...(request.recordHeadCollections === undefined
+          ? {}
+          : { deletedRecordHeads }),
       });
     },
 

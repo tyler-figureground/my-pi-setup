@@ -223,6 +223,157 @@ if (isContentionWorker) {
     }
   });
 
+  test("node:sqlite targeted compaction removes sensitive receipts and disposable tombstones", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-state-compact-"));
+    const path = join(directory, "state.sqlite");
+    let now = 1;
+    try {
+      const store = opened(createSqliteStateStore({ path, now: () => now }));
+      const created = await store.transact({
+        transactionId: "tx-native-compact-create",
+        operations: [
+          {
+            type: "put-record",
+            collection: "session-broker.messages",
+            key: "retired-message",
+            metadata: { summary: "sensitive-retired-summary" },
+          },
+          {
+            type: "put-record",
+            collection: "generic-records",
+            key: "preserved-head",
+            metadata: {},
+          },
+          {
+            type: "append-event",
+            stream: "mailbox",
+            eventId: "native-retired-event",
+            eventType: "mailbox.message",
+            metadata: {},
+          },
+          {
+            type: "append-event",
+            stream: "mailbox",
+            eventId: "native-pending-event",
+            eventType: "mailbox.message",
+            metadata: {},
+          },
+        ],
+      });
+      assert.equal(created.ok, true);
+      if (!created.ok) return;
+
+      now = 2;
+      const removed = await store.transact({
+        transactionId: "tx-native-compact-remove",
+        operations: [
+          {
+            type: "delete-record",
+            collection: "session-broker.messages",
+            key: "retired-message",
+            expectedVersion: 1,
+          },
+          {
+            type: "delete-record",
+            collection: "generic-records",
+            key: "preserved-head",
+            expectedVersion: 1,
+          },
+        ],
+      });
+      assert.equal(removed.ok, true);
+
+      const compacted = await store.compact({
+        eventIdsBefore: 2,
+        eventIds: ["native-retired-event"],
+        recordHeadCollections: ["session-broker.messages"],
+        transactionsBefore: 2,
+        limit: 100,
+      });
+      assert.deepEqual(compacted, {
+        ok: true,
+        value: {
+          deletedEvents: 1,
+          deletedTransactions: 1,
+          deletedEventIds: 1,
+          deletedRecordHeads: 1,
+        },
+      });
+
+      const database = new DatabaseSync(path);
+      try {
+        const count = (table: string, where = "") =>
+          Number(
+            (
+              database
+                .prepare(`SELECT COUNT(*) AS count FROM ${table} ${where}`)
+                .get() as { count: number }
+            ).count,
+          );
+        assert.equal(
+          count(
+            "transactions",
+            "WHERE result_json LIKE '%sensitive-retired-summary%'",
+          ),
+          0,
+        );
+        assert.equal(
+          count("event_ids", "WHERE event_id = 'native-retired-event'"),
+          0,
+        );
+        assert.equal(
+          count("event_ids", "WHERE event_id = 'native-pending-event'"),
+          1,
+        );
+        assert.equal(
+          count(
+            "record_heads",
+            "WHERE collection = 'session-broker.messages' AND record_key = 'retired-message'",
+          ),
+          0,
+        );
+        assert.equal(
+          count(
+            "record_heads",
+            "WHERE collection = 'generic-records' AND record_key = 'preserved-head'",
+          ),
+          1,
+        );
+      } finally {
+        database.close();
+      }
+
+      const recreated = await store.transact({
+        transactionId: "tx-native-compact-recreate",
+        operations: [
+          {
+            type: "put-record",
+            collection: "session-broker.messages",
+            key: "retired-message",
+            metadata: {},
+            expectedVersion: null,
+          },
+          {
+            type: "put-record",
+            collection: "generic-records",
+            key: "preserved-head",
+            metadata: {},
+            expectedVersion: null,
+          },
+        ],
+      });
+      assert.equal(recreated.ok, true);
+      if (recreated.ok) {
+        assert.deepEqual(
+          recreated.value.records.map(({ version }) => version),
+          [1, 3],
+        );
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("node:sqlite runtime validation rejects unknown mutations and invalid compaction", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-state-validation-"));
     const path = join(directory, "state.sqlite");

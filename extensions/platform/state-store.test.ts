@@ -457,3 +457,135 @@ test("event positions remain monotonic after compaction removes a stream history
   assert.equal(duplicate.ok, false);
   if (!duplicate.ok) assert.equal(duplicate.error.code, "EVENT_CONFLICT");
 });
+
+test("targeted compaction removes retired event IDs and only explicit orphan record heads", async () => {
+  let now = 1;
+  const store = createMemoryStateStore({ now: () => now });
+  const created = await store.transact({
+    transactionId: "tx-targeted-compaction-create",
+    operations: [
+      {
+        type: "put-record",
+        collection: "session-broker.messages",
+        key: "retired-message",
+        metadata: { summary: "retired summary" },
+      },
+      {
+        type: "put-record",
+        collection: "generic-records",
+        key: "preserved-head",
+        metadata: {},
+      },
+      {
+        type: "append-event",
+        stream: "mailbox",
+        eventId: "retired-event",
+        eventType: "mailbox.message",
+        metadata: {},
+      },
+      {
+        type: "append-event",
+        stream: "mailbox",
+        eventId: "pending-event",
+        eventType: "mailbox.message",
+        metadata: {},
+      },
+    ],
+  });
+  assert.equal(created.ok, true);
+  if (!created.ok) return;
+
+  now = 2;
+  const removed = await store.transact({
+    transactionId: "tx-targeted-compaction-remove",
+    operations: [
+      {
+        type: "delete-record",
+        collection: "session-broker.messages",
+        key: "retired-message",
+        expectedVersion: 1,
+      },
+      {
+        type: "delete-record",
+        collection: "generic-records",
+        key: "preserved-head",
+        expectedVersion: 1,
+      },
+    ],
+  });
+  assert.equal(removed.ok, true);
+
+  const compacted = await store.compact({
+    eventIdsBefore: 2,
+    eventIds: ["retired-event"],
+    recordHeadCollections: ["session-broker.messages"],
+    transactionsBefore: 2,
+    limit: 100,
+  });
+  assert.deepEqual(compacted, {
+    ok: true,
+    value: {
+      deletedEvents: 1,
+      deletedTransactions: 1,
+      deletedEventIds: 1,
+      deletedRecordHeads: 1,
+    },
+  });
+
+  const reusedEvent = await store.transact({
+    transactionId: "tx-targeted-compaction-reuse-event",
+    operations: [
+      {
+        type: "append-event",
+        stream: "mailbox",
+        eventId: "retired-event",
+        eventType: "mailbox.message",
+        metadata: {},
+      },
+    ],
+  });
+  assert.equal(reusedEvent.ok, true);
+  const retainedEvent = await store.transact({
+    transactionId: "tx-targeted-compaction-retain-event",
+    operations: [
+      {
+        type: "append-event",
+        stream: "mailbox",
+        eventId: "pending-event",
+        eventType: "mailbox.message",
+        metadata: {},
+      },
+    ],
+  });
+  assert.equal(retainedEvent.ok, false);
+  if (!retainedEvent.ok) {
+    assert.equal(retainedEvent.error.code, "EVENT_CONFLICT");
+  }
+
+  const recreated = await store.transact({
+    transactionId: "tx-targeted-compaction-recreate-records",
+    operations: [
+      {
+        type: "put-record",
+        collection: "session-broker.messages",
+        key: "retired-message",
+        metadata: {},
+        expectedVersion: null,
+      },
+      {
+        type: "put-record",
+        collection: "generic-records",
+        key: "preserved-head",
+        metadata: {},
+        expectedVersion: null,
+      },
+    ],
+  });
+  assert.equal(recreated.ok, true);
+  if (recreated.ok) {
+    assert.deepEqual(
+      recreated.value.records.map(({ version }) => version),
+      [1, 3],
+    );
+  }
+});

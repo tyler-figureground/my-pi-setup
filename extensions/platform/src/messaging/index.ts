@@ -20,9 +20,21 @@ const PRESENCE_COLLECTION = "session-broker.presence";
 const MESSAGE_COLLECTION = "session-broker.messages";
 const REQUEST_COLLECTION = "session-broker.requests";
 const MAILBOX_COLLECTION = "session-broker.mailboxes";
+const MESSAGING_RECORD_COLLECTIONS = [
+  PRESENCE_COLLECTION,
+  MESSAGE_COLLECTION,
+  REQUEST_COLLECTION,
+  MAILBOX_COLLECTION,
+] as const;
 const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+// Terminal message history and its indexes remain replayable for 30 days.
 const RECORD_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const MAINTENANCE_BATCH_SIZE = 16;
+// Internal transaction idempotency is bounded separately from mailbox receipts.
+const TRANSACTION_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const MAINTENANCE_BATCH_SIZE = 64;
+const MAINTENANCE_MAX_PAGES = 64;
+const COMPACTION_BATCH_SIZE = 1_000;
+const COMPACTION_MAX_PASSES = 128;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1_000;
 const MAX_DURABLE_RECEIPT_BYTES = 2 * 1024;
 const CLOSE_DRAIN_TIMEOUT_MS = 250;
@@ -1044,107 +1056,135 @@ export function createSessionBrokerModule(
 
   const maintainRecords = async () => {
     const cutoff = clock() - RECORD_RETENTION_MS;
-    const messageRecords = await maintenancePage(MESSAGE_COLLECTION);
-    const expiredMessages = messageRecords.filter((candidate) => {
-      const message = parseMessage(candidate);
-      return (
-        candidate.updatedAt < cutoff &&
-        (message.state === "delivered" ||
-          message.state === "failed" ||
-          message.state === "expired")
-      );
-    });
-    if (expiredMessages.length > 0) {
-      await options.state.transact({
-        transactionId: `session-broker.maintenance.messages:${id()}`,
-        operations: expiredMessages.flatMap((candidate) => {
-          const message = parseMessage(candidate);
-          return [
-            {
-              type: "delete-record" as const,
-              collection: MESSAGE_COLLECTION,
-              key: candidate.key,
-              expectedVersion: candidate.version,
-            },
-            {
-              type: "delete-event" as const,
-              stream: mailboxStream(message.envelope.recipient.piSessionId),
-              eventId: message.envelope.id,
-            },
-            {
-              type: "delete-event" as const,
-              stream: outboundStream(
-                message.envelope.sender.piSessionId,
-                message.envelope.sender.projectId,
-                message.envelope.sender.incarnation,
-              ),
-              eventId: outboundEventId(message.envelope.id),
-            },
-          ];
-        }),
-      });
-    }
-
-    const requestRecords = await maintenancePage(REQUEST_COLLECTION);
-    const expiredRequests: StateRecord[] = [];
-    for (const candidate of requestRecords) {
-      if (candidate.updatedAt >= cutoff) continue;
-      const request = parseRequest(candidate);
-      let retainsMessage = false;
-      for (const delivery of request.deliveries) {
-        const message = await record(
-          options.state,
-          MESSAGE_COLLECTION,
-          delivery.messageId,
+    const expiredEventIds: string[] = [];
+    for (let page = 0; page < MAINTENANCE_MAX_PAGES; page += 1) {
+      const messageRecords = await maintenancePage(MESSAGE_COLLECTION);
+      const expiredMessages = messageRecords.filter((candidate) => {
+        const message = parseMessage(candidate);
+        return (
+          candidate.updatedAt < cutoff &&
+          (message.state === "delivered" ||
+            message.state === "failed" ||
+            message.state === "expired")
         );
-        if (!message.ok || message.value) {
-          retainsMessage = true;
-          break;
+      });
+      if (expiredMessages.length > 0) {
+        const removed = await options.state.transact({
+          transactionId: `session-broker.maintenance.messages:${id()}`,
+          operations: expiredMessages.map((candidate) => ({
+            type: "delete-record" as const,
+            collection: MESSAGE_COLLECTION,
+            key: candidate.key,
+            expectedVersion: candidate.version,
+          })),
+        });
+        if (removed.ok) {
+          for (const candidate of expiredMessages) {
+            const message = parseMessage(candidate);
+            expiredEventIds.push(
+              message.envelope.id,
+              outboundEventId(message.envelope.id),
+            );
+          }
         }
       }
-      if (!retainsMessage) expiredRequests.push(candidate);
+      if (messageRecords.length < MAINTENANCE_BATCH_SIZE) break;
     }
-    if (expiredRequests.length > 0) {
-      await options.state.transact({
-        transactionId: `session-broker.maintenance.requests:${id()}`,
-        operations: expiredRequests.map((candidate) => ({
-          type: "delete-record" as const,
-          collection: REQUEST_COLLECTION,
-          key: candidate.key,
-          expectedVersion: candidate.version,
-        })),
+
+    for (let page = 0; page < MAINTENANCE_MAX_PAGES; page += 1) {
+      const requestRecords = await maintenancePage(REQUEST_COLLECTION);
+      const expiredRequests: StateRecord[] = [];
+      for (const candidate of requestRecords) {
+        if (candidate.updatedAt >= cutoff) continue;
+        const request = parseRequest(candidate);
+        let retainsMessage = false;
+        for (const delivery of request.deliveries) {
+          const message = await record(
+            options.state,
+            MESSAGE_COLLECTION,
+            delivery.messageId,
+          );
+          if (!message.ok || message.value) {
+            retainsMessage = true;
+            break;
+          }
+        }
+        if (!retainsMessage) expiredRequests.push(candidate);
+      }
+      if (expiredRequests.length > 0) {
+        await options.state.transact({
+          transactionId: `session-broker.maintenance.requests:${id()}`,
+          operations: expiredRequests.map((candidate) => ({
+            type: "delete-record" as const,
+            collection: REQUEST_COLLECTION,
+            key: candidate.key,
+            expectedVersion: candidate.version,
+          })),
+        });
+      }
+      if (requestRecords.length < MAINTENANCE_BATCH_SIZE) break;
+    }
+
+    for (let page = 0; page < MAINTENANCE_MAX_PAGES; page += 1) {
+      const presenceRecords = await maintenancePage(PRESENCE_COLLECTION);
+      const expiredPresence: StateRecord[] = [];
+      for (const candidate of presenceRecords) {
+        const presence = parsePresence(candidate);
+        if (presence.lastHeartbeatAt >= cutoff) continue;
+        const lease = await options.state.query({
+          type: "lease",
+          resource: leaseResource(candidate.key),
+        });
+        if (
+          lease.ok &&
+          lease.value.type === "lease" &&
+          (!lease.value.lease ||
+            lease.value.lease.owner === null ||
+            lease.value.lease.expiresAt <= clock())
+        ) {
+          expiredPresence.push(candidate);
+        }
+      }
+      if (expiredPresence.length > 0) {
+        await options.state.transact({
+          transactionId: `session-broker.maintenance.presence:${id()}`,
+          operations: expiredPresence.map((candidate) => ({
+            type: "delete-record" as const,
+            collection: PRESENCE_COLLECTION,
+            key: candidate.key,
+            expectedVersion: candidate.version,
+          })),
+        });
+      }
+      if (presenceRecords.length < MAINTENANCE_BATCH_SIZE) break;
+    }
+
+    for (
+      let offset = 0;
+      offset < expiredEventIds.length;
+      offset += COMPACTION_BATCH_SIZE
+    ) {
+      await options.state.compact({
+        eventIdsBefore: cutoff,
+        eventIds: expiredEventIds.slice(offset, offset + COMPACTION_BATCH_SIZE),
+        limit: COMPACTION_BATCH_SIZE,
       });
     }
 
-    const presenceRecords = await maintenancePage(PRESENCE_COLLECTION);
-    const expiredPresence: StateRecord[] = [];
-    for (const candidate of presenceRecords) {
-      const presence = parsePresence(candidate);
-      if (presence.lastHeartbeatAt >= cutoff) continue;
-      const lease = await options.state.query({
-        type: "lease",
-        resource: leaseResource(candidate.key),
+    const transactionsBefore = clock() - TRANSACTION_RECEIPT_RETENTION_MS;
+    for (let pass = 0; pass < COMPACTION_MAX_PASSES; pass += 1) {
+      const compacted = await options.state.compact({
+        transactionsBefore,
+        recordHeadCollections: MESSAGING_RECORD_COLLECTIONS,
+        limit: COMPACTION_BATCH_SIZE,
       });
+      if (!compacted.ok) break;
       if (
-        lease.ok &&
-        lease.value.type === "lease" &&
-        (!lease.value.lease ||
-          lease.value.lease.owner === null ||
-          lease.value.lease.expiresAt <= clock())
+        compacted.value.deletedTransactions < COMPACTION_BATCH_SIZE &&
+        (compacted.value.deletedRecordHeads ?? 0) < COMPACTION_BATCH_SIZE
       ) {
-        expiredPresence.push(candidate);
+        break;
       }
-    }
-    if (expiredPresence.length > 0) {
-      await options.state.transact({
-        transactionId: `session-broker.maintenance.presence:${id()}`,
-        operations: expiredPresence.map((candidate) => ({
-          type: "delete-record" as const,
-          collection: PRESENCE_COLLECTION,
-          key: candidate.key,
-          expectedVersion: candidate.version,
-        })),
-      });
     }
   };
 
