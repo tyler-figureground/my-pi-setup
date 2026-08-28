@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createTriggerEngine } from "./src/automation/hooks/index.ts";
+import {
+  createTriggerEngine,
+  hookEvents,
+} from "./src/automation/hooks/index.ts";
+
+test("declarative hook catalog includes every current observable Pi update event", () => {
+  for (const event of [
+    "message_update",
+    "before_provider_headers",
+    "tool_execution_update",
+  ]) {
+    assert.ok(hookEvents.includes(event as (typeof hookEvents)[number]), event);
+  }
+});
 
 const trustedRuntime = {
   scope: "runtime",
