@@ -47,6 +47,7 @@ const unit = [
   "extensions/platform/tool-federation.test.ts",
   "extensions/shared/context-utilization.test.ts",
   "extensions/shared/execution-role.test.ts",
+  "extensions/shared/scheduled-agent.test.ts",
   "extensions/shared/tool-call-timeout.test.ts",
   "extensions/subagents/by-the-way.test.ts",
   "extensions/subagents/codex-process.test.ts",
