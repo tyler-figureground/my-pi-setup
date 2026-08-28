@@ -47,6 +47,347 @@ test("concurrent acquisition of one resource starts once and shares its value", 
   await supervisor.shutdown("quit");
 });
 
+test("two active lifecycle handles cannot share one close authority", async () => {
+  let closes = 0;
+  const supervisor = createLifecycleSupervisor();
+  const shared = resource("exclusive-handle", async () => ({
+    value: "open",
+    close: () => void closes++,
+  }));
+  const first = supervisor.acquireHandle(shared);
+  assert.equal(await first.value, "open");
+
+  const second = supervisor.acquireHandle(shared);
+  await assert.rejects(second.value, /already has an active lifecycle handle/i);
+  await second.release();
+  assert.equal(closes, 0);
+
+  await first.release();
+  assert.equal(closes, 1);
+  await supervisor.shutdown("quit");
+});
+
+test("a lifecycle handle releases early and permits same-id reacquisition", async () => {
+  const closes: string[] = [];
+  const supervisor = createLifecycleSupervisor();
+  const first = supervisor.acquireHandle(
+    resource("dynamic", async () => ({
+      value: "first",
+      close: ({ cause }) => void closes.push(`first:${cause}`),
+    })),
+  );
+
+  assert.equal(await first.value, "first");
+  const releasing = first.release();
+  assert.equal(releasing, first.release());
+  await releasing;
+
+  const second = supervisor.acquireHandle(
+    resource("dynamic", async () => ({
+      value: "second",
+      close: ({ cause }) => void closes.push(`second:${cause}`),
+    })),
+  );
+  assert.equal(await second.value, "second");
+  await second.release();
+
+  assert.deepEqual(closes, ["first:release", "second:release"]);
+  await supervisor.shutdown("quit");
+});
+
+test("acquisition racing release waits for close settlement before reusing the id", async () => {
+  const closeStarted = deferred<void>();
+  const closeSettled = deferred<void>();
+  let starts = 0;
+  const supervisor = createLifecycleSupervisor();
+  const first = supervisor.acquireHandle(
+    resource("rotating", async () => {
+      starts++;
+      return {
+        value: "first",
+        close: () => {
+          closeStarted.resolve();
+          return closeSettled.promise;
+        },
+      };
+    }),
+  );
+  await first.value;
+
+  const releasing = first.release();
+  await closeStarted.promise;
+  const second = supervisor.acquireHandle(
+    resource("rotating", async () => {
+      starts++;
+      return { value: "second", close() {} };
+    }),
+  );
+  await Promise.resolve();
+  assert.equal(starts, 1);
+
+  closeSettled.resolve();
+  await releasing;
+  assert.equal(await second.value, "second");
+  assert.equal(starts, 2);
+  await supervisor.shutdown("quit");
+});
+
+test("a queued handle released before acceptance cannot leave a resource open", async () => {
+  const firstClose = deferred<void>();
+  let secondStarts = 0;
+  let secondCloses = 0;
+  const supervisor = createLifecycleSupervisor();
+  const first = supervisor.acquireHandle(
+    resource("queued-release", async () => ({
+      value: "first",
+      close: () => firstClose.promise,
+    })),
+  );
+  await first.value;
+  const releasingFirst = first.release();
+
+  const second = supervisor.acquireHandle(
+    resource("queued-release", async () => {
+      secondStarts++;
+      return {
+        value: "second",
+        close: () => void secondCloses++,
+      };
+    }),
+  );
+  const releasingSecond = second.release();
+  firstClose.resolve();
+
+  await releasingFirst;
+  await assert.rejects(second.value, /aborted/i);
+  await releasingSecond;
+  assert.equal(secondStarts, 1);
+  assert.equal(secondCloses, 1);
+  await supervisor.shutdown("quit");
+  assert.equal(secondCloses, 1);
+});
+
+test("release of an abort-ignoring start is bounded and reported once", async () => {
+  const supervisor = createLifecycleSupervisor({
+    closeTimeoutMs: 5,
+    shutdownTimeoutMs: 10,
+  });
+  const handle = supervisor.acquireHandle(
+    resource(
+      "stuck-release",
+      () => new Promise<LifecycleLease<never>>(() => {}),
+    ),
+  );
+
+  const release = handle.release();
+  assert.equal(release, handle.release());
+  await assert.rejects(handle.value, /aborted/i);
+  await assert.rejects(release, /Timed out/);
+  const report = await supervisor.shutdown("quit");
+
+  assert.equal(report.status, "degraded");
+  assert.deepEqual(
+    report.failures.map(({ resourceId, phase, kind }) => ({
+      resourceId,
+      phase,
+      kind,
+    })),
+    [{ resourceId: "stuck-release", phase: "acquire", kind: "timeout" }],
+  );
+});
+
+test("timed-out release keeps the id fenced until physical close settles", async () => {
+  const physicalClose = deferred<void>();
+  let starts = 0;
+  const supervisor = createLifecycleSupervisor({ closeTimeoutMs: 5 });
+  const first = supervisor.acquireHandle(
+    resource("bounded-release", async () => {
+      starts++;
+      return { value: "first", close: () => physicalClose.promise };
+    }),
+  );
+  await first.value;
+
+  await assert.rejects(first.release(), /Timed out/);
+  const second = supervisor.acquireHandle(
+    resource("bounded-release", async () => {
+      starts++;
+      return { value: "second", close() {} };
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(starts, 1);
+
+  physicalClose.resolve();
+  assert.equal(await second.value, "second");
+  assert.equal(starts, 2);
+  const report = await supervisor.shutdown("quit");
+  assert.equal(report.status, "degraded");
+  assert.deepEqual(
+    report.failures.map(({ resourceId, phase, kind }) => ({
+      resourceId,
+      phase,
+      kind,
+    })),
+    [{ resourceId: "bounded-release", phase: "close", kind: "timeout" }],
+  );
+});
+
+test("a timed-out late close keeps the released id fenced", async () => {
+  const opening = deferred<LifecycleLease<string>>();
+  const physicalClose = deferred<void>();
+  let starts = 0;
+  const supervisor = createLifecycleSupervisor({ closeTimeoutMs: 5 });
+  const first = supervisor.acquireHandle(
+    resource("late-close-fence", () => {
+      starts++;
+      return opening.promise;
+    }),
+  );
+  const release = first.release();
+  opening.resolve({ value: "late", close: () => physicalClose.promise });
+
+  await assert.rejects(first.value, /aborted/i);
+  await assert.rejects(release, /Timed out/);
+  const second = supervisor.acquireHandle(
+    resource("late-close-fence", async () => {
+      starts++;
+      return { value: "second", close() {} };
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(starts, 1);
+
+  physicalClose.resolve();
+  assert.equal(await second.value, "second");
+  assert.equal(starts, 2);
+  assert.equal((await supervisor.shutdown("quit")).status, "degraded");
+});
+
+test("release aborts acquisition and immediately closes a late lease", async () => {
+  const pending = deferred<LifecycleLease<string>>();
+  let startAborted = false;
+  let closes = 0;
+  let closeReason: string | undefined;
+  const supervisor = createLifecycleSupervisor({ closeTimeoutMs: 100 });
+  const handle = supervisor.acquireHandle(
+    resource("late-release", (signal) => {
+      startAborted = signal.aborted;
+      signal.addEventListener("abort", () => (startAborted = true), {
+        once: true,
+      });
+      return pending.promise;
+    }),
+  );
+
+  const release = handle.release();
+  pending.resolve({
+    value: "late",
+    close: ({ cause }) => {
+      closes++;
+      closeReason = cause;
+    },
+  });
+
+  await assert.rejects(handle.value, /aborted/i);
+  await release;
+  assert.equal(startAborted, true);
+  assert.equal(closes, 1);
+  assert.equal(closeReason, "release");
+  await supervisor.shutdown("quit");
+  assert.equal(closes, 1);
+});
+
+test("release and shutdown share one in-flight close", async () => {
+  const closeSettled = deferred<void>();
+  let closes = 0;
+  const supervisor = createLifecycleSupervisor();
+  const handle = supervisor.acquireHandle(
+    resource("shared-close", async () => ({
+      value: undefined,
+      close: () => {
+        closes++;
+        return closeSettled.promise;
+      },
+    })),
+  );
+  await handle.value;
+
+  const release = handle.release();
+  const shutdown = supervisor.shutdown("reload");
+  await Promise.resolve();
+  assert.equal(closes, 1);
+
+  closeSettled.resolve();
+  await release;
+  const report = await shutdown;
+  assert.equal(report.status, "clean");
+  assert.equal(closes, 1);
+});
+
+test("shutdown and a later release share one in-flight close", async () => {
+  const closeSettled = deferred<void>();
+  let closes = 0;
+  const supervisor = createLifecycleSupervisor();
+  const handle = supervisor.acquireHandle(
+    resource("shutdown-first", async () => ({
+      value: undefined,
+      close: () => {
+        closes++;
+        return closeSettled.promise;
+      },
+    })),
+  );
+  await handle.value;
+
+  const shutdown = supervisor.shutdown("reload");
+  await Promise.resolve();
+  const release = handle.release();
+  assert.equal(closes, 1);
+
+  closeSettled.resolve();
+  await release;
+  assert.equal((await shutdown).status, "clean");
+  assert.equal(closes, 1);
+});
+
+test("failed release is reported by shutdown without closing twice", async () => {
+  let closes = 0;
+  const supervisor = createLifecycleSupervisor();
+  const handle = supervisor.acquireHandle(
+    resource("release-failure", async () => ({
+      value: undefined,
+      close: () => {
+        closes++;
+        throw new Error("release close failed");
+      },
+    })),
+  );
+  await handle.value;
+
+  await assert.rejects(handle.release(), /release close failed/);
+  const report = await supervisor.shutdown("quit");
+
+  assert.equal(closes, 1);
+  assert.equal(report.status, "degraded");
+  assert.deepEqual(
+    report.failures.map(({ resourceId, phase, kind, message }) => ({
+      resourceId,
+      phase,
+      kind,
+      message,
+    })),
+    [
+      {
+        resourceId: "release-failure",
+        phase: "close",
+        kind: "error",
+        message: "release close failed",
+      },
+    ],
+  );
+});
+
 test("different resources cannot reuse an id", async () => {
   const supervisor = createLifecycleSupervisor();
   const first = resource("collision", async () => ({ value: 1, close() {} }));
