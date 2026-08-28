@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 6 isolated-complete; publication and live integration pending**
+Status: **Phase 6 complete; awaiting explicit Phase 7 approval**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -812,7 +812,7 @@ Features: F07, F03.
 
 ---
 
-# Phase 6 - Cross-session messaging and persistent memory **IN PROGRESS**
+# Phase 6 - Cross-session messaging and persistent memory
 
 Features: F10, F11.
 
@@ -1195,7 +1195,8 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-26 | Phase 4 late sign-off hardening | `425145b`, `ba54adc` | real `core.autocrlf` and empty-repository fixtures; filter non-execution regression; live Windows creation-identity termination; repeated adversarial review; live fast-forward verification | 202 unit; 176 integration + 22 delegated; 5 platform skips; smoke; Claude 2/2; Codex 2/2; Pi 1/1; live focused 28 pass + 1 opt-in skip | Pass | False review changes eliminated without clean filters; every Windows language-server kill is creation-identity validated; final independent review found no blockers |
 | 2026-08-26 | Phase 5 MCP and browser adapters | `55e9b34`, `64af98d`, `f1603a9` | official package trials; repeated adversarial security reviews; address/credential/process/profile probes; paired startup benchmark; post-sign-off `npm run verify`; repository visual artifact | 239 unit; 188 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass | F07 and F03 complete; official MCP v2 and thin Playwright adapter selected; final MCP and browser/security reviews reported no blockers |
 | 2026-08-26 | Phase 5 live integration | `55e9b34`, `64af98d`, `f1603a9` | fast-forward live main; platform clean install/audit; live check/format; 61 focused Phase 5 tests; repository smoke | 61/61 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; live config enables inert unconfigured MCP/browser surfaces; Phase 6 not started |
-| 2026-08-27 | Phase 6 messaging and explicit Memory | `ec8fe0c` through `9a4434a` | exact package audit; interface comparison; repeated adversarial review/fix cycles; native Windows process/SQLite/JSONL/junction/sidecar/secret/deletion/retention probes; real two-Pi process exchange; retrieval evaluation; paired startup benchmark; post-sign-off `npm run verify` | 299 unit; 283 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass isolated | F10 and explicit F11 complete; automatic extraction fails recall gate and remains absent/off; final critical/high review `sa-101` found no blockers; live integration pending |
+| 2026-08-27 | Phase 6 messaging and explicit Memory | `ec8fe0c` through `9a4434a` | exact package audit; interface comparison; repeated adversarial review/fix cycles; native Windows process/SQLite/JSONL/junction/sidecar/secret/deletion/retention probes; real two-Pi process exchange; retrieval evaluation; paired startup benchmark; post-sign-off `npm run verify` | 299 unit; 283 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass isolated | F10 and explicit F11 complete; automatic extraction fails recall gate and remains absent/off; final critical/high review `sa-101` found no blockers |
+| 2026-08-27 | Phase 6 live integration | `89747c7` through `33fed5e` plus live evidence commit | fast-forward live main; platform clean install/audit; live check/format; 198 focused Phase 6/StateStore tests; repository smoke | 198/198 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; no new dependency manifest; automatic extraction remains off; Phase 7 not started |
 
 # Decision log
 

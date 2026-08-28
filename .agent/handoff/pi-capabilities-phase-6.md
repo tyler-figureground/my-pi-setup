@@ -37,8 +37,8 @@ Do not begin Phase 7 without explicit approval and accepted Phase 6 evidence.
   - [x] Add versioned Memory retrieval/extraction evaluation dataset.
   - [x] Benchmark current SQLite-backed `MemoryStore` through its public interface; record precision@k, recall@k, MRR, scope leaks, latency, and context bytes.
   - [x] Record absent automatic extractor as no-write (zero false positives/false memories, zero recall); verify review-state and direct-user promotion guard; keep automatic extraction off.
-- [ ] Fetch publication preflight, publish branch, fast-forward live `main`, preserve live user state, and verify live checkout. Isolated branch is ready.
-- [ ] Update authoritative tracker/program handoff and stop before Phase 7.
+- [x] Fetch publication preflight, publish branch, fast-forward live `main`, preserve live user state, and verify live checkout.
+- [x] Update authoritative tracker/program handoff and stop before Phase 7.
 
 ## Confirmed constraints
 

@@ -80,6 +80,15 @@ Log: `C:/Users/Tyler/AppData/Local/Temp/pi-phase6-verify-final.log`.
 
 Real terminal-keystroke behavior remains the manual checklist in `docs/verification/phase-6-tui-smoke.md`; automated TUI/RPC paths pass.
 
+## Live integration
+
+Live `main` fast-forwarded through `33fed5e` after fetch-first preflight. Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`.
+
+- Clean platform dependency install: 169 packages audited, zero vulnerabilities
+- Live TypeScript and formatting: passed
+- Live focused Phase 6/StateStore suite: 198/198 passed
+- Live repository smoke: public schemas, print, JSON, RPC, reload, shutdown, and no leaks passed
+
 ## Result
 
-F10 and explicit F11 acceptance gates pass. Automatic Memory extraction remains disabled because its evaluation gate fails. Phase 6 is isolated-complete. Phase 7 has not started.
+F10 and explicit F11 acceptance gates pass in isolated and live checkouts. Automatic Memory extraction remains disabled because its evaluation gate fails. Phase 6 complete. Phase 7 has not started.

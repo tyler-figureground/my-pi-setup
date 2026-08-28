@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 6 isolated-complete. F10 cross-session messaging and F11 explicit persistent Memory accepted. Publication and live-main verification remain. Phase 7 must not start without explicit approval.
+Phase 6 complete and live-integrated. F10 cross-session messaging and F11 explicit persistent Memory accepted. Phase 7 must not start without explicit approval.
 
 ## Completed this phase
 
@@ -31,6 +31,7 @@ Authoritative details: `docs/verification/phase-6-acceptance.md`.
 - Real Pi exchange: `C:/Users/Tyler/AppData/Local/Temp/pi-phase6-real-process-acceptance.json`.
 - Startup median: Phase 6 5,720.6 ms versus Phase 5 control 5,468.1 ms, +4.6%.
 - Real terminal-keystroke checklist remains manual; automated TUI/RPC paths pass.
+- Live clean platform install/audit, typecheck, formatting, 198/198 focused tests, and repository smoke passed.
 
 ## Key references
 
@@ -49,9 +50,10 @@ Authoritative details: `docs/verification/phase-6-acceptance.md`.
 - Branch: `pi-capabilities-phase-6`
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-6`
 - Base: accepted Phase 5 head `c08835e`
-- Isolated implementation/evidence through `935816e`; publication/live integration commits follow.
+- Live `main` fast-forwarded through `33fed5e`; final integration evidence commit follows this handoff update.
+- Published branch: `pi-capabilities-phase-6`.
 - Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL safety backup.
 
 ## Next exact action
 
-Fetch publication preflight, confirm ahead/behind, publish Phase 6 branch, fast-forward live `main`, install/verify live checkout while preserving user state, record live evidence, then stop before Phase 7.
+Wait for explicit Phase 7 approval. If approved, fetch first, create an isolated Phase 7 worktree/checkpoint, then confirm F08-completion/F15/F16 interfaces before implementation.
