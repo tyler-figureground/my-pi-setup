@@ -61,6 +61,7 @@ export {
   normalizeSchedule,
   resolveMissedRun,
 } from "./calendar.ts";
+export { createSessionBrokerScheduleDelivery } from "./delivery.ts";
 
 const ID = /^[a-z][a-z0-9-]{0,127}$/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
