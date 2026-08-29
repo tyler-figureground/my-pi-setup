@@ -101,6 +101,7 @@ const integration = [
   "extensions/platform/phase4-composition.test.ts",
   "extensions/platform/phase6-composition.test.ts",
   "extensions/platform/phase7-composition.test.ts",
+  "extensions/platform/phase7-soak.integration.test.ts",
   "extensions/platform/pinned-fetch.integration.test.ts",
   "extensions/platform/plan-mode.integration.test.ts",
   "extensions/platform/private-protocol-loader.integration.test.ts",
