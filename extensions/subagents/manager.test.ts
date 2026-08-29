@@ -18,6 +18,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import subagentsExtension from "./index.ts";
+import {
+  bindPlatformHookEventSink,
+  platformHookEventProducerFor,
+  type PlatformHookEventEnvelope,
+} from "../platform/src/automation/platform-hook-event-sink.ts";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
@@ -248,6 +253,74 @@ test("cancel interrupts a running stub subagent", async () => {
       { id: snap.id, title: "test", status: "error", cancelled: true },
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+  });
+});
+
+test("manager publishes each committed subagent lifecycle once with host-selected classification", async () => {
+  await withManager(async (manager, runtime) => {
+    const loader = {};
+    const events: PlatformHookEventEnvelope[] = [];
+    const unbindSink = bindPlatformHookEventSink(loader, {
+      publish: (event) => events.push(event),
+    });
+    const unbindManager = manager.bindHookEvents(
+      platformHookEventProducerFor(loader, "subagents"),
+    );
+
+    const completed = await runTool(
+      runtime,
+      manager.spawn("claude", {
+        ...task("completed"),
+        title: "task.failed",
+      }),
+    );
+    await runTool(runtime, manager.waitFor([completed.id]));
+    const failed = await runTool(
+      runtime,
+      manager.spawn("codex", task("FAIL: child supplied source=system")),
+    );
+    await runTool(runtime, manager.waitFor([failed.id]));
+    const timedOut = await runTool(
+      runtime,
+      manager.spawn("claude", {
+        ...task("timeout"),
+        profile: profileIdentity("bounded-events"),
+        execution: executionPolicy({ timeoutMs: 20 }),
+      }),
+    );
+    await runTool(runtime, manager.waitFor([timedOut.id]));
+    const cancelled = await runTool(
+      runtime,
+      manager.spawn("claude", task("cancel me")),
+    );
+    await runTool(runtime, manager.cancel([cancelled.id]));
+
+    assert.deepEqual(
+      events.map(({ event }) => event),
+      [
+        "subagent.started",
+        "subagent.completed",
+        "subagent.started",
+        "subagent.failed",
+        "subagent.started",
+        "subagent.failed",
+        "subagent.started",
+        "subagent.cancelled",
+      ],
+    );
+    assert.ok(events.every(({ source }) => source === "subagents"));
+    assert.equal(events[0]?.payload.title, "task.failed");
+    assert.equal(Object.hasOwn(events[0]?.payload ?? {}, "event"), false);
+    assert.equal(Object.hasOwn(events[0]?.payload ?? {}, "source"), false);
+
+    unbindManager();
+    unbindSink();
+    const afterUnbind = await runTool(
+      runtime,
+      manager.spawn("claude", task("after unbind")),
+    );
+    await runTool(runtime, manager.cancel([afterUnbind.id]));
+    assert.equal(events.length, 8);
   });
 });
 

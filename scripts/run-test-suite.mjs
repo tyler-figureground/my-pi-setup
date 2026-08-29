@@ -40,6 +40,7 @@ const unit = [
   "extensions/platform/phase7-config.test.ts",
   "extensions/platform/plan-mode.test.ts",
   "extensions/platform/platform-config.test.ts",
+  "extensions/platform/platform-hook-event-sink.test.ts",
   "extensions/platform/platform.test.ts",
   "extensions/platform/review-evidence.test.ts",
   "extensions/platform/review-wiring.test.ts",
@@ -68,6 +69,7 @@ const unit = [
   "extensions/summaries/transcript.test.ts",
   "extensions/workflows/artifacts.test.ts",
   "extensions/workflows/controller.test.ts",
+  "extensions/workflows/events.test.ts",
   "extensions/workflows/meta.test.ts",
   "extensions/workflows/serialization.test.ts",
 ];

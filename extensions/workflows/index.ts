@@ -34,6 +34,11 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import {
+  platformHookEventProducerFor,
+  type PlatformHookEvent,
+  type PlatformHookEventProducer,
+} from "../platform/src/automation/platform-hook-event-sink.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -241,6 +246,19 @@ function runDetailText(
 }
 
 export default function workflows(pi: ExtensionAPI) {
+  const hookEvents = platformHookEventProducerFor(pi.events, "workflows");
+  let acceptingHookEvents = true;
+  const publishHookEvent: PlatformHookEventProducer["publish"] = (
+    event,
+    payload,
+  ) => {
+    if (!acceptingHookEvents) return;
+    try {
+      hookEvents.publish(event, payload);
+    } catch {
+      // Observe-only publication cannot corrupt workflow lifecycle state.
+    }
+  };
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<
     string,
@@ -313,6 +331,7 @@ export default function workflows(pi: ExtensionAPI) {
     }
     lastUi?.setStatus("workflows", undefined);
     lastUi = undefined;
+    acceptingHookEvents = false;
   });
 
   pi.registerCommand("workflows", {
@@ -447,6 +466,23 @@ export default function workflows(pi: ExtensionAPI) {
           Math.max(0, EMIT_INTERVAL_MS - (Date.now() - lastEmit)),
         );
       };
+      const publishProgress = () => {
+        const { done, failed, running } = countStates(details);
+        publishHookEvent("task.progress", {
+          runId,
+          status: details.status,
+          ...(details.name ? { name: details.name } : {}),
+          ...(details.currentPhase
+            ? { currentPhase: details.currentPhase }
+            : {}),
+          agents: { done, failed, running, total: details.agents.length },
+        });
+      };
+      const commitProgress = () => {
+        persistence.flush();
+        publishProgress();
+        emit(false);
+      };
       const flushNow = () => {
         if (emitTimer) clearTimeout(emitTimer);
         flush();
@@ -457,7 +493,7 @@ export default function workflows(pi: ExtensionAPI) {
         details.currentPhase = text;
         if (!details.phases.some((p) => p.title === text))
           details.phases.push({ title: text });
-        emit();
+        commitProgress();
       };
 
       let agentCounter = 0;
@@ -492,14 +528,13 @@ export default function workflows(pi: ExtensionAPI) {
           transcript: [],
         };
         details.agents.push(record);
-        persistence.checkpoint({ immediate: true });
-        emit(false);
+        commitProgress();
 
         const fail = (error: string): ScriptAgentResult => {
           record.state = "error";
           record.error = error;
           record.finishedAt = Date.now();
-          emit();
+          commitProgress();
           return { ok: false, output: "", error };
         };
 
@@ -605,7 +640,7 @@ export default function workflows(pi: ExtensionAPI) {
             } else {
               record.error = outcome.error ?? "Agent failed";
             }
-            emit();
+            commitProgress();
 
             return {
               ok: outcome.ok,
@@ -656,6 +691,19 @@ export default function workflows(pi: ExtensionAPI) {
         details.finishedAt = Date.now();
         try {
           persistence.flush();
+          const terminalEvent: PlatformHookEvent =
+            details.status === "completed"
+              ? "task.completed"
+              : details.status === "aborted"
+                ? "task.cancelled"
+                : "task.failed";
+          publishHookEvent(terminalEvent, {
+            runId,
+            status: details.status,
+            ...(details.name ? { name: details.name } : {}),
+            agents: countStates(details),
+            ...(details.error ? { error: details.error } : {}),
+          });
         } catch (error) {
           details.status = "failed";
           details.error = `Artifact persistence failed: ${errorText(error)}`;
@@ -673,6 +721,12 @@ export default function workflows(pi: ExtensionAPI) {
         completion?: Promise<void>;
       };
       activeRuns.set(runId, activeRun);
+      publishHookEvent("task.started", {
+        runId,
+        status: details.status,
+        background,
+        ...(details.name ? { name: details.name } : {}),
+      });
       const completion = runScript();
       activeRun.completion = completion;
       if (ctx.hasUI) lastUi = ctx.ui;

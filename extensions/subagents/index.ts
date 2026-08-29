@@ -82,6 +82,7 @@ import { platformAgentServices } from "../platform/src/agents/services.ts";
 import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
 import { bindLocalReviewer } from "../platform/src/review/reviewer-service.ts";
 import { bindScheduledAgentExecutor } from "../shared/scheduled-agent.ts";
+import { platformHookEventProducerFor } from "../platform/src/automation/platform-hook-event-sink.ts";
 import {
   createScheduledAgentExecutor,
   type ScheduledSubagentManager,
@@ -176,8 +177,10 @@ export default function subagentsExtension(
   let unsubStatus: (() => void) | undefined;
   let unbindLocalReviewer: (() => void) | undefined;
   let unbindScheduledAgentExecutor: (() => void) | undefined;
+  let unbindHookEvents: (() => void) | undefined;
   let scheduledManagerPromise: Promise<ScheduledSubagentManager> | undefined;
   let scheduledGeneration = 0;
+  let acceptingHookEvents = true;
   const scheduledLifecycle = new AbortController();
   const scheduledTitles = new Set<string>();
   const scheduledChildTitles = new Map<string, string>();
@@ -190,6 +193,12 @@ export default function subagentsExtension(
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
+        if (acceptingHookEvents) {
+          unbindHookEvents?.();
+          unbindHookEvents = manager.bindHookEvents(
+            platformHookEventProducerFor(pi.events, "subagents"),
+          );
+        }
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
@@ -454,6 +463,9 @@ export default function subagentsExtension(
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
+    acceptingHookEvents = false;
+    unbindHookEvents?.();
+    unbindHookEvents = undefined;
     unbindScheduledAgentExecutor?.();
     unbindScheduledAgentExecutor = undefined;
     scheduledGeneration++;

@@ -35,6 +35,7 @@ import type {
   SubagentStatus,
   TranscriptItem,
 } from "./domain.ts";
+import type { PlatformHookEventProducer } from "../../platform/src/automation/platform-hook-event-sink.ts";
 import {
   BackendUnavailableError,
   ConcurrencyLimitError,
@@ -173,6 +174,7 @@ export interface SubagentManagerShape {
   readonly list: Effect.Effect<ReadonlyArray<SubagentSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
   readonly view: SubagentReadModel;
+  bindHookEvents(producer: PlatformHookEventProducer): () => void;
 }
 
 export class SubagentManager extends Context.Service<
@@ -200,8 +202,31 @@ const makeManager = Effect.gen(function* () {
   let btwCounter = 0;
   let reserved = 0;
   let disposed = false;
+  let hookEvents: PlatformHookEventProducer | undefined;
   let onSettled:
     ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined;
+
+  const publishHookEvent: PlatformHookEventProducer["publish"] = (
+    event,
+    payload,
+  ) => {
+    if (disposed) return;
+    try {
+      hookEvents?.publish(event, payload);
+    } catch {
+      // Observe-only publication cannot corrupt manager lifecycle state.
+    }
+  };
+
+  const publishStarted = (snapshot: SubagentSnapshot) => {
+    publishHookEvent("subagent.started", {
+      id: snapshot.id,
+      origin: snapshot.origin,
+      backend: snapshot.backend,
+      title: snapshot.title,
+      ...(snapshot.profile ? { profile: snapshot.profile.name } : {}),
+    });
+  };
 
   const notify = (id?: string) => {
     const waiters = changeWaiters;
@@ -279,6 +304,8 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     entry.restarting = false;
     if (s.status !== "running") return;
+    const supervisorFailure =
+      outcome._tag === "Interrupted" && entry.interruptionReason !== undefined;
     s.settledAt = Date.now();
     if (entry.profileTimer) clearTimeout(entry.profileTimer);
     if (entry.workspaceTimer) clearTimeout(entry.workspaceTimer);
@@ -313,6 +340,22 @@ const makeManager = Effect.gen(function* () {
     entry.liveToolMap.clear();
     s.liveTools = [];
     s.queued = [];
+    publishHookEvent(
+      outcome._tag === "Completed"
+        ? "subagent.completed"
+        : outcome._tag === "Interrupted" && !supervisorFailure
+          ? "subagent.cancelled"
+          : "subagent.failed",
+      {
+        id: s.id,
+        origin: s.origin,
+        backend: s.backend,
+        title: s.title,
+        status: s.status,
+        turns: s.turns,
+        ...(s.errorText ? { error: s.errorText } : {}),
+      },
+    );
     const consumed = (waitInterest.get(s.id) ?? 0) > 0;
     if (
       entry.task.workspaceControl &&
@@ -359,11 +402,13 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     switch (event._tag) {
       case "RunStarted":
+        const wasRunning = s.status === "running";
         entry.restarting = false;
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
         armProfileTimeout(entry);
+        if (!wasRunning) publishStarted(s);
         break;
       case "RunSettled":
         settle(entry, event.outcome);
@@ -600,6 +645,7 @@ const makeManager = Effect.gen(function* () {
         entries.set(id, entry);
         armProfileTimeout(entry);
         armWorkspaceRenewal(entry);
+        publishStarted(entry.snapshot);
 
         // Pump: fold the event stream into the snapshot. Tied to the entry
         // scope, so closing the scope stops it. If the stream ends while the
@@ -771,6 +817,7 @@ const makeManager = Effect.gen(function* () {
 
   const disposeAll = Effect.gen(function* () {
     disposed = true;
+    hookEvents = undefined;
     const all = [...entries.values()];
     for (const entry of all) {
       if (entry.profileTimer) clearTimeout(entry.profileTimer);
@@ -847,6 +894,15 @@ const makeManager = Effect.gen(function* () {
     list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
     disposeAll,
     view,
+    bindHookEvents(producer) {
+      if (hookEvents) {
+        throw new Error("Subagent hook events are already bound.");
+      }
+      hookEvents = producer;
+      return () => {
+        if (hookEvents === producer) hookEvents = undefined;
+      };
+    },
   });
 });
 

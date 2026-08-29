@@ -27,6 +27,7 @@ import {
   normalizeCanonicalPath,
 } from "../../../shared/child-session.ts";
 import type { WorkspaceLeaseIdentity } from "../../../shared/guarded-workspace.ts";
+import type { PlatformHookEventProducer } from "../automation/platform-hook-event-sink.ts";
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
@@ -174,6 +175,7 @@ export interface WorkspaceManagerOptions {
   readonly stateStore: StateStore;
   readonly id?: () => string;
   readonly now?: () => number;
+  readonly hookEvents?: PlatformHookEventProducer;
 }
 
 function workspaceFailure(
@@ -609,6 +611,16 @@ export function createWorkspaceManager(
     `workspace-operation:${options.project.projectId}:${id}`;
   const projectOperationResource = `workspace-project-operation:${options.project.projectId}`;
   const recordKey = (id: string) => `${options.project.projectId}:${id}`;
+  const publishHookEvent: PlatformHookEventProducer["publish"] = (
+    event,
+    payload,
+  ) => {
+    try {
+      options.hookEvents?.publish(event, payload);
+    } catch {
+      // Observe-only publication cannot invalidate a durable transition.
+    }
+  };
   const managedSnapshot = (
     snapshot: WorkspaceSnapshot | undefined,
   ): snapshot is WorkspaceSnapshot =>
@@ -831,6 +843,12 @@ export function createWorkspaceManager(
           });
           if (!saved.ok) throw new Error(saved.error.message);
           recovered.push(snapshot.workspaceId);
+          publishHookEvent("worktree.released", {
+            workspaceId: snapshot.workspaceId,
+            projectId: snapshot.projectId,
+            state: next.state,
+            disposition: "recovered",
+          });
         } catch (error) {
           blocked.push({
             workspaceId: snapshot.workspaceId,
@@ -1074,6 +1092,13 @@ export function createWorkspaceManager(
           { workspaceId, path: workspacePath },
         );
       }
+      publishHookEvent("worktree.created", {
+        workspaceId,
+        projectId: ready.projectId,
+        state: ready.state,
+        branch: ready.branch,
+        baseCommit: ready.baseCommit,
+      });
       return success(ready);
     },
 
@@ -1284,6 +1309,14 @@ export function createWorkspaceManager(
           recorded.error.retryable,
         );
       }
+      publishHookEvent("worktree.claimed", {
+        workspaceId: request.workspaceId,
+        projectId: leased.projectId,
+        state: leased.state,
+        fence: lease.fence,
+        role: request.role,
+        ...(request.profile ? { profile: request.profile } : {}),
+      });
       return success({
         workspaceId: request.workspaceId,
         owner: request.owner,
@@ -1560,18 +1593,26 @@ export function createWorkspaceManager(
           },
         ],
       });
-      return saved.ok
-        ? success(integrated)
-        : workspaceFailure(
-            "STORAGE_FAILED",
-            `Target integrated but state persistence failed: ${saved.error.message}`,
-            saved.error.retryable,
-            {
-              workspaceId: snapshot.workspaceId,
-              targetBranch: request.targetBranch,
-              targetCommit: workspaceCommit,
-            },
-          );
+      if (!saved.ok) {
+        return workspaceFailure(
+          "STORAGE_FAILED",
+          `Target integrated but state persistence failed: ${saved.error.message}`,
+          saved.error.retryable,
+          {
+            workspaceId: snapshot.workspaceId,
+            targetBranch: request.targetBranch,
+            targetCommit: workspaceCommit,
+          },
+        );
+      }
+      publishHookEvent("worktree.integrated", {
+        workspaceId: snapshot.workspaceId,
+        projectId: snapshot.projectId,
+        state: integrated.state,
+        targetBranch: request.targetBranch,
+        targetCommit: workspaceCommit,
+      });
+      return success(integrated);
     },
 
     async disposition(leaseToken, action) {
@@ -1709,15 +1750,22 @@ export function createWorkspaceManager(
             },
           ],
         });
-        return released.ok
-          ? success(preserved)
-          : workspaceFailure(
-              released.error.code === "LEASE_LOST"
-                ? "LEASE_LOST"
-                : "STORAGE_FAILED",
-              released.error.message,
-              released.error.retryable,
-            );
+        if (!released.ok) {
+          return workspaceFailure(
+            released.error.code === "LEASE_LOST"
+              ? "LEASE_LOST"
+              : "STORAGE_FAILED",
+            released.error.message,
+            released.error.retryable,
+          );
+        }
+        publishHookEvent("worktree.released", {
+          workspaceId: snapshot.workspaceId,
+          projectId: snapshot.projectId,
+          state: preserved.state,
+          disposition: "preserved",
+        });
+        return success(preserved);
       }
 
       const abandonIntent = await options.stateStore.transact({
@@ -1822,15 +1870,22 @@ export function createWorkspaceManager(
           },
         ],
       });
-      return released.ok
-        ? success(abandoned)
-        : workspaceFailure(
-            released.error.code === "LEASE_LOST"
-              ? "LEASE_LOST"
-              : "STORAGE_FAILED",
-            released.error.message,
-            released.error.retryable,
-          );
+      if (!released.ok) {
+        return workspaceFailure(
+          released.error.code === "LEASE_LOST"
+            ? "LEASE_LOST"
+            : "STORAGE_FAILED",
+          released.error.message,
+          released.error.retryable,
+        );
+      }
+      publishHookEvent("worktree.released", {
+        workspaceId: snapshot.workspaceId,
+        projectId: snapshot.projectId,
+        state: abandoned.state,
+        disposition: "abandoned",
+      });
+      return success(abandoned);
     },
 
     async renew(leaseToken, ttlMs) {

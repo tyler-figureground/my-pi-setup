@@ -13,11 +13,26 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import type {
+  PlatformHookEvent,
+  PlatformHookEventProducer,
+} from "./src/automation/platform-hook-event-sink.ts";
 import { createMemoryStateStore } from "./src/core/persistence/index.ts";
 import { createProjectIdentity } from "./src/core/projects/index.ts";
 import { createWorkspaceManager } from "./src/workspaces/index.ts";
 
 const execFileAsync = promisify(execFile);
+
+function collectingHookEvents() {
+  const events: Array<{
+    event: PlatformHookEvent;
+    payload: Readonly<Record<string, unknown>>;
+  }> = [];
+  const producer: PlatformHookEventProducer = {
+    publish: (event, payload) => events.push({ event, payload }),
+  };
+  return { events, producer };
+}
 
 async function git(cwd: string, ...args: string[]) {
   const { stdout } = await execFileAsync("git", args, {
@@ -162,12 +177,14 @@ test("WorkspaceManager rejects commits added after review evidence", async () =>
 test("WorkspaceManager integrates only reviewed work by expected fast-forward target", async () => {
   const f = await repositoryFixture();
   try {
+    const hookEvents = collectingHookEvents();
     const manager = createWorkspaceManager({
       project: f.project,
       projectTrusted: true,
       workspaceRoot: f.workspaceRoot,
       stateStore: createMemoryStateStore(),
       id: () => "integrate-state",
+      hookEvents: hookEvents.producer,
     });
     const head = await git(f.repository, "rev-parse", "HEAD");
     const targetBranch = await git(f.repository, "branch", "--show-current");
@@ -209,6 +226,10 @@ test("WorkspaceManager integrates only reviewed work by expected fast-forward ta
         : JSON.stringify(integrated.error),
     );
     if (integrated.ok) assert.equal(integrated.value.state, "integrated");
+    assert.deepEqual(
+      hookEvents.events.map(({ event }) => event),
+      ["worktree.created", "worktree.claimed", "worktree.integrated"],
+    );
     assert.equal(
       await readFile(path.join(f.repository, "tracked.txt"), "utf8"),
       "integrated\n",
@@ -222,12 +243,14 @@ test("WorkspaceManager integrates only reviewed work by expected fast-forward ta
 test("WorkspaceManager refuses implicit dirty cleanup and detaches a junction before explicit abandon", async () => {
   const f = await repositoryFixture();
   try {
+    const hookEvents = collectingHookEvents();
     const manager = createWorkspaceManager({
       project: f.project,
       projectTrusted: true,
       workspaceRoot: f.workspaceRoot,
       stateStore: createMemoryStateStore(),
       id: () => "abandon-state",
+      hookEvents: hookEvents.producer,
     });
     const head = await git(f.repository, "rev-parse", "HEAD");
     const created = await manager.create({
@@ -278,6 +301,11 @@ test("WorkspaceManager refuses implicit dirty cleanup and detaches a junction be
     if (abandoned.ok) assert.equal(abandoned.value.state, "abandoned");
     await assert.rejects(access(created.value.path));
     assert.equal(await readFile(sentinel, "utf8"), "preserve");
+    assert.deepEqual(
+      hookEvents.events.map(({ event }) => event),
+      ["worktree.created", "worktree.claimed", "worktree.released"],
+    );
+    assert.equal(hookEvents.events[2]?.payload.disposition, "abandoned");
   } finally {
     await f.cleanup();
   }
@@ -377,6 +405,7 @@ test("WorkspaceManager recovers an expired lease with a higher fence after proce
   const f = await repositoryFixture();
   try {
     let now = 1_000;
+    const hookEvents = collectingHookEvents();
     const stateStore = createMemoryStateStore({ now: () => now });
     const manager = createWorkspaceManager({
       project: f.project,
@@ -385,6 +414,7 @@ test("WorkspaceManager recovers an expired lease with a higher fence after proce
       stateStore,
       now: () => now,
       id: () => "recover-state",
+      hookEvents: hookEvents.producer,
     });
     const head = await git(f.repository, "rev-parse", "HEAD");
     await manager.create({ base: { kind: "commit", commit: head } });
@@ -409,6 +439,66 @@ test("WorkspaceManager recovers an expired lease with a higher fence after proce
     });
     assert.equal(next.ok, true);
     if (next.ok) assert.equal(next.value.fence, 3);
+    assert.deepEqual(
+      hookEvents.events.map(({ event }) => event),
+      [
+        "worktree.created",
+        "worktree.claimed",
+        "worktree.released",
+        "worktree.claimed",
+      ],
+    );
+    assert.equal(hookEvents.events[2]?.payload.disposition, "recovered");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("WorkspaceManager publishes preserve release once and rejected dispositions never publish", async () => {
+  const f = await repositoryFixture();
+  try {
+    const hookEvents = collectingHookEvents();
+    const manager = createWorkspaceManager({
+      project: f.project,
+      projectTrusted: true,
+      workspaceRoot: f.workspaceRoot,
+      stateStore: createMemoryStateStore(),
+      id: () => "event-state",
+      hookEvents: hookEvents.producer,
+    });
+    const head = await git(f.repository, "rev-parse", "HEAD");
+    const created = await manager.create({
+      base: { kind: "commit", commit: head },
+    });
+    assert.equal(created.ok, true);
+    const claimed = await manager.lease({
+      workspaceId: "event-state",
+      owner: { sessionId: "session", agentId: "agent" },
+      ttlMs: 60_000,
+      role: "subagent",
+    });
+    assert.equal(claimed.ok, true);
+    if (!claimed.ok) return;
+
+    const rejected = await manager.disposition(claimed.value, {
+      kind: "mark-reviewed",
+      evidence: "not dirty",
+    });
+    assert.equal(rejected.ok, false);
+    const preserved = await manager.disposition(claimed.value, {
+      kind: "preserve",
+    });
+    assert.equal(preserved.ok, true);
+    const second = await manager.disposition(claimed.value, {
+      kind: "preserve",
+    });
+    assert.equal(second.ok, false);
+
+    assert.deepEqual(
+      hookEvents.events.map(({ event }) => event),
+      ["worktree.created", "worktree.claimed", "worktree.released"],
+    );
+    assert.equal(hookEvents.events[2]?.payload.disposition, "preserved");
   } finally {
     await f.cleanup();
   }
