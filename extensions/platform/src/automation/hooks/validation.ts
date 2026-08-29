@@ -1,5 +1,7 @@
+import { stripVTControlCharacters } from "node:util";
+import { isProxy } from "node:util/types";
 import {
-  hookEvents,
+  declarativeHookEvents,
   type HookDefinition,
   type HookDiagnostic,
   type HookEvent,
@@ -53,7 +55,7 @@ export function resolveLimits(options: TriggerEngineOptions) {
   return limits;
 }
 
-const eventSet = new Set<string>(hookEvents);
+const eventSet = new Set<string>(declarativeHookEvents);
 const closedCapableEvents = new Set<HookEvent>([
   "session_before_switch",
   "session_before_fork",
@@ -80,8 +82,15 @@ const sensitiveAssignment =
   /\b(authorization|cookie|password|passwd|secret|token|api[-_]?key)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
 const sensitiveValue = /(?:bearer\s+)[a-z0-9._~+\-/]+=*/gi;
 
+export function sanitizeText(value: string) {
+  return stripVTControlCharacters(value).replace(
+    /[\u0000-\u001f\u007f-\u009f]/g,
+    " ",
+  );
+}
+
 export function redact(value: string) {
-  return value
+  return sanitizeText(value)
     .replace(sensitiveAssignment, "$1=[REDACTED]")
     .replace(sensitiveValue, "Bearer [REDACTED]")
     .replace(sensitiveKey, "[REDACTED]");
@@ -94,7 +103,12 @@ export function containsSensitiveKey(value: string) {
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    isProxy(value)
+  ) {
     return false;
   }
   try {
@@ -134,6 +148,7 @@ export function measurePlainData(
     }
     if (typeof current.value !== "object")
       return { valid: false, reason: "non-plain value" };
+    if (isProxy(current.value)) return { valid: false, reason: "proxy object" };
     if (seen.has(current.value))
       return { valid: false, reason: "cycle or repeated object reference" };
     seen.add(current.value);
@@ -199,8 +214,8 @@ function diagnostic(
   return {
     severity: "error",
     code,
-    source: provenance.source,
-    ...(hookId ? { hookId } : {}),
+    source: redact(provenance.source),
+    ...(hookId ? { hookId: redact(hookId) } : {}),
     message: redact(message),
   };
 }
@@ -262,6 +277,39 @@ function validateAction(
         ),
       );
     }
+  };
+  const validName = (value: unknown) =>
+    typeof value === "string" && /^[a-z0-9][a-z0-9._/-]{0,127}$/i.test(value);
+  const hasRawAuthority = (value: unknown) => {
+    const stack = [value];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (
+        typeof current === "string" &&
+        (/(?:^|\s)bearer\s+\S+/i.test(current) ||
+          /\b(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|credential)\b\s*[:=]\s*\S+/i.test(
+            current,
+          ))
+      ) {
+        return true;
+      }
+      if (Array.isArray(current)) {
+        stack.push(...current);
+        continue;
+      }
+      if (!isRecord(current)) continue;
+      for (const [key, nested] of Object.entries(current)) {
+        if (
+          /^(?:headers?|authorization|cookie|password|passwd|secret|token|api[-_]?key|credentials?)$/i.test(
+            key,
+          )
+        ) {
+          return true;
+        }
+        stack.push(nested);
+      }
+    }
+    return false;
   };
   switch (action.type) {
     case "command":
@@ -445,6 +493,67 @@ function validateAction(
           ),
         );
       break;
+    case "http":
+    case "mcp":
+      exactKeys(["type", "name", "input"]);
+      if (!validName(action.name)) {
+        errors.push(
+          diagnostic(
+            provenance,
+            "invalid-action-name",
+            `${action.type.toUpperCase()} action name is invalid.`,
+            hookId,
+          ),
+        );
+      }
+      if (hasRawAuthority(action)) {
+        errors.push(
+          diagnostic(
+            provenance,
+            "raw-authority-forbidden",
+            "Raw headers and credentials are forbidden; named adapters own authority.",
+            hookId,
+          ),
+        );
+      }
+      break;
+    case "agent":
+      exactKeys(["type", "profile", "prompt"]);
+      if (!validName(action.profile)) {
+        errors.push(
+          diagnostic(
+            provenance,
+            "invalid-action-name",
+            "Agent Profile name is invalid.",
+            hookId,
+          ),
+        );
+      }
+      if (
+        typeof action.prompt !== "string" ||
+        action.prompt.length === 0 ||
+        Buffer.byteLength(action.prompt) > 32 * 1024
+      ) {
+        errors.push(
+          diagnostic(
+            provenance,
+            "invalid-agent",
+            "Agent prompt must be non-empty and at most 32 KiB.",
+            hookId,
+          ),
+        );
+      }
+      if (hasRawAuthority(action)) {
+        errors.push(
+          diagnostic(
+            provenance,
+            "raw-authority-forbidden",
+            "Raw credentials are forbidden; named Agent Profiles own authority.",
+            hookId,
+          ),
+        );
+      }
+      break;
     default:
       errors.push(
         diagnostic(
@@ -560,6 +669,9 @@ export function validateRegistration(
         "priority",
         "match",
         "action",
+        "actions",
+        "concurrency",
+        "deadlineMs",
         "timeoutMs",
         "outputCapBytes",
         "failurePolicy",
@@ -619,6 +731,31 @@ export function validateRegistration(
         id,
       ),
     );
+  if (
+    hook.concurrency !== undefined &&
+    (!Number.isSafeInteger(hook.concurrency) ||
+      Number(hook.concurrency) <= 0 ||
+      Number(hook.concurrency) > 32)
+  ) {
+    errors.push(
+      diagnostic(
+        provenance,
+        "invalid-concurrency",
+        "Hook concurrency must be from 1 through 32.",
+        id,
+      ),
+    );
+  }
+  if (hook.deadlineMs !== undefined && hook.deadlineMs !== hook.timeoutMs) {
+    errors.push(
+      diagnostic(
+        provenance,
+        "invalid-deadline",
+        "Hook deadlineMs must match its compiled timeoutMs.",
+        id,
+      ),
+    );
+  }
   if (
     !Number.isSafeInteger(hook.outputCapBytes) ||
     Number(hook.outputCapBytes) <= 0 ||
@@ -697,18 +834,31 @@ export function validateRegistration(
     eventSet.has(hook.event) &&
     (hook.failurePolicy === "open" || hook.failurePolicy === "closed")
   ) {
-    errors.push(
-      ...validateAction(
-        hook.action,
-        {
-          event: hook.event as HookEvent,
-          failurePolicy: hook.failurePolicy,
-          outputCapBytes: hook.outputCapBytes,
-        },
-        provenance,
-        id,
-      ),
-    );
+    const actions = Array.isArray(hook.actions) ? hook.actions : [hook.action];
+    if (actions.length === 0 || actions.length > 32) {
+      errors.push(
+        diagnostic(
+          provenance,
+          "invalid-actions",
+          "Hook requires 1 through 32 actions.",
+          id,
+        ),
+      );
+    }
+    for (const action of actions) {
+      errors.push(
+        ...validateAction(
+          action,
+          {
+            event: hook.event as HookEvent,
+            failurePolicy: hook.failurePolicy,
+            outputCapBytes: hook.outputCapBytes,
+          },
+          provenance,
+          id,
+        ),
+      );
+    }
   }
   const plain = measurePlainData(
     registration,

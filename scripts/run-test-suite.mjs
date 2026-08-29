@@ -21,6 +21,7 @@ const unit = [
   "extensions/platform/current-workspace-lease.test.ts",
   "extensions/platform/external-controls.test.ts",
   "extensions/platform/hooks.test.ts",
+  "extensions/platform/hooks-phase7.test.ts",
   "extensions/platform/language-config.test.ts",
   "extensions/platform/language-intelligence.test.ts",
   "extensions/platform/language-stdio.test.ts",

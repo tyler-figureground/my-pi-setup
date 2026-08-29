@@ -1,5 +1,5 @@
 import { validateConfigSources } from "./config.ts";
-import { hookEvents } from "./model.ts";
+import { declarativeHookEvents } from "./model.ts";
 import type {
   DispatchResult,
   HookConfigSource,
@@ -9,6 +9,7 @@ import type {
   HookEventEnvelope,
   HookInspection,
   HookLogEntry,
+  HookAction,
   HookRegistration,
   ReloadResult,
   TriggerEngine,
@@ -82,6 +83,24 @@ function compareRegistrations(left: HookRegistration, right: HookRegistration) {
   );
 }
 
+function sanitizeAction(action: HookAction): HookAction {
+  switch (action.type) {
+    case "notify":
+      return { ...action, message: redact(action.message) };
+    case "status":
+      return {
+        ...action,
+        text: action.text === null ? null : redact(action.text),
+      };
+    case "context":
+      return { ...action, content: redact(action.content) };
+    case "policy":
+      return { ...action, reason: redact(action.reason) };
+    case "command":
+      return action;
+  }
+}
+
 export function createTriggerEngine(
   options: TriggerEngineOptions = {},
 ): TriggerEngine {
@@ -107,8 +126,12 @@ export function createTriggerEngine(
   ) => {
     const safe = {
       ...entry,
-      ...(entry.hookId && containsSensitiveKey(entry.hookId)
-        ? { hookId: "[REDACTED]" }
+      ...(entry.hookId
+        ? {
+            hookId: containsSensitiveKey(entry.hookId)
+              ? "[REDACTED]"
+              : redact(entry.hookId),
+          }
         : {}),
       sequence: ++nextLog,
       message: redact(entry.message).slice(0, 2_000),
@@ -147,6 +170,21 @@ export function createTriggerEngine(
     const checked = validateRegistration(input, limits);
     if (!checked.registration) {
       return { accepted: false, diagnostics: checked.diagnostics };
+    }
+    if (checked.registration.hook.actions !== undefined) {
+      return {
+        accepted: false,
+        diagnostics: [
+          {
+            severity: "error",
+            code: "v2-requires-create-hooks",
+            source: checked.registration.provenance.source,
+            hookId: checked.registration.hook.id,
+            message:
+              "Version 2 hooks require createHooks; legacy TriggerEngine cannot execute action lists.",
+          },
+        ],
+      } as const;
     }
     if (
       runtimeHooks.has(checked.registration.hook.id) ||
@@ -192,7 +230,7 @@ export function createTriggerEngine(
       plainEnvelope &&
       isRecord(candidate) &&
       typeof candidate.event === "string" &&
-      hookEvents.some((name) => name === candidate.event)
+      declarativeHookEvents.some((name) => name === candidate.event)
         ? (candidate.event as HookEventEnvelope["event"])
         : undefined;
     const validTrace =
@@ -307,7 +345,7 @@ export function createTriggerEngine(
             effectId: `${dispatchId}:${hook.id}`,
             hookId: hook.id,
             event: hook.event,
-            ...structuredClone(hook.action),
+            ...sanitizeAction(structuredClone(hook.action)),
             timeoutMs: hook.timeoutMs,
             outputCapBytes: hook.outputCapBytes,
             failurePolicy: hook.failurePolicy,
@@ -355,8 +393,33 @@ export function createTriggerEngine(
 
   const validate = async (
     sources: readonly HookConfigSource[] = configSources,
-  ): Promise<ValidationResult> =>
-    validateConfigSources(sources, limits, new Set(runtimeHooks.keys()));
+  ): Promise<ValidationResult> => {
+    const result = await validateConfigSources(
+      sources,
+      limits,
+      new Set(runtimeHooks.keys()),
+    );
+    const incompatible = result.hooks.filter(
+      ({ hook }) => hook.actions !== undefined,
+    );
+    if (incompatible.length === 0) return result;
+    return {
+      ...result,
+      valid: false,
+      hooks: [],
+      diagnostics: [
+        ...result.diagnostics,
+        ...incompatible.map(({ hook, provenance }) => ({
+          severity: "error" as const,
+          code: "v2-requires-create-hooks",
+          source: provenance.source,
+          hookId: hook.id,
+          message:
+            "Version 2 hooks require createHooks; legacy TriggerEngine cannot execute action lists.",
+        })),
+      ],
+    };
+  };
 
   const reload = async (
     sources?: readonly HookConfigSource[],

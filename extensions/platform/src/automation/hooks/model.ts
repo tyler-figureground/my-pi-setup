@@ -1,4 +1,4 @@
-export const hookEvents = [
+export const nativeHookEvents = [
   "resources_discover",
   "session_start",
   "session_info_changed",
@@ -34,7 +34,37 @@ export const hookEvents = [
   "input",
 ] as const;
 
-export type HookEvent = (typeof hookEvents)[number];
+export const platformHookEvents = [
+  "worktree.created",
+  "worktree.claimed",
+  "worktree.released",
+  "worktree.integrated",
+  "subagent.started",
+  "subagent.completed",
+  "subagent.failed",
+  "subagent.cancelled",
+  "task.started",
+  "task.progress",
+  "task.completed",
+  "task.failed",
+  "task.cancelled",
+  "monitor.matched",
+  "monitor.state_changed",
+  "schedule.due",
+  "schedule.started",
+  "schedule.completed",
+  "schedule.failed",
+  "schedule.blocked",
+] as const;
+
+export const hookEvents = nativeHookEvents;
+
+export const declarativeHookEvents = [
+  ...nativeHookEvents,
+  ...platformHookEvents,
+] as const;
+
+export type HookEvent = (typeof declarativeHookEvents)[number];
 export type HookMode = "normal" | "plan";
 export type FailurePolicy = "open" | "closed";
 export type HookScope = "global" | "project" | "runtime";
@@ -89,8 +119,29 @@ export interface PolicyAction {
   readonly reason: string;
 }
 
+export interface HttpAction {
+  readonly type: "http";
+  readonly name: string;
+  readonly input?: PlainData;
+}
+
+export interface McpAction {
+  readonly type: "mcp";
+  readonly name: string;
+  readonly input?: PlainData;
+}
+
+export interface AgentAction {
+  readonly type: "agent";
+  readonly profile: string;
+  readonly prompt: string;
+}
+
 export type HookAction =
   CommandAction | NotifyAction | StatusAction | ContextAction | PolicyAction;
+
+export type DeclarativeHookAction =
+  HookAction | HttpAction | McpAction | AgentAction;
 
 export interface HookDefinition {
   readonly id: string;
@@ -98,6 +149,9 @@ export interface HookDefinition {
   readonly priority: number;
   readonly match: Readonly<Record<string, MatcherValue>>;
   readonly action: HookAction;
+  readonly actions?: readonly DeclarativeHookAction[];
+  readonly concurrency?: number;
+  readonly deadlineMs?: number;
   readonly timeoutMs: number;
   readonly outputCapBytes: number;
   readonly failurePolicy: FailurePolicy;
@@ -210,6 +264,12 @@ export interface ValidationResult {
     readonly path: string;
     readonly status: "valid" | "invalid" | "missing" | "untrusted-skipped";
     readonly hookCount: number;
+    readonly identity?: {
+      readonly canonicalPath: string;
+      readonly device: number;
+      readonly inode: number;
+      readonly digest: string;
+    };
   }[];
 }
 

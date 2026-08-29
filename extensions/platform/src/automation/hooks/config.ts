@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
@@ -28,7 +29,7 @@ function sourceDiagnostic(
   return {
     severity,
     code,
-    source: source.path,
+    source: redact(source.path),
     ...(hookId ? { hookId } : {}),
     message: redact(message),
   };
@@ -382,7 +383,7 @@ async function loadSource(source: HookConfigSource, limits: ConfigLimits) {
   );
   if (
     rootUnknown.length > 0 ||
-    value.version !== 1 ||
+    (value.version !== 1 && value.version !== 2) ||
     !Array.isArray(value.hooks)
   ) {
     return invalidSource(source, [
@@ -392,7 +393,7 @@ async function loadSource(source: HookConfigSource, limits: ConfigLimits) {
         "invalid-config-schema",
         rootUnknown.length > 0
           ? `Unsupported config fields: ${rootUnknown.join(", ")}.`
-          : "Hook config requires version: 1 and a hooks array.",
+          : "Hook config requires version: 1 or 2 and a hooks array.",
       ),
     ]);
   }
@@ -411,9 +412,49 @@ async function loadSource(source: HookConfigSource, limits: ConfigLimits) {
   const diagnostics: HookDiagnostic[] = [];
   canonicalSource = resolve(canonicalSource);
   for (const [hookIndex, hook] of value.hooks.entries()) {
+    let compiledHook = hook;
+    if (value.version === 1 && isRecord(hook) && "actions" in hook) {
+      diagnostics.push(
+        sourceDiagnostic(
+          source,
+          "error",
+          "invalid-config-schema",
+          "Version 1 hooks use action, not actions.",
+          typeof hook.id === "string" ? hook.id : undefined,
+        ),
+      );
+      continue;
+    }
+    if (value.version === 2) {
+      if (
+        !isRecord(hook) ||
+        "action" in hook ||
+        "timeoutMs" in hook ||
+        !Array.isArray(hook.actions) ||
+        hook.actions.length === 0 ||
+        hook.actions.length > 32 ||
+        !Number.isSafeInteger(hook.deadlineMs)
+      ) {
+        diagnostics.push(
+          sourceDiagnostic(
+            source,
+            "error",
+            "invalid-config-schema",
+            "Version 2 hooks require 1 through 32 actions and deadlineMs; action and timeoutMs are unsupported.",
+            isRecord(hook) && typeof hook.id === "string" ? hook.id : undefined,
+          ),
+        );
+        continue;
+      }
+      compiledHook = {
+        ...hook,
+        action: structuredClone(hook.actions[0]),
+        timeoutMs: hook.deadlineMs,
+      };
+    }
     const checked = validateRegistration(
       {
-        hook,
+        hook: compiledHook,
         provenance: {
           scope: source.scope,
           source: canonicalSource,
@@ -453,6 +494,12 @@ async function loadSource(source: HookConfigSource, limits: ConfigLimits) {
         path: source.path,
         status: "valid",
         hookCount: hooks.length,
+        identity: {
+          canonicalPath: canonicalSource,
+          device: fileDevice,
+          inode: fileInode,
+          digest: createHash("sha256").update(text).digest("hex"),
+        },
       },
     ],
   } satisfies Pick<ValidationResult, "hooks" | "diagnostics" | "sources">;

@@ -1,8 +1,22 @@
 export { createTriggerEngine } from "./engine.ts";
-export { hookEvents } from "./model.ts";
+export { createHooks } from "./phase7.ts";
+export {
+  declarativeHookEvents,
+  hookEvents,
+  nativeHookEvents,
+  platformHookEvents,
+} from "./model.ts";
+export { createHookProcessRunner } from "./process.ts";
 export type {
+  HookProcessRequest,
+  HookProcessResult,
+  HookProcessRunner,
+} from "./process.ts";
+export type {
+  AgentAction,
   CommandAction,
   ContextAction,
+  DeclarativeHookAction,
   DispatchResult,
   FailurePolicy,
   HookAction,
@@ -18,7 +32,9 @@ export type {
   HookProvenance,
   HookRegistration,
   HookScope,
+  HttpAction,
   MatcherValue,
+  McpAction,
   NotifyAction,
   PlainData,
   PolicyAction,
@@ -29,3 +45,22 @@ export type {
   TriggerEngineOptions,
   ValidationResult,
 } from "./model.ts";
+export type {
+  HookAdapterResult,
+  HookAgentAdapter,
+  HookConfigurationCommand,
+  HookConfigurationResult,
+  HookError,
+  HookHistoryEntry,
+  HookHttpAdapter,
+  HookInvocation,
+  HookMcpAdapter,
+  HookNamedAdapterRequest,
+  HookOutcome,
+  HookQuery,
+  HookResponse,
+  Hooks,
+  HooksOptions,
+  HookTrustAdapter,
+  HookUiAdapter,
+} from "./phase7.ts";
