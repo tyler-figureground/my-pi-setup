@@ -97,6 +97,7 @@ const integration = [
   "extensions/platform/review-test-evidence.test.ts",
   "extensions/platform/review.test.ts",
   "extensions/platform/rules.integration.test.ts",
+  "extensions/platform/scheduler.test.ts",
   "extensions/platform/session-broker.test.ts",
   "extensions/platform/state-store.integration.test.ts",
   "extensions/platform/trigger-persistence.integration.test.ts",
