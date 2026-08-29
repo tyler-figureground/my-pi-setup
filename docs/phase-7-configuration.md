@@ -9,10 +9,17 @@ Phase 7 adds Reactive Monitors, completed declarative Hooks, and Scheduled Promp
 ```json
 {
   "hooks": true,
+  "messaging": true,
   "monitors": true,
-  "scheduler": true
+  "scheduler": true,
+  "messagingSettings": {
+    "discoverableBy": "same-project",
+    "acceptsFrom": "same-project"
+  }
 }
 ```
+
+Reactive Monitors and Scheduled Prompts require the Session Broker supplied by `messaging: true`. If messaging is absent or cannot attach, composition fails closed and reports that Phase 7 automation did not activate. Hooks can run independently.
 
 Disabled defaults register no Phase 7 tools or commands and start no watcher, socket, poller, timer, database migration, Artifact path, child, or network request.
 
@@ -27,9 +34,7 @@ An enabled Monitor capability with no definitions remains resource-inert. An ena
     "maxRemote": 16,
     "batchWindowMs": 250,
     "pollMinimumMs": 5000,
-    "allowedWebSocketOrigins": [
-      "wss://events.example.com"
-    ],
+    "allowedWebSocketOrigins": ["wss://events.example.com"],
     "allowLoopback": false,
     "pollTargets": [
       {

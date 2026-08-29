@@ -128,6 +128,31 @@ test("Phase 7 settings merge trusted config while preserving host safety ceiling
   }
 });
 
+test("Phase 7 reports missing Session Broker dependency across non-TUI modes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-phase7-dependency-"));
+  try {
+    await writeFile(
+      path.join(root, "platform.json"),
+      JSON.stringify({ monitors: true, scheduler: true, messaging: false }),
+    );
+    const loaded = loadPlatformFlags({
+      cwd: root,
+      agentDir: root,
+      projectTrusted: false,
+    });
+    assert.equal(loaded.flags.monitors, true);
+    assert.equal(loaded.flags.scheduler, true);
+    assert.equal(loaded.flags.messaging, false);
+    assert.ok(
+      loaded.diagnostics.some(({ message }) =>
+        /require messaging/i.test(message),
+      ),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Phase 7 defaults open no remote monitor or scheduler capacity beyond fixed ceilings", () => {
   const loaded = loadPlatformFlags({
     cwd: process.cwd(),

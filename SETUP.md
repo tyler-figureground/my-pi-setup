@@ -114,7 +114,7 @@ Configuration locations:
 - dedicated browser profiles: platform-managed project/profile-specific directories under `%LOCALAPPDATA%/pi-agent/browser-profiles/` on Windows
 - OAuth and browser credentials: OS credential store, referenced by opaque ids in state/config
 
-Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, and Schedules start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Scheduled Prompts require a named profile with role `scheduled` and an active Session Broker.
+Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, and Schedules start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Reactive Monitors and Scheduled Prompts require an active Session Broker. Scheduled Prompts also require a named profile with role `scheduled`.
 
 See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), and [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md).
 

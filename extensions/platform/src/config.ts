@@ -372,6 +372,13 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       });
     }
   }
+  if ((flags.monitors || flags.scheduler) && !flags.messaging) {
+    diagnostics.push({
+      path: "platform.json:messaging",
+      message:
+        "Reactive Monitors and Scheduler require messaging for durable result delivery.",
+    });
+  }
   return {
     flags,
     plan,

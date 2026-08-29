@@ -50,7 +50,9 @@ const MAX_SETTLED_HISTORY = MAX_TRACKED * 4;
 export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
 /** Private full-log spills are bounded so a firehose cannot fill the temp disk. */
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
-const STOP_TIMEOUT_MS = 5_000;
+// Windows identity capture plus validated tree termination may spend up to
+// 15 seconds in PowerShell. The outer scope must never interrupt first.
+const STOP_TIMEOUT_MS = 20_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
 /** After termination, how long to wait for the natural close→flush→settle
@@ -58,8 +60,8 @@ const FORCE_KILL_AFTER_MS = 2_000;
 const SETTLE_GRACE_MS = 1_000;
 /** Bound on waiting for spill WriteStreams to flush before settling; a hung
  * filesystem must not leave an exited entry "running" (and kill() waiting).
- * Terminate (≤2.5s) + settle grace (1s) + flush (1.5s) stays inside the 5s
- * scope-close bound, so teardown remains bounded end to end. */
+ * POSIX terminate (≤2.5s) + settle grace (1s) + flush (1.5s) remains short;
+ * Windows uses the larger identity-validation bound above. */
 const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const MAX_OBSERVATION_HISTORY = 128;
