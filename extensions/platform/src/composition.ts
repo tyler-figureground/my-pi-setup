@@ -1168,7 +1168,6 @@ export function createPlatformExtension(
             actor: role,
             policy,
             mode: platformMode,
-            triggers,
             adapters: {
               ...(configuration.hookActions.http.length > 0
                 ? {
@@ -1212,7 +1211,7 @@ export function createPlatformExtension(
           });
           const hooks = hooksCapability;
           current.hooks = hooks;
-          await hooks.start({ project, projectTrusted, ctx }, event);
+          await hooks.start({ project, projectTrusted, ctx, triggers }, event);
           publishPlatformEvent = (envelope) => {
             current.hookEventTail = (current.hookEventTail ?? Promise.resolve())
               .then(async () => {

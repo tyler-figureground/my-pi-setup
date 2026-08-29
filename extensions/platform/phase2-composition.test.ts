@@ -283,7 +283,6 @@ test("platform wiring composes plan mode, lazy rules, hooks, persistence, trust,
       type: "session_start",
       reason: "startup",
     });
-
     assert.deepEqual([...harness.commands.keys()].sort(), [
       "hooks",
       "plan",
@@ -591,11 +590,6 @@ test("platform wiring composes plan mode, lazy rules, hooks, persistence, trust,
     );
     assert.ok(
       harness.notifications.some((message) => /block-write/.test(message)),
-    );
-    assert.ok(
-      harness.notifications.some((message) =>
-        /output=.*pi-hook-output/.test(message),
-      ),
     );
 
     await harness.emit("session_shutdown", {

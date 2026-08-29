@@ -58,6 +58,7 @@ interface HooksSessionContext {
   readonly project: ResolvedProjectIdentity;
   readonly projectTrusted: boolean;
   readonly ctx: ExtensionContext;
+  readonly triggers?: TriggerEngineRuntime;
 }
 
 interface PayloadBudget {
@@ -74,6 +75,7 @@ interface ActiveHooksRuntime {
   readonly project: ResolvedProjectIdentity;
   readonly statusKeys: Set<string>;
   readonly suspensionNotices: Set<string>;
+  triggerRuntime?: TriggerEngineRuntime;
   triggerPublisher?: TriggerSourcePublisher;
   triggerOwnerId?: string;
   triggerGeneration: number;
@@ -725,6 +727,7 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
         ...(options.adapters?.agent ? { agent: options.adapters.agent } : {}),
       },
     });
+    const triggerRuntime = input.triggers ?? options.triggers;
     runtime = {
       hooks,
       process: processRunner,
@@ -732,17 +735,18 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       project: input.project,
       statusKeys: new Set(),
       suspensionNotices: new Set(),
+      ...(triggerRuntime ? { triggerRuntime } : {}),
       triggerGeneration: 0,
       acceptingEffects: true,
     };
     active = runtime;
-    if (options.triggers) {
+    if (triggerRuntime) {
       const ownerSuffix = createHash("sha256")
         .update(input.project.projectId)
         .digest("hex")
         .slice(0, 16);
       runtime.triggerOwnerId = `hooks-${ownerSuffix}`;
-      const bound = options.triggers.bindSource({
+      const bound = triggerRuntime.bindSource({
         kind: "pi-hooks",
         id: runtime.triggerOwnerId,
         projectId: input.project.projectId,
@@ -767,7 +771,7 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       }
       runtime.triggerPublisher = bound.value;
       runtime.triggerGeneration += 1;
-      const reconciled = await options.triggers.engine.reconcile({
+      const reconciled = await triggerRuntime.engine.reconcile({
         ownerId: runtime.triggerOwnerId,
         generation: runtime.triggerGeneration,
         bindings: [
@@ -885,8 +889,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       runtime.acceptingEffects = false;
       if (active === runtime) active = undefined;
       const triggerStop =
-        options.triggers && runtime.triggerOwnerId
-          ? options.triggers.engine.reconcile({
+        runtime.triggerRuntime && runtime.triggerOwnerId
+          ? runtime.triggerRuntime.engine.reconcile({
               ownerId: runtime.triggerOwnerId,
               generation: ++runtime.triggerGeneration,
               bindings: [],

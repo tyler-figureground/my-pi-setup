@@ -1099,6 +1099,13 @@ export function createHooks(options: HooksOptions): Hooks {
           } else if (action.type === "policy") {
             if (action.decision === "deny") {
               block ??= { reason: redact(action.reason) };
+              appendHistory({
+                type: "blocked",
+                hookId: registration.hook.id,
+                action: action.type,
+                outcome: "policy-denied",
+                message: action.reason,
+              });
               break;
             } else if (action.decision === "require-user-confirmation") {
               if (invocation.unattended || !options.adapters?.ui) {
