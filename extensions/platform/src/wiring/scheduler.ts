@@ -572,7 +572,12 @@ export function createSchedulerCapability(options: SchedulerCapabilityOptions) {
     return { schedule, profile, promptDigest, promptBytes };
   };
 
-  const mutate = async (command: ScheduleCommand, ctx: MutationContext) => {
+  const mutate = async (
+    command: ScheduleCommand,
+    ctx: MutationContext,
+    signal?: AbortSignal,
+  ) => {
+    signal?.throwIfAborted();
     if ((ctx.mode !== "tui" && ctx.mode !== "rpc") || !ctx.hasUI)
       throw new Error(
         "Schedule mutations require direct TUI or RPC confirmation; JSON and print modes are not accepted.",
@@ -580,6 +585,7 @@ export function createSchedulerCapability(options: SchedulerCapabilityOptions) {
     authorize("orchestration");
     const candidate = current();
     const before = await inspectCurrent(candidate, command.id);
+    signal?.throwIfAborted();
     if (command.type === "create" && before)
       throw new Error("Schedule already exists.");
     if (
@@ -601,10 +607,12 @@ export function createSchedulerCapability(options: SchedulerCapabilityOptions) {
       ].join("\n"),
     );
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     if (!confirmed) return undefined;
     authorize("orchestration");
     ensureCurrent(candidate);
     const immediatelyBefore = await inspectCurrent(candidate, command.id);
+    signal?.throwIfAborted();
     if (command.type === "create" && immediatelyBefore)
       throw new Error(
         "Schedule appeared after confirmation; approval is stale.",
@@ -631,10 +639,12 @@ export function createSchedulerCapability(options: SchedulerCapabilityOptions) {
     }
     authorize("orchestration");
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     const changing = candidate.runtime.scheduler.change(command);
     coreChanges.add(changing);
     const changed = await changing.finally(() => coreChanges.delete(changing));
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     if (!changed.ok) throw new Error(sanitize(changed.error.message));
     return changed.value;
   };
@@ -810,9 +820,9 @@ export function createSchedulerCapability(options: SchedulerCapabilityOptions) {
       },
       { additionalProperties: false },
     ),
-    async execute(toolCallId, params, _signal, _update, ctx) {
+    async execute(toolCallId, params, signal, _update, ctx) {
       const command = decodeToolCommand(params, `pi-tool:${toolCallId}`);
-      const changed = await track(mutate(command, ctx));
+      const changed = await track(mutate(command, ctx, signal));
       if (!changed) throw new Error("Schedule mutation denied by user.");
       const schedule = safeSchedule(changed.schedule);
       const text = [

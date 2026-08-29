@@ -766,7 +766,12 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
     };
   };
 
-  const mutate = async (command: MonitorCommand, ctx: MutationContext) => {
+  const mutate = async (
+    command: MonitorCommand,
+    ctx: MutationContext,
+    signal?: AbortSignal,
+  ) => {
+    signal?.throwIfAborted();
     if ((ctx.mode !== "tui" && ctx.mode !== "rpc") || !ctx.hasUI)
       throw new Error(
         "Monitor mutations require direct TUI or RPC confirmation; JSON and print modes are not accepted.",
@@ -774,6 +779,7 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
     authorize("orchestration");
     const candidate = current();
     const before = await inspectCurrent(candidate, command.id);
+    signal?.throwIfAborted();
     if (command.type === "create" && before)
       throw new Error("Monitor already exists.");
     if (
@@ -800,10 +806,12 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
       ].join("\n"),
     );
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     if (!confirmed) return undefined;
     authorize("orchestration");
     ensureCurrent(candidate);
     const immediatelyBefore = await inspectCurrent(candidate, command.id);
+    signal?.throwIfAborted();
     if (command.type === "create" && immediatelyBefore)
       throw new Error(
         "Monitor appeared after confirmation; approval is stale.",
@@ -830,10 +838,12 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
     }
     authorize("orchestration");
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     const changing = candidate.runtime.registry.change(command);
     coreChanges.add(changing);
     const changed = await changing.finally(() => coreChanges.delete(changing));
     ensureCurrent(candidate);
+    signal?.throwIfAborted();
     if (!changed.ok) throw new Error(sanitize(changed.error.message));
     return changed.value;
   };
@@ -1062,13 +1072,13 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
       },
       { additionalProperties: false },
     ),
-    async execute(toolCallId, params, _signal, _update, ctx) {
+    async execute(toolCallId, params, signal, _update, ctx) {
       const command = decodeToolCommand(
         params,
         `pi-tool:${toolCallId}`,
         resolveDynamic(options.sessionId),
       );
-      const changed = await mutate(command, ctx);
+      const changed = await mutate(command, ctx, signal);
       if (!changed) throw new Error("Monitor mutation denied by user.");
       return {
         content: [
