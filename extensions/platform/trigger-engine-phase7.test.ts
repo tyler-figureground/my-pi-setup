@@ -71,6 +71,68 @@ class FakeClock {
   }
 }
 
+test("returns bounded plain consumer output through the publish seam", async () => {
+  const runtime = createTriggerEngine({ hostId: "host-output" });
+  const source = bindFixture(runtime);
+  await runtime.engine.reconcile({
+    ownerId: "hooks",
+    generation: 1,
+    bindings: [
+      {
+        id: "gate",
+        eventTypes: ["pi.tool_call"],
+        deliver: async () => ({
+          context: ["trusted context"],
+          block: { reason: "fixture" },
+        }),
+      },
+    ],
+  });
+
+  const published = await source.publish({
+    type: "pi.tool_call",
+    payload: { toolName: "read" },
+  });
+  assert.equal(published.ok, true);
+  if (published.ok) {
+    assert.deepEqual(published.value.deliveries[0]?.output, {
+      context: ["trusted context"],
+      block: { reason: "fixture" },
+    });
+  }
+
+  let getterCalls = 0;
+  await runtime.engine.reconcile({
+    ownerId: "hooks",
+    generation: 2,
+    bindings: [
+      {
+        id: "invalid-output",
+        eventTypes: ["pi.tool_call"],
+        deliver: async () =>
+          Object.defineProperty({}, "value", {
+            enumerable: true,
+            get() {
+              getterCalls++;
+              return "never";
+            },
+          }),
+      },
+    ],
+  });
+  const invalid = await source.publish({
+    type: "pi.tool_call",
+    payload: {},
+  });
+  assert.equal(invalid.ok, true);
+  if (invalid.ok) {
+    assert.equal(invalid.value.deliveries[0]?.status, "failed");
+    assert.equal(invalid.value.deliveries[0]?.output, undefined);
+  }
+  assert.equal(getterCalls, 0);
+  await runtime.close();
+});
+
 test("admits events only through opaque host-bound source publishers", async () => {
   const delivered: TriggerDelivery[] = [];
   const runtime = createTriggerEngine({

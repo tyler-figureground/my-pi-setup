@@ -79,7 +79,9 @@ export interface TriggerBinding {
   };
   readonly coalesceBy?: string;
   readonly deadlineMs?: number;
-  readonly deliver: (delivery: TriggerDelivery) => void | Promise<void>;
+  readonly deliver: (
+    delivery: TriggerDelivery,
+  ) => JsonObject | void | Promise<JsonObject | void>;
 }
 
 export interface TriggerOwnerReconciliation {
@@ -130,6 +132,7 @@ export interface TriggerDeliveryResult {
     | "acknowledged"
     | "ambiguous";
   readonly replacementEventId?: string;
+  readonly output?: JsonObject;
 }
 
 export interface TriggerPublishResult {

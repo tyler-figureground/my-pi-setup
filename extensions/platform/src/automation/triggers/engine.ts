@@ -52,7 +52,10 @@ interface BindingState {
 
 interface RunningDelivery {
   readonly controller: AbortController;
-  finish(status: TriggerDeliveryResult["status"]): void;
+  finish(
+    status: TriggerDeliveryResult["status"],
+    output?: import("../../core/result.ts").JsonObject,
+  ): void;
 }
 
 interface OwnerState {
@@ -343,6 +346,28 @@ function deepFreeze<T>(value: T): T {
     if ("value" in descriptor) deepFreeze(descriptor.value);
   }
   return Object.freeze(value);
+}
+
+function snapshotConsumerOutput(value: unknown) {
+  if (value === undefined) return { valid: true as const };
+  if (
+    !isPlainData(value, { maxDepth: 16, maxNodes: 2_048 }) ||
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return { valid: false as const };
+  }
+  const encoded = JSON.stringify(value);
+  if (Buffer.byteLength(encoded) > 64 * 1024) {
+    return { valid: false as const };
+  }
+  return {
+    valid: true as const,
+    output: deepFreeze(
+      structuredClone(value),
+    ) as import("../../core/result.ts").JsonObject,
+  };
 }
 
 function boundedOption(
@@ -934,7 +959,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
         let deadline: unknown;
         const running: RunningDelivery = {
           controller,
-          finish(status) {
+          finish(status, output) {
             if (finished) return;
             finished = true;
             if (deadline !== undefined) clock.clearTimeout(deadline);
@@ -957,7 +982,13 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
                     counters.ambiguous++;
                   }
                 }
-                const result = { ...state.identity, status: settledStatus };
+                const result = {
+                  ...state.identity,
+                  status: settledStatus,
+                  ...(settledStatus === "delivered" && output
+                    ? { output: structuredClone(output) }
+                    : {}),
+                };
                 for (const resolve of item.resolves) resolve(result);
               }
             })();
@@ -1056,7 +1087,11 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
             });
           })
           .then(
-            () => running.finish("delivered"),
+            (value) => {
+              const output = snapshotConsumerOutput(value);
+              if (!output.valid) running.finish("failed");
+              else running.finish("delivered", output.output);
+            },
             () => running.finish("failed"),
           );
         track(callbackTasks, callbackTask);
