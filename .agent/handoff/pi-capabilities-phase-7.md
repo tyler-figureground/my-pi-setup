@@ -25,10 +25,10 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 - [x] Survey existing hooks, lifecycle, policy, mailbox, background-terminal, profiles, projects, persistence, and child-session seams.
 - [x] Compare three radically different interface designs; user confirmed external seams before tests.
 - [ ] Record Phase 7 architecture/domain language and package/adopt-wrap-build decisions. Architecture, glossary, ADR 0009, and package research recorded; dependency trials/ADR remain.
-- [ ] Build shared TriggerEngine test-first: provenance, queue bounds, coalescing, recursion suppression, concurrency, deadlines, persistence, fake clock/watchers.
-- [ ] Build F15 MonitorRegistry test-first: terminal log subscriptions, filesystem, bounded poll, policy-safe WebSocket, batching, pause/resume/inspect/stop, explicit durability.
-- [ ] Complete F08 test-first: remaining host-supported events, policy-gated actions, history/errors, trust/config revalidation, recursion limits, migration guide.
-- [ ] Build F16 Scheduler test-first: one-shot/interval/cron/timezone/DST/missed-run semantics, fenced multi-process claims, bounded child execution, mailbox/artifact delivery, commands.
+- [ ] Build shared TriggerEngine test-first: core provenance, queue bounds, coalescing, recursion, concurrency, deadlines, lifecycle, fake clock, and adversarial hardening complete (37 tests); production StateStore persistence adapter running.
+- [ ] Build F15 MonitorRegistry test-first: ordered terminal observation and identity-safe Windows cleanup complete; MonitorRegistry/filesystem/poll/WebSocket implementation running.
+- [ ] Complete F08 test-first: hardened Hooks core, v1/v2 config, native/platform events, policy-gated named actions, history, trust/config revalidation, concurrency/deadlines, and close complete (35 focused tests); production wiring running.
+- [ ] Build F16 Scheduler test-first: strict calendar/DST semantics, scheduled child execution seam/adapter, and initial 27-test core complete; adversarial scheduler blockers under regression-driven hardening.
 - [ ] Run repeated independent adversarial review; fix every material finding with regression coverage.
 - [ ] Run isolated full verification, performance benchmark, native multi-process tests, long-duration no-leak/no-duplicate soak, and live backend acceptance.
 - [ ] Record acceptance evidence in tracker/docs; publication preflight; publish branch; fast-forward and verify live `main` while preserving user state.
@@ -36,7 +36,7 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 
 ## Current status
 
-Setup and baseline complete. User confirmed minimal/caller hybrid seams: TriggerEngine (`reconcile`, `publish`, `inspect`), MonitorRegistry (`change`, `inspect`), Hooks (`configure`, `handle`, `inspect`), Scheduler (`change`, `inspect`), plus production/fake internal adapters. Four independent TDD foundation slices are running.
+Setup, design, and baseline complete. User confirmed minimal/caller hybrid seams. Releasable Lifecycle handles, schedule calendar, terminal observation, scheduled runner, Phase 7 config, TriggerEngine core, and Hooks core are green. Trigger SQLite, MonitorRegistry, Hooks wiring, and Scheduler hardening are active.
 
 ### Dependency research run
 
