@@ -60,6 +60,20 @@ Terminal Monitors are session-scoped. File, named poll, and WebSocket Monitors m
 
 Poll definitions select one `pollTargets[].id`. They cannot provide arbitrary URLs, shell commands, headers, or raw credentials. Trusted-project config cannot add or alter poll targets.
 
+## Monitor command grammar
+
+```text
+/monitor create terminal <id> <terminal-id> [line|chunk]
+/monitor create file <id> <session|durable> <recursive|flat> <root>
+/monitor create poll <id> <session|durable> <adapter> <interval-ms> [credential-ref]
+/monitor create websocket <id> <session|durable> <ws-url> [credential-ref]
+/monitor replace <source-kind> <id> <expected-revision> <source arguments...>
+/monitor pause|resume|stop|delete <id> <expected-revision>
+/monitors [id <id>] [active|paused|stopped|blocked] [after <id>] [limit <1-25>]
+```
+
+Every mutation confirms exact ID, revision, scope, source kind, and source/matcher digest. Inspection never displays raw matcher values, poll input, credentials, or authority fields.
+
 ## Scheduler settings
 
 ```json

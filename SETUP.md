@@ -37,7 +37,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables plan mode, lazy rules, hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, and explicit persistent Memory:
+`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, and Scheduled Prompts:
 
 ```json
 {
@@ -52,6 +52,8 @@ When changing Effect, update every extension manifest in the same change, regene
   "browser": true,
   "messaging": true,
   "memory": true,
+  "monitors": true,
+  "scheduler": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -67,6 +69,25 @@ When changing Effect, update every extension manifest in the same change, regene
     "defaultScope": "project",
     "automaticRecall": false,
     "automaticExtraction": false
+  },
+  "monitorSettings": {
+    "maxActive": 128,
+    "maxRemote": 16,
+    "batchWindowMs": 250,
+    "pollMinimumMs": 5000,
+    "allowedWebSocketOrigins": [],
+    "allowLoopback": false,
+    "pollTargets": []
+  },
+  "schedulerSettings": {
+    "maxSchedules": 1000,
+    "maxConcurrent": 4,
+    "defaultTimeoutMs": 900000,
+    "leaseTtlMs": 60000
+  },
+  "hookActions": {
+    "http": [],
+    "mcp": []
   },
   "plan": {
     "defaultScope": "user",
@@ -86,16 +107,16 @@ Configuration locations:
 - trusted-project plans: `<project>/.pi/plans/`
 - user profiles: `~/.pi/agent/agents/*.yaml`
 - trusted-project profiles: `<project>/.pi/agents/*.yaml`
-- guarded workspace and mailbox state: `~/.pi/agent/state/platform.sqlite`
+- guarded workspace, mailbox, Trigger, Monitor, and Schedule state: `~/.pi/agent/state/platform.sqlite`
 - persistent Memory state and FTS index: `~/.pi/agent/state/memory.sqlite`
 - guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
-- language/review/MCP/browser/message/export artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
+- language/review/MCP/browser/message/Monitor/Schedule/export artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
 - dedicated browser profiles: platform-managed project/profile-specific directories under `%LOCALAPPDATA%/pi-agent/browser-profiles/` on Windows
 - OAuth and browser credentials: OS credential store, referenced by opaque ids in state/config
 
-Empty MCP servers and browser origins start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser.
+Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, and Schedules start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Scheduled Prompts require a named profile with role `scheduled` and an active Session Broker.
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), and [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md).
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), and [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md).
 
 ## Firecrawl
 

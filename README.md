@@ -21,6 +21,9 @@ This setup is fairly opinionated, it:
 - verifies live web interfaces in a dedicated, allowlisted browser profile with artifact evidence
 - exchanges ordered, project-bound messages between opted-in Pi sessions with explicit provenance
 - stores scoped, cited, searchable Memory as untrusted data with contradiction and deletion controls
+- batches terminal, file, named poll, and allowlisted WebSocket events through lifecycle-owned Reactive Monitors
+- runs fenced one-shot, interval, and timezone-aware Scheduled Prompts through exact named Agent Profiles
+- routes complete declarative Hooks through one bounded TriggerEngine with visible history and trust revalidation
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 
