@@ -20,6 +20,7 @@ import {
   type CapabilityPolicy,
 } from "./src/core/policy/index.ts";
 import { createHooksCapability } from "./src/wiring/hooks.ts";
+import { createTriggerEngine } from "./src/automation/triggers/index.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void>;
@@ -58,6 +59,7 @@ function createContext(cwd: string, notifications: string[], trusted = true) {
     mode: "tui",
     hasUI: true,
     isProjectTrusted: () => trusted,
+    sessionManager: { getSessionId: () => "hooks-test-session" },
     ui: {
       notify(message: string) {
         notifications.push(message);
@@ -94,6 +96,70 @@ const allowAllPolicy: CapabilityPolicy = {
     };
   },
 };
+
+test("production Hooks cross the shared TriggerEngine publish seam", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: trigger-context
+    event: before_agent_start
+    priority: 0
+    match: {}
+    actions: [{ type: context, content: through-trigger }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: open
+`,
+      "utf8",
+    );
+    const trigger = createTriggerEngine({ hostId: "hooks-host" });
+    const harness = createPiHarness();
+    const ctx = createContext(directory, []);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-trigger-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    await capability.start(
+      { project, projectTrusted: true, ctx },
+      { type: "session_start", reason: "startup" },
+    );
+    const result = await harness.emit(
+      "before_agent_start",
+      { type: "before_agent_start", systemPrompt: "base", prompt: "go" },
+      ctx,
+    );
+    assert.deepEqual(result[0], {
+      systemPrompt: "base\n\n## Declarative hook context\nthrough-trigger",
+    });
+    assert.ok(
+      trigger.engine
+        .inspect()
+        .history.some(({ type }) => type === "hook:before_agent_start"),
+    );
+    await capability.stop("quit", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    assert.equal(trigger.engine.inspect().bindings.length, 0);
+    await trigger.close();
+  });
+});
 
 test("production wiring maps every native event plus typed platform and update outcomes", async () => {
   await withFixture(async (directory) => {

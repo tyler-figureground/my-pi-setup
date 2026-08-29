@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { isProxy } from "node:util/types";
 import {
@@ -10,6 +11,7 @@ import {
 import {
   createHookProcessRunner,
   createHooks,
+  declarativeHookEvents,
   nativeHookEvents,
   platformHookEvents,
   type HookAgentAdapter,
@@ -25,6 +27,10 @@ import {
 } from "../automation/hooks/index.ts";
 import type { ActorRole, CapabilityPolicy } from "../core/policy/index.ts";
 import type { ResolvedProjectIdentity } from "../core/projects/index.ts";
+import type {
+  TriggerEngineRuntime,
+  TriggerSourcePublisher,
+} from "../automation/triggers/model.ts";
 
 export type PlatformHookEvent = (typeof platformHookEvents)[number];
 export type PlatformHookPayload = Readonly<Record<string, unknown>>;
@@ -40,6 +46,7 @@ export interface HooksCapabilityOptions {
   readonly actor: Dynamic<ActorRole>;
   readonly policy: Dynamic<CapabilityPolicy>;
   readonly mode: () => HookMode;
+  readonly triggers?: TriggerEngineRuntime;
   readonly adapters?: {
     readonly http?: HookHttpAdapter;
     readonly mcp?: HookMcpAdapter;
@@ -67,6 +74,9 @@ interface ActiveHooksRuntime {
   readonly project: ResolvedProjectIdentity;
   readonly statusKeys: Set<string>;
   readonly suspensionNotices: Set<string>;
+  triggerPublisher?: TriggerSourcePublisher;
+  triggerOwnerId?: string;
+  triggerGeneration: number;
   acceptingEffects: boolean;
   stopPromise?: Promise<{
     readonly status: "stopped";
@@ -270,6 +280,42 @@ function boundedNotice(message: string) {
   return message.slice(0, 50 * 1024);
 }
 
+function decodeHookResponse(value: unknown): HookResponse | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (
+    Object.keys(descriptors).some(
+      (key) => key !== "context" && key !== "block",
+    ) ||
+    Object.values(descriptors).some((descriptor) => !("value" in descriptor))
+  )
+    return;
+  const context = descriptors.context?.value;
+  if (
+    !Array.isArray(context) ||
+    context.length > 64 ||
+    context.some((entry) => typeof entry !== "string")
+  )
+    return;
+  const block = descriptors.block?.value;
+  if (block !== undefined) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return;
+    const blockFields = Object.getOwnPropertyDescriptors(block);
+    if (
+      Object.keys(blockFields).length !== 1 ||
+      !("value" in (blockFields.reason ?? {})) ||
+      typeof blockFields.reason?.value !== "string"
+    )
+      return;
+  }
+  return {
+    context: [...context],
+    ...(block === undefined
+      ? {}
+      : { block: { reason: block.reason as string } }),
+  };
+}
+
 export function createHooksCapability(options: HooksCapabilityOptions) {
   const { pi, agentDir } = options;
   const eventContexts = new AsyncLocalStorage<ExtensionContext>();
@@ -339,16 +385,43 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
         },
       };
     }
+    const invocation = {
+      event: eventName,
+      payload: converted.payload,
+      cwd: ctx.cwd,
+      unattended,
+    };
+    if (runtime.triggerPublisher) {
+      const published = await eventContexts.run(ctx, () =>
+        runtime.triggerPublisher!.publish({
+          type: `hook:${eventName}`,
+          payload: invocation,
+        }),
+      );
+      if (active !== runtime || !runtime.acceptingEffects)
+        return { context: [] };
+      reportSuspensions(runtime);
+      const response = published.ok
+        ? published.value.deliveries
+            .map(({ output }) => decodeHookResponse(output))
+            .find((value) => value !== undefined)
+        : undefined;
+      if (response) return response;
+      if (
+        !published.ok ||
+        published.value.deliveries.some(({ status }) => status !== "delivered")
+      ) {
+        const reason =
+          "Hook dispatch failed within TriggerEngine safety bounds.";
+        if (supportsHookUi(ctx)) ctx.ui.notify(reason, "error");
+        return gateEvents.has(eventName as NativeHookEventName)
+          ? { context: [], block: { reason } }
+          : { context: [] };
+      }
+      return { context: [] };
+    }
     const result = await eventContexts.run(ctx, () =>
-      runtime.hooks.handle(
-        {
-          event: eventName,
-          payload: converted.payload,
-          cwd: ctx.cwd,
-          unattended,
-        },
-        ctx.signal,
-      ),
+      runtime.hooks.handle(invocation, ctx.signal),
     );
     if (active !== runtime || !runtime.acceptingEffects) return { context: [] };
     reportSuspensions(runtime);
@@ -659,9 +732,111 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       project: input.project,
       statusKeys: new Set(),
       suspensionNotices: new Set(),
+      triggerGeneration: 0,
       acceptingEffects: true,
     };
     active = runtime;
+    if (options.triggers) {
+      const ownerSuffix = createHash("sha256")
+        .update(input.project.projectId)
+        .digest("hex")
+        .slice(0, 16);
+      runtime.triggerOwnerId = `hooks-${ownerSuffix}`;
+      const bound = options.triggers.bindSource({
+        kind: "pi-hooks",
+        id: runtime.triggerOwnerId,
+        projectId: input.project.projectId,
+        sessionId: input.ctx.sessionManager.getSessionId(),
+        trust: "managed",
+      });
+      if (!bound.ok) {
+        runtime.acceptingEffects = false;
+        active = undefined;
+        await Promise.allSettled([
+          hooks.close(),
+          processRunner.shutdown(2_000),
+        ]);
+        return {
+          ok: false as const,
+          error: {
+            code: "INVALID_CONFIG" as const,
+            message: "TriggerEngine source binding failed for Hooks.",
+            retryable: bound.error.retryable,
+          },
+        };
+      }
+      runtime.triggerPublisher = bound.value;
+      runtime.triggerGeneration += 1;
+      const reconciled = await options.triggers.engine.reconcile({
+        ownerId: runtime.triggerOwnerId,
+        generation: runtime.triggerGeneration,
+        bindings: [
+          {
+            id: "dispatch",
+            eventTypes: declarativeHookEvents.map((event) => `hook:${event}`),
+            concurrency: 8,
+            deadlineMs: 30_000,
+            async deliver(delivery) {
+              const event = delivery.events[0];
+              const invocation = event?.payload as
+                | {
+                    event?: unknown;
+                    payload?: unknown;
+                    cwd?: unknown;
+                    unattended?: unknown;
+                  }
+                | undefined;
+              if (
+                !invocation ||
+                typeof invocation.event !== "string" ||
+                !declarativeHookEvents.some(
+                  (candidate) => candidate === invocation.event,
+                ) ||
+                !invocation.payload ||
+                typeof invocation.payload !== "object" ||
+                Array.isArray(invocation.payload) ||
+                typeof invocation.cwd !== "string" ||
+                typeof invocation.unattended !== "boolean"
+              ) {
+                throw new Error(
+                  "TriggerEngine supplied an invalid Hook event.",
+                );
+              }
+              const result = await hooks.handle(
+                {
+                  event:
+                    invocation.event as (typeof declarativeHookEvents)[number],
+                  payload: invocation.payload as Readonly<
+                    Record<string, PlainData>
+                  >,
+                  cwd: invocation.cwd,
+                  unattended: invocation.unattended,
+                },
+                delivery.signal,
+              );
+              if (!result.ok) throw new Error("Hook execution failed.");
+              return result.value as unknown as import("../core/result.ts").JsonObject;
+            },
+          },
+        ],
+      });
+      if (!reconciled.ok) {
+        runtime.acceptingEffects = false;
+        active = undefined;
+        await Promise.allSettled([
+          hooks.close(),
+          processRunner.shutdown(2_000),
+        ]);
+        return {
+          ok: false as const,
+          error: {
+            code: "INVALID_CONFIG" as const,
+            message: "TriggerEngine reconciliation failed for Hooks.",
+            retryable: reconciled.error.retryable,
+          },
+        };
+      }
+    }
     const configured = await eventContexts.run(input.ctx, () =>
       hooks.configure({
         type: "apply",
@@ -709,7 +884,18 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       }
       runtime.acceptingEffects = false;
       if (active === runtime) active = undefined;
+      const triggerStop =
+        options.triggers && runtime.triggerOwnerId
+          ? options.triggers.engine.reconcile({
+              ownerId: runtime.triggerOwnerId,
+              generation: ++runtime.triggerGeneration,
+              bindings: [],
+            })
+          : Promise.resolve({ ok: true as const, value: undefined });
       const settled = await Promise.allSettled([
+        triggerStop.then((result) => {
+          if (!result.ok) throw new Error("Hooks TriggerEngine stop failed.");
+        }),
         runtime.hooks.close(),
         runtime.process.shutdown(2_000),
       ]);
