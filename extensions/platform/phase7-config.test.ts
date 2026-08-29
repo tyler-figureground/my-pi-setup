@@ -37,6 +37,15 @@ test("Phase 7 settings merge trusted config while preserving host safety ceiling
         pollMinimumMs: 10_000,
         allowedWebSocketOrigins: ["wss://events.example.test"],
         allowLoopback: false,
+        pollTargets: [
+          {
+            id: "ci-status",
+            endpoint: "https://ci.example.test/status",
+            allowedOrigins: ["https://ci.example.test"],
+            allowLoopback: false,
+            maxResponseBytes: 65536,
+          },
+        ],
       },
       schedulerSettings: {
         maxSchedules: 500,
@@ -75,6 +84,15 @@ test("Phase 7 settings merge trusted config while preserving host safety ceiling
       pollMinimumMs: 10_000,
       allowedWebSocketOrigins: ["wss://events.example.test"],
       allowLoopback: false,
+      pollTargets: [
+        {
+          id: "ci-status",
+          endpoint: "https://ci.example.test/status",
+          allowedOrigins: ["https://ci.example.test"],
+          allowLoopback: false,
+          maxResponseBytes: 65536,
+        },
+      ],
     });
     assert.deepEqual(untrusted.scheduler, {
       maxSchedules: 500,
@@ -123,6 +141,7 @@ test("Phase 7 defaults open no remote monitor or scheduler capacity beyond fixed
     pollMinimumMs: 5_000,
     allowedWebSocketOrigins: [],
     allowLoopback: false,
+    pollTargets: [],
   });
   assert.deepEqual(loaded.scheduler, {
     maxSchedules: 1_000,
