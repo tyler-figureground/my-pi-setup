@@ -636,10 +636,22 @@ export function createPlatformExtension(
           ? ("plan" as const)
           : ("normal" as const);
       };
+      const hookAuthorities = new Map<
+        string,
+        { readonly scope: string; readonly deadlineMs: number }
+      >();
       const externalControls = createExternalIntegrationControls({
         policy,
         authority: {
-          verify: (token) => token.value === authorityValue,
+          verify(token) {
+            if (token.value === authorityValue) return true;
+            const grant = hookAuthorities.get(token.value);
+            if (!grant) return false;
+            hookAuthorities.delete(token.value);
+            return (
+              token.scope === grant.scope && Date.now() <= grant.deadlineMs
+            );
+          },
         },
       });
       const credentialVault =
@@ -1180,6 +1192,24 @@ export function createPlatformExtension(
                       credentials: credentialVault,
                       actor: () => role,
                       mode: platformMode,
+                      issueAuthority(grant) {
+                        const now = Date.now();
+                        for (const [value, existing] of hookAuthorities) {
+                          if (existing.deadlineMs < now)
+                            hookAuthorities.delete(value);
+                        }
+                        if (hookAuthorities.size >= 256) {
+                          const oldest = hookAuthorities.keys().next().value;
+                          if (oldest) hookAuthorities.delete(oldest);
+                        }
+                        const value = randomUUID();
+                        hookAuthorities.set(value, grant);
+                        return {
+                          kind: "external-user-authority",
+                          value,
+                          scope: grant.scope,
+                        };
+                      },
                     }),
                   }
                 : {}),
@@ -1314,22 +1344,22 @@ export function createPlatformExtension(
         const projectScope = createHash("sha256")
           .update(project.projectId)
           .digest("hex");
-        const credentialBindings = new Map<
-          string,
-          NonNullable<
-            Awaited<ReturnType<CredentialVault["inspect"]>>["binding"]
-          >
-        >();
         const credentialFor = async (
           reference: string,
           destination: string,
         ) => {
-          const binding = credentialBindings.get(
-            `${reference}\0${destination}`,
-          );
-          return binding
-            ? credentialVault.resolve(reference, binding)
-            : undefined;
+          const inspected = await credentialVault.inspect(reference);
+          const binding = inspected.binding;
+          if (
+            !inspected.exists ||
+            !binding ||
+            binding.integration !== "monitor" ||
+            binding.origin !== destination ||
+            (binding.scope !== undefined && binding.scope !== projectScope)
+          ) {
+            return undefined;
+          }
+          return credentialVault.resolve(reference, binding);
         };
         const monitorCredentialAllowed = async (
           definition: Parameters<
@@ -1354,7 +1384,6 @@ export function createPlatformExtension(
           ) {
             return false;
           }
-          credentialBindings.set(`${reference}\0${origin}`, binding);
           return true;
         };
         const monitorAuthority: MonitorAuthority = {
@@ -1442,6 +1471,7 @@ export function createPlatformExtension(
             }
             const socket = new URL(source.url);
             if (
+              socket.search ||
               !configuration.monitors.allowedWebSocketOrigins.includes(
                 socket.origin,
               ) ||
@@ -1577,6 +1607,16 @@ export function createPlatformExtension(
                   readonly credentialReference?: string;
                 }) {
                   const socket = new URL(request.url);
+                  if (socket.search) {
+                    return {
+                      ok: false as const,
+                      error: {
+                        code: "policy_denied" as const,
+                        message: "Monitor WebSocket query strings are denied.",
+                        retryable: false,
+                      },
+                    };
+                  }
                   const httpUrl = new URL(socket.href);
                   httpUrl.protocol =
                     socket.protocol === "wss:" ? "https:" : "http:";
@@ -1662,6 +1702,28 @@ export function createPlatformExtension(
                 sources,
                 delivery: createSessionBrokerMonitorDelivery(broker),
                 authority: monitorAuthority,
+                credentialCanaries: async (definition) => {
+                  const source = definition.source;
+                  const reference =
+                    "credentialReference" in source
+                      ? source.credentialReference
+                      : undefined;
+                  if (!reference) return [];
+                  const destination =
+                    source.kind === "poll"
+                      ? configuration.monitors.pollTargets.find(
+                          ({ id }) => id === source.adapter,
+                        )?.endpoint
+                      : source.kind === "websocket"
+                        ? source.url
+                        : undefined;
+                  if (!destination) return [];
+                  const canary = await credentialFor(
+                    reference,
+                    new URL(destination).origin,
+                  );
+                  return canary === undefined ? [] : [canary];
+                },
                 hookEvents: platformHookEventProducerFor(pi.events, "monitors"),
                 state: state.value,
                 configuration: configuration.monitors,

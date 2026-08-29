@@ -54,6 +54,7 @@ interface ActiveMonitor {
   recordVersion?: number;
   publisher?: TriggerSourcePublisher;
   handle?: LifecycleHandle<MonitorSourceLease>;
+  credentialDigests: ReadonlySet<string>;
   readonly callbacks: Set<Promise<void>>;
 }
 
@@ -263,11 +264,7 @@ function validDefinition(
         !url.username &&
         !url.password &&
         !url.hash &&
-        ![...url.searchParams.keys()].some((key) =>
-          /^(?:authorization|password|secret|token|api[-_]?key|credential)$/i.test(
-            key,
-          ),
-        ) &&
+        !url.search &&
         allowedWebSocketOrigins.includes(url.origin) &&
         (command.source.credentialReference === undefined ||
           /^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$/.test(
@@ -314,6 +311,7 @@ export async function createMonitorRegistry(
     options.limits?.maxReceipts ?? Math.min(512, maxActive * 4);
   const callbackDrainMs = options.limits?.callbackDrainMs ?? 1_000;
   const closeDrainMs = options.limits?.closeDrainMs ?? 5_000;
+  const evidenceRetentionMs = 15 * 60_000;
   const namespace = createHash("sha256")
     .update(options.binding.projectId)
     .digest("hex");
@@ -322,6 +320,10 @@ export async function createMonitorRegistry(
   const quarantineCollection = `monitor.quarantine.${namespace}`;
   const transactionId = (kind: string, requestId: string) =>
     `monitor:${namespace}:${kind}:${createHash("sha256").update(requestId).digest("hex")}`;
+  const hostDelivery = () => ({
+    kind: "session" as const,
+    sessionId: options.binding.sessionId,
+  });
   if (
     !IDENTIFIER.test(options.ownerId) ||
     !IDENTIFIER.test(options.binding.projectId) ||
@@ -674,8 +676,15 @@ export async function createMonitorRegistry(
     return true;
   };
 
-  const redactString = (value: string) =>
-    value
+  const digestCanary = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
+
+  const redactString = (
+    value: string,
+    credentialDigests: ReadonlySet<string> = new Set(),
+  ) => {
+    if (credentialDigests.has(digestCanary(value))) return "[REDACTED]";
+    const sanitized = value
       .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g, "")
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
       .replace(
@@ -691,6 +700,41 @@ export async function createMonitorRegistry(
         /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+(?::[^\s/@]*)?@/gi,
         "$1[REDACTED]@",
       );
+    return credentialDigests.has(digestCanary(sanitized))
+      ? "[REDACTED]"
+      : sanitized;
+  };
+
+  const resolveCredentialDigests = async (
+    definition: import("./model.ts").MonitorDefinition,
+  ) => {
+    if (!options.credentialCanaries) return new Set<string>();
+    const canaries = await options.credentialCanaries(definition);
+    if (
+      !Array.isArray(canaries) ||
+      canaries.length > 16 ||
+      canaries.some(
+        (canary) =>
+          typeof canary !== "string" ||
+          canary.length === 0 ||
+          Buffer.byteLength(canary) > 16 * 1_024,
+      )
+    ) {
+      throw new Error("Monitor credential canaries are invalid.");
+    }
+    const digests = new Set<string>();
+    for (const canary of canaries) {
+      for (const variant of [
+        canary,
+        encodeURIComponent(canary),
+        Buffer.from(canary).toString("base64"),
+        Buffer.from(canary).toString("base64url"),
+      ]) {
+        digests.add(digestCanary(variant));
+      }
+    }
+    return digests;
+  };
 
   const boundUtf8 = (value: string, maxBytes: number) => {
     if (Buffer.byteLength(value) <= maxBytes) return value;
@@ -702,6 +746,7 @@ export async function createMonitorRegistry(
 
   const redact = (
     value: unknown,
+    credentialDigests: ReadonlySet<string>,
     budget = { nodes: 0, bytes: 0, seen: new WeakSet<object>() },
     depth = 0,
   ): import("../../core/result.ts").JsonValue => {
@@ -710,7 +755,7 @@ export async function createMonitorRegistry(
       return "[TRUNCATED]";
     if (typeof value === "string") {
       const bounded = boundUtf8(
-        redactString(value),
+        redactString(value, credentialDigests),
         Math.min(8 * 1024, 48 * 1024 - budget.bytes),
       );
       budget.bytes += Buffer.byteLength(bounded);
@@ -740,7 +785,7 @@ export async function createMonitorRegistry(
         const descriptor = descriptors[String(index)];
         output.push(
           descriptor && "value" in descriptor
-            ? redact(descriptor.value, budget, depth + 1)
+            ? redact(descriptor.value, credentialDigests, budget, depth + 1)
             : "[ACCESSOR]",
         );
       }
@@ -754,7 +799,7 @@ export async function createMonitorRegistry(
       ([, descriptor]) => descriptor.enumerable,
     );
     for (const [rawKey, descriptor] of entries.slice(0, 256)) {
-      const key = boundUtf8(redactString(rawKey), 256);
+      const key = boundUtf8(redactString(rawKey, credentialDigests), 256);
       budget.bytes += Buffer.byteLength(key);
       if (budget.nodes > 1_024 || budget.bytes >= 48 * 1024) break;
       if (
@@ -766,7 +811,7 @@ export async function createMonitorRegistry(
       } else {
         output[key] =
           "value" in descriptor
-            ? redact(descriptor.value, budget, depth + 1)
+            ? redact(descriptor.value, credentialDigests, budget, depth + 1)
             : "[ACCESSOR]";
       }
     }
@@ -841,12 +886,14 @@ export async function createMonitorRegistry(
       mediaType: "application/json",
       metadata: {
         kind: "monitor-evidence",
+        retention: "sensitive",
         monitorId: entry.value.id,
         revision: expectedRevision,
         eventCount: delivery.events.length,
         trust: "untrusted",
         authority: "none",
       },
+      expiresAt: Date.now() + evidenceRetentionMs,
     });
     if (
       !evidence.ok ||
@@ -970,6 +1017,15 @@ export async function createMonitorRegistry(
     return unresolved;
   };
 
+  const revokePublisher = (entry: ActiveMonitor) => {
+    entry.credentialDigests = new Set();
+    const publisher = entry.publisher;
+    if (!publisher) return true;
+    const revoked = options.triggers.revokeSource(publisher);
+    if (revoked.ok) entry.publisher = undefined;
+    return revoked.ok;
+  };
+
   const initial = await reconcile();
   if (!initial.ok) {
     return {
@@ -986,6 +1042,16 @@ export async function createMonitorRegistry(
     if (closed) return monitorFailure("closed", "MonitorRegistry is closed.");
     const startGeneration = registryGeneration;
     const definition = structuredClone(entry.value);
+    try {
+      entry.credentialDigests = await resolveCredentialDigests(definition);
+    } catch {
+      entry.credentialDigests = new Set();
+      return monitorFailure(
+        "source_failed",
+        "Monitor credentials could not be prepared safely.",
+        true,
+      );
+    }
     const bound = options.triggers.bindSource({
       kind: `monitor-${definition.source.kind}`,
       id: definition.id,
@@ -994,8 +1060,10 @@ export async function createMonitorRegistry(
       trust: "untrusted",
       metadata: { revision: definition.revision },
     });
-    if (!bound.ok)
+    if (!bound.ok) {
+      entry.credentialDigests = new Set();
       return monitorFailure("source_failed", "Monitor source binding failed.");
+    }
     entry.publisher = bound.value;
     const fence = ++entry.fence;
     entry.handle = options.lifecycle.acquireHandle({
@@ -1028,7 +1096,10 @@ export async function createMonitorRegistry(
                 causedByDescriptor.value === entry.value.id)
             )
               return;
-            const data = redact(payloadDescriptor.value);
+            const data = redact(
+              payloadDescriptor.value,
+              entry.credentialDigests,
+            );
             if (!data || typeof data !== "object" || Array.isArray(data))
               return;
             const boundedData =
@@ -1108,12 +1179,14 @@ export async function createMonitorRegistry(
         startGeneration !== registryGeneration ||
         entry.fence !== fence
       ) {
+        revokePublisher(entry);
         await entry.handle.release().catch(() => undefined);
         entry.handle = undefined;
         return monitorFailure("closed", "MonitorRegistry is closed.");
       }
       return success(undefined);
     } catch {
+      revokePublisher(entry);
       entry.handle = undefined;
       return monitorFailure(
         "source_failed",
@@ -1128,6 +1201,7 @@ export async function createMonitorRegistry(
     prior: MonitorSnapshot,
   ) => {
     entry.fence += 1;
+    revokePublisher(entry);
     await entry.handle?.release().catch(() => undefined);
     entry.handle = undefined;
     entry.value = prior;
@@ -1209,7 +1283,10 @@ export async function createMonitorRegistry(
           definition.state ?? "",
         ) ||
         !definition.source ||
-        !definition.delivery
+        !definition.delivery ||
+        definition.delivery.kind !== "session" ||
+        typeof definition.delivery.sessionId !== "string" ||
+        !IDENTIFIER.test(definition.delivery.sessionId)
       ) {
         const quarantined = await quarantine(
           definitionCollection,
@@ -1236,7 +1313,7 @@ export async function createMonitorRegistry(
         scope: "durable" as const,
         source: definition.source,
         ...(definition.matcher ? { matcher: definition.matcher } : {}),
-        delivery: definition.delivery,
+        delivery: hostDelivery(),
       };
       if (
         !validDefinition(
@@ -1264,6 +1341,7 @@ export async function createMonitorRegistry(
       }
       let value: MonitorSnapshot = {
         ...structuredClone(storedDefinition(definition as MonitorSnapshot)),
+        delivery: hostDelivery(),
         deliveries: 0,
         dropped: 0,
         unresolved: 0,
@@ -1290,6 +1368,7 @@ export async function createMonitorRegistry(
         value,
         fence: 0,
         recordVersion: record.version,
+        credentialDigests: new Set(),
         callbacks: new Set(),
       });
     }
@@ -1410,6 +1489,9 @@ export async function createMonitorRegistry(
           receiptDefinition.scope !== "durable" ||
           !receiptDefinition.source ||
           !receiptDefinition.delivery ||
+          receiptDefinition.delivery.kind !== "session" ||
+          typeof receiptDefinition.delivery.sessionId !== "string" ||
+          !IDENTIFIER.test(receiptDefinition.delivery.sessionId) ||
           !["active", "paused", "stopped", "blocked", "deleted"].includes(
             receiptDefinition.state ?? "",
           )
@@ -1441,7 +1523,7 @@ export async function createMonitorRegistry(
           ...(receiptDefinition.matcher
             ? { matcher: receiptDefinition.matcher }
             : {}),
-          delivery: receiptDefinition.delivery,
+          delivery: hostDelivery(),
         };
         if (
           !validDefinition(
@@ -1471,6 +1553,7 @@ export async function createMonitorRegistry(
           ...structuredClone(
             storedDefinition(receiptDefinition as MonitorSnapshot),
           ),
+          delivery: hostDelivery(),
           deliveries: 0,
           dropped: 0,
           unresolved: 0,
@@ -1642,7 +1725,7 @@ export async function createMonitorRegistry(
             ...(command.matcher
               ? { matcher: structuredClone(command.matcher) }
               : {}),
-            delivery: structuredClone(command.delivery),
+            delivery: hostDelivery(),
             deliveries: entry.value.deliveries,
             dropped: entry.value.dropped,
             unresolved: entry.value.unresolved,
@@ -1708,6 +1791,7 @@ export async function createMonitorRegistry(
           await quiesce(entry);
           if (stale())
             return staleAfterCommit(entry, priorValue, "change", priorVersion);
+          revokePublisher(entry);
           try {
             await entry.handle?.release();
             entry.handle = undefined;
@@ -1901,6 +1985,7 @@ export async function createMonitorRegistry(
                 command.type === "delete" ? "delete" : "change",
                 priorVersion,
               );
+            revokePublisher(entry);
             try {
               await entry.handle?.release();
               entry.handle = undefined;
@@ -2099,7 +2184,7 @@ export async function createMonitorRegistry(
           ...(command.matcher
             ? { matcher: structuredClone(command.matcher) }
             : {}),
-          delivery: structuredClone(command.delivery),
+          delivery: hostDelivery(),
           deliveries: 0,
           dropped: 0,
           unresolved: 0,
@@ -2117,7 +2202,12 @@ export async function createMonitorRegistry(
             "authority_denied",
             "Monitor authority was denied.",
           );
-        const entry: ActiveMonitor = { value, fence: 0, callbacks: new Set() };
+        const entry: ActiveMonitor = {
+          value,
+          fence: 0,
+          credentialDigests: new Set(),
+          callbacks: new Set(),
+        };
         const persisted = await persist(
           entry,
           value,
@@ -2253,7 +2343,10 @@ export async function createMonitorRegistry(
       mutationController.abort(new Error("MonitorRegistry closed."));
       const lane = mutationTail;
       const entries = [...monitors.values()];
-      for (const entry of entries) entry.fence += 1;
+      for (const entry of entries) {
+        entry.fence += 1;
+        revokePublisher(entry);
+      }
       monitors.clear();
       closePromise = (async () => {
         await deadline(lane, closeDrainMs);

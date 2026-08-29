@@ -8,10 +8,10 @@ import type {
   StateStoreError,
   StateTransaction,
 } from "../../core/persistence/state-store.ts";
-import type {
-  TriggerDurableRecord,
-  TriggerPersistenceErrorCode,
-  TriggerPersistencePort,
+import {
+  snapshotTriggerDurableRecord,
+  type TriggerPersistenceErrorCode,
+  type TriggerPersistencePort,
 } from "./persistence.ts";
 import { hasExactKeys, isPlainData } from "./validation.ts";
 
@@ -146,52 +146,6 @@ function validAttemptRequest(value: {
     Number.isSafeInteger(value.bindingGeneration) &&
     Number(value.bindingGeneration) > 0
   );
-}
-
-function snapshotDurableRecord(value: unknown) {
-  if (
-    !isPlainData(value, { maxDepth: 2, maxNodes: 8 }) ||
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !hasExactKeys(value as Record<string, unknown>, [
-      "schemaVersion",
-      "eventId",
-      "type",
-      "occurredAt",
-      "sourceKey",
-      "payloadDigest",
-    ])
-  ) {
-    return undefined;
-  }
-  const record = value as unknown as TriggerDurableRecord;
-  if (
-    record.schemaVersion !== 1 ||
-    typeof record.eventId !== "string" ||
-    !/^[A-Za-z0-9._:-]{1,256}$/.test(record.eventId) ||
-    typeof record.type !== "string" ||
-    !/^[A-Za-z0-9._:/-]{1,256}$/.test(record.type) ||
-    !Number.isSafeInteger(record.occurredAt) ||
-    record.occurredAt < 0 ||
-    typeof record.sourceKey !== "string" ||
-    !/^[a-f0-9]{64}$/.test(record.sourceKey) ||
-    typeof record.payloadDigest !== "string" ||
-    !/^[a-f0-9]{64}$/.test(record.payloadDigest)
-  ) {
-    return undefined;
-  }
-  const snapshot = {
-    schemaVersion: 1 as const,
-    eventId: record.eventId,
-    type: record.type,
-    occurredAt: record.occurredAt,
-    sourceKey: record.sourceKey,
-    payloadDigest: record.payloadDigest,
-  };
-  return Buffer.byteLength(JSON.stringify(snapshot)) <= 1_024
-    ? snapshot
-    : undefined;
 }
 
 function mapStateError(
@@ -530,7 +484,7 @@ export function createStateStoreTriggerPersistence(
 
   return {
     async store(request) {
-      const record = snapshotDurableRecord(request.record);
+      const record = snapshotTriggerDurableRecord(request.record);
       const ttlMs = request.leaseUntil - request.now;
       if (
         !record ||
@@ -552,7 +506,9 @@ export function createStateStoreTriggerPersistence(
         const existing = await readEvent(record.eventId);
         if (!existing.ok) return mapStateError(existing.error, "WRITE_FAILED");
         if (existing.value) {
-          const existingRecord = snapshotDurableRecord(existing.value.metadata);
+          const existingRecord = snapshotTriggerDurableRecord(
+            existing.value.metadata,
+          );
           if (
             !existingRecord ||
             JSON.stringify(existingRecord) !== JSON.stringify(record)

@@ -71,6 +71,10 @@ export interface ProfileCatalog {
   inspect(): ProfileCatalogSnapshot;
   list(): readonly ResolvedAgentProfile[];
   resolve(name: string): Outcome<ResolvedAgentProfile, ProfileCatalogError>;
+  revalidate?(
+    name: string,
+    context: { readonly projectRoot: string; readonly projectTrusted: boolean },
+  ): Promise<Outcome<ResolvedAgentProfile, ProfileCatalogError>>;
   diagnostics(): readonly ProfileDiagnostic[];
 }
 
@@ -542,7 +546,7 @@ export function createProfileCatalog(
   let profiles: readonly ResolvedAgentProfile[] = [];
   let currentDiagnostics: readonly ProfileDiagnostic[] = [];
   let generation = 0;
-  return {
+  const catalog: ProfileCatalog = {
     async reload(context) {
       const diagnostics: ProfileDiagnostic[] = [];
       const nextGeneration = generation + 1;
@@ -614,6 +618,11 @@ export function createProfileCatalog(
             retryable: false,
           });
     },
+    async revalidate(name, context) {
+      await catalog.reload(context);
+      return catalog.resolve(name);
+    },
     diagnostics: () => currentDiagnostics,
   };
+  return catalog;
 }

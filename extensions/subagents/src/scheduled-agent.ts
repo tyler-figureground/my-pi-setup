@@ -1,6 +1,10 @@
 import path from "node:path";
 import { sanitizeSessionText } from "../../platform/src/messaging/index.ts";
 import type {
+  WorkspaceLease,
+  WorkspaceManager,
+} from "../../platform/src/workspaces/index.ts";
+import type {
   ScheduledAgentExecutor,
   ScheduledAgentFailure,
   ScheduledAgentRequest,
@@ -36,7 +40,6 @@ const FORBIDDEN_OVERRIDES = [
   "reasoningEffort",
 ] as const;
 const ERROR_MAX_BYTES = 1_000;
-const CANCEL_DRAIN_MS = 6_000;
 
 function boundUtf8(text: string, maxBytes: number) {
   const bytes = Buffer.from(text);
@@ -93,17 +96,7 @@ async function drainCancellation(
   manager: ScheduledSubagentManager,
   childId: string,
 ) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      manager.cancel([childId]).catch(() => undefined),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, CANCEL_DRAIN_MS);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  await manager.cancel([childId]).catch(() => undefined);
 }
 
 function failure(
@@ -224,6 +217,10 @@ export interface ScheduledSubagentManager {
 export interface ScheduledAgentExecutorOptions {
   readonly manager: () => Promise<ScheduledSubagentManager>;
   readonly parent: (request: ScheduledAgentRequest) => ParentContext;
+  readonly workspaces?: () =>
+    | Pick<WorkspaceManager, "create" | "lease" | "renew" | "disposition">
+    | undefined;
+  readonly sessionId?: () => string;
   readonly generation: () => number;
   readonly lifecycleSignal: () => AbortSignal;
 }
@@ -300,7 +297,87 @@ export function createScheduledAgentExecutor(
           true,
         );
       };
+      let activeWorkspaceLease: WorkspaceLease | undefined;
+      let workspaceLifecycle = Promise.resolve();
+      const workspaceManager =
+        request.profile.policy.workspace === "isolated"
+          ? options.workspaces?.()
+          : undefined;
+      const workspaceBinding = () =>
+        activeWorkspaceLease
+          ? {
+              workspaceId: activeWorkspaceLease.workspaceId,
+              owner: activeWorkspaceLease.owner,
+              fence: activeWorkspaceLease.fence,
+              expiresAt: activeWorkspaceLease.expiresAt,
+              projectId: activeWorkspaceLease.snapshot.projectId,
+              projectRoot: activeWorkspaceLease.snapshot.projectRoot,
+              path: activeWorkspaceLease.snapshot.path,
+              state: "leased" as const,
+              role: request.profile.policy.role,
+              profile: request.profile.identity,
+              projectTrusted: true as const,
+            }
+          : undefined;
+      const preserveWorkspace = async () => {
+        workspaceLifecycle = workspaceLifecycle.then(async () => {
+          if (!activeWorkspaceLease || !workspaceManager) return;
+          const preserved = await workspaceManager.disposition(
+            activeWorkspaceLease,
+            { kind: "preserve" },
+          );
+          if (!preserved.ok) throw new Error(preserved.error.message);
+          activeWorkspaceLease = undefined;
+        });
+        await workspaceLifecycle;
+      };
       try {
+        if (request.profile.policy.workspace === "isolated") {
+          const sessionId = options.sessionId?.();
+          if (!workspaceManager || !sessionId) {
+            return failure(
+              "profile_denied",
+              "Isolated Scheduled Agent profile requires Guarded Workspace authority.",
+            );
+          }
+          const created = await workspaceManager.create({
+            base: { kind: "current-head" },
+          });
+          if (!created.ok) {
+            return failure("run_failed", created.error.message, true);
+          }
+          const leased = await workspaceManager.lease({
+            workspaceId: created.value.workspaceId,
+            owner: {
+              sessionId,
+              agentId: `schedule-${request.occurrenceId}`,
+            },
+            ttlMs: Math.min(
+              Math.max(request.timeoutMs + 120_000, 600_000),
+              86_400_000,
+            ),
+            role: request.profile.policy.role,
+            profile: request.profile.identity.name,
+            profileDigest: request.profile.identity.contentDigest,
+            profileGeneration: request.profile.identity.catalogGeneration,
+            profileScope: request.profile.identity.source.scope,
+            profilePath: request.profile.identity.source.path,
+          });
+          if (!leased.ok) {
+            return failure("run_failed", leased.error.message, true);
+          }
+          activeWorkspaceLease = leased.value;
+          if (
+            activeWorkspaceLease.snapshot.projectId !== request.projectId ||
+            activeWorkspaceLease.snapshot.path === request.cwd ||
+            !path.isAbsolute(activeWorkspaceLease.snapshot.path)
+          ) {
+            return failure(
+              "profile_denied",
+              "Guarded Workspace identity does not match scheduled project authority.",
+            );
+          }
+        }
         const managerResult = await Promise.race([
           options
             .manager()
@@ -315,16 +392,48 @@ export function createScheduledAgentExecutor(
         }
         const manager = managerResult.manager;
         if (isShuttingDown()) return shuttingDown();
+        const guardedWorkspace = workspaceBinding();
         const task = {
           origin: "model",
           prompt: request.prompt,
           title: `Scheduled occurrence ${request.occurrenceId}`,
-          cwd: request.cwd,
+          cwd: guardedWorkspace?.path ?? request.cwd,
           model: request.profile.defaults.model,
           reasoningEffort: request.profile.defaults.effort,
           profile: request.profile.identity,
           execution: request.profile.policy,
-          parent: options.parent(request),
+          ...(guardedWorkspace && workspaceManager
+            ? {
+                workspace: guardedWorkspace,
+                workspaceControl: {
+                  async renew() {
+                    let binding = guardedWorkspace;
+                    workspaceLifecycle = workspaceLifecycle.then(async () => {
+                      if (!activeWorkspaceLease) {
+                        throw new Error("Workspace was already preserved.");
+                      }
+                      const renewed = await workspaceManager.renew(
+                        activeWorkspaceLease,
+                        Math.min(
+                          Math.max(request.timeoutMs + 120_000, 600_000),
+                          86_400_000,
+                        ),
+                      );
+                      if (!renewed.ok) throw new Error(renewed.error.message);
+                      activeWorkspaceLease = renewed.value;
+                      binding = workspaceBinding()!;
+                    });
+                    await workspaceLifecycle;
+                    return binding;
+                  },
+                  preserve: preserveWorkspace,
+                },
+              }
+            : {}),
+          parent: {
+            ...options.parent(request),
+            ...(guardedWorkspace ? { projectTrusted: true } : {}),
+          },
         } satisfies SpawnTask;
         const spawn = manager.spawn(
           request.profile.defaults.backend,
@@ -421,6 +530,11 @@ export function createScheduledAgentExecutor(
           true,
         );
       } finally {
+        try {
+          await preserveWorkspace();
+        } catch {
+          // WorkspaceManager retains the fenced lease for durable recovery.
+        }
         callerAbort.dispose();
         lifecycleAbort.dispose();
         timeout.dispose();

@@ -6,6 +6,7 @@ import type {
   OperationKind,
 } from "../../core/policy/index.ts";
 import type { Outcome } from "../../core/result.ts";
+import type { ExternalUserAuthorityToken } from "../../external/index.ts";
 import { validateConfigSources } from "./config.ts";
 import { declarativeHookEvents } from "./model.ts";
 import type {
@@ -82,9 +83,18 @@ export interface HookNamedAdapterRequest {
   readonly outputCapBytes: number;
 }
 
+export interface HookHttpAuthorityRequest extends HookNamedAdapterRequest {
+  readonly generation: number;
+}
+
+export interface HookHttpAdapterRequest extends HookHttpAuthorityRequest {
+  readonly authority?: ExternalUserAuthorityToken;
+}
+
 export interface HookHttpAdapter {
   classify(name: string): OperationKind | undefined;
-  invoke(request: HookNamedAdapterRequest): Promise<HookAdapterResult>;
+  authorize?(request: HookHttpAuthorityRequest): ExternalUserAuthorityToken;
+  invoke(request: HookHttpAdapterRequest): Promise<HookAdapterResult>;
 }
 
 export interface HookMcpAdapter {
@@ -170,6 +180,7 @@ export interface Hooks {
 }
 
 interface AppliedSource {
+  readonly sourceIndex: number;
   readonly source: HookConfigSource;
   readonly expectedStatus: "valid" | "missing";
   readonly identity?: {
@@ -290,13 +301,19 @@ function safeEnvironment() {
   return environment;
 }
 
+function canonicalPathKey(value: string) {
+  const canonical = resolve(value);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
 function sameIdentity(
   left: AppliedSource["identity"],
   right: AppliedSource["identity"],
 ) {
   if (!left || !right) return left === right;
   return (
-    resolve(left.canonicalPath) === resolve(right.canonicalPath) &&
+    canonicalPathKey(left.canonicalPath) ===
+      canonicalPathKey(right.canonicalPath) &&
     left.device === right.device &&
     left.inode === right.inode &&
     left.digest === right.digest
@@ -308,14 +325,11 @@ function sameConfigurationSnapshot(
   right: ValidationResult,
 ) {
   if (left.sources.length !== right.sources.length) return false;
-  return left.sources.every((source) => {
-    const current = right.sources.find(
-      (candidate) =>
-        candidate.scope === source.scope &&
-        resolve(candidate.path) === resolve(source.path),
-    );
+  return left.sources.every((source, sourceIndex) => {
+    const current = right.sources[sourceIndex];
     return (
       current !== undefined &&
+      current.scope === source.scope &&
       current.status === source.status &&
       sameIdentity(source.identity, current.identity)
     );
@@ -361,10 +375,7 @@ async function beforeDeadline<T>(
   }
   return {
     kind: result.kind,
-    settled:
-      result.kind === "aborted"
-        ? Promise.resolve()
-        : settled.then(() => undefined),
+    settled: settled.then(() => undefined),
   };
 }
 
@@ -454,7 +465,30 @@ export function createHooks(options: HooksOptions): Hooks {
       execution.controller.abort(new Error(reason));
     }
     await waitAtMost(Promise.all(active.map(({ settled }) => settled)), 250);
+    const unresolved = active.filter((execution) =>
+      activeExecutions.has(execution),
+    ).length;
+    if (unresolved > 0) {
+      appendHistory({
+        type: "failed",
+        outcome: "drain-unresolved",
+        message: `${unresolved} Hook operation(s) remained unsettled after bounded generation drain.`,
+      });
+    }
   };
+
+  const appliedSourceFor = (source: HookConfigSource, sourceIndex: number) =>
+    appliedSources.find(
+      (candidate) =>
+        candidate.source.scope === source.scope &&
+        canonicalPathKey(candidate.source.path) ===
+          canonicalPathKey(source.path),
+    ) ??
+    appliedSources.find(
+      (candidate) =>
+        candidate.sourceIndex === sourceIndex &&
+        candidate.source.scope === source.scope,
+    );
 
   const runConfiguration = async (command: HookConfigurationCommand) => {
     const candidate: unknown = command;
@@ -496,15 +530,26 @@ export function createHooks(options: HooksOptions): Hooks {
       } as const;
     }
     const trustResults = await Promise.all(
-      requestedSources.map(async (source) => ({
+      requestedSources.map(async (source, sourceIndex) => ({
         source,
+        sourceIndex,
         trusted:
           (source.scope !== "project" || source.trusted === true) &&
           (await options.trust.isTrusted(source)),
       })),
     );
     if (closed) return closedOutcome();
-    const untrusted = trustResults.find(({ trusted }) => !trusted);
+    const initiallySkipped = new Set(
+      trustResults
+        .filter(({ source, trusted }) => source.scope === "project" && !trusted)
+        .map(({ sourceIndex }) => sourceIndex),
+    );
+    const untrusted = trustResults.find(
+      ({ source, sourceIndex, trusted }) =>
+        !trusted &&
+        (source.scope === "global" ||
+          appliedSourceFor(source, sourceIndex) !== undefined),
+    );
     if (untrusted) {
       const trustDiagnostic: HookDiagnostic = {
         severity: "error",
@@ -513,9 +558,7 @@ export function createHooks(options: HooksOptions): Hooks {
         message: "Hook source is not trusted by current host state.",
       };
       diagnostics = [trustDiagnostic];
-      const applied = appliedSources.find(
-        ({ source }) => resolve(source.path) === resolve(untrusted.source.path),
-      );
+      const applied = appliedSourceFor(untrusted.source, untrusted.sourceIndex);
       if (command.type === "apply" && applied) {
         await suspendSource(applied, trustDiagnostic.message);
       }
@@ -529,8 +572,13 @@ export function createHooks(options: HooksOptions): Hooks {
         },
       } as const;
     }
+    const effectiveSources = requestedSources.map((source, sourceIndex) =>
+      source.scope === "project" && initiallySkipped.has(sourceIndex)
+        ? { ...source, trusted: false as const }
+        : source,
+    );
     let result = await validateConfigSources(
-      requestedSources,
+      effectiveSources,
       limits,
       new Set(),
     );
@@ -538,9 +586,10 @@ export function createHooks(options: HooksOptions): Hooks {
     if (!result.valid) {
       diagnostics = result.diagnostics;
       if (command.type === "apply") {
-        for (const current of result.sources) {
-          const applied = appliedSources.find(
-            ({ source }) => resolve(source.path) === resolve(current.path),
+        for (const [sourceIndex, current] of result.sources.entries()) {
+          const applied = appliedSourceFor(
+            effectiveSources[sourceIndex]!,
+            sourceIndex,
           );
           if (
             applied &&
@@ -573,13 +622,16 @@ export function createHooks(options: HooksOptions): Hooks {
         ),
       );
       const commitResult = await validateConfigSources(
-        requestedSources,
+        effectiveSources,
         limits,
         new Set(),
       );
       if (closed) return closedOutcome();
       if (
-        commitTrust.some((trusted) => !trusted) ||
+        commitTrust.some(
+          (trusted, sourceIndex) =>
+            !trusted && !initiallySkipped.has(sourceIndex),
+        ) ||
         !commitResult.valid ||
         !sameConfigurationSnapshot(result, commitResult)
       ) {
@@ -593,8 +645,9 @@ export function createHooks(options: HooksOptions): Hooks {
         diagnostics = [changedDiagnostic];
         for (const applied of appliedSources) {
           if (
-            requestedSources.some(
-              (source) => resolve(source.path) === resolve(applied.source.path),
+            effectiveSources.some(
+              (source, sourceIndex) =>
+                appliedSourceFor(source, sourceIndex) === applied,
             )
           ) {
             await suspendSource(
@@ -627,20 +680,22 @@ export function createHooks(options: HooksOptions): Hooks {
         configured = result.hooks.map((registration) =>
           structuredClone(registration),
         );
-        appliedSources = requestedSources.map((source) => {
-          const current = result.sources.find(
-            (candidate) => resolve(candidate.path) === resolve(source.path),
-          );
+        appliedSources = effectiveSources.flatMap((source, sourceIndex) => {
+          const current = result.sources[sourceIndex];
+          if (!current || current.status === "untrusted-skipped") return [];
           const expectedStatus =
-            current?.status === "missing" ? "missing" : "valid";
-          return {
-            source: structuredClone(source),
-            expectedStatus,
-            ...(current?.identity
-              ? { identity: structuredClone(current.identity) }
-              : {}),
-            status: expectedStatus === "missing" ? "missing" : "active",
-          } satisfies AppliedSource;
+            current.status === "missing" ? "missing" : "valid";
+          return [
+            {
+              sourceIndex,
+              source: structuredClone(source),
+              expectedStatus,
+              ...(current.identity
+                ? { identity: structuredClone(current.identity) }
+                : {}),
+              status: expectedStatus === "missing" ? "missing" : "active",
+            } satisfies AppliedSource,
+          ];
         });
         diagnostics = result.diagnostics;
         revision++;
@@ -871,11 +926,19 @@ export function createHooks(options: HooksOptions): Hooks {
         }
         return false;
       };
-      const source = appliedSources.find(
-        (candidate) =>
-          resolve(candidate.source.path) ===
-          resolve(registration.provenance.source),
-      );
+      const source =
+        (registration.provenance.sourceIndex === undefined
+          ? undefined
+          : appliedSources.find(
+              ({ sourceIndex }) =>
+                sourceIndex === registration.provenance.sourceIndex,
+            )) ??
+        appliedSources.find(
+          ({ identity }) =>
+            identity !== undefined &&
+            canonicalPathKey(identity.canonicalPath) ===
+              canonicalPathKey(registration.provenance.source),
+        );
       try {
         for (const action of actions(registration.hook)) {
           if (!executionIsCurrent()) break;
@@ -920,6 +983,21 @@ export function createHooks(options: HooksOptions): Hooks {
             break;
           }
           const operation = operationFor(action, options.adapters?.http);
+          const httpRequest =
+            action.type === "http"
+              ? {
+                  name: action.name,
+                  ...(action.input === undefined
+                    ? {}
+                    : { input: action.input }),
+                  cwd: invocation.cwd,
+                  signal: actionSignal,
+                  deadlineMs: deadlineAt,
+                  outputCapBytes: registration.hook.outputCapBytes,
+                  generation: executionGeneration,
+                }
+              : undefined;
+          let httpAuthority: ExternalUserAuthorityToken | undefined;
           if (options.mode() === "plan" && deniedInPlanMode(operation)) {
             const reason = "Plan Mode denies side-effecting hook actions.";
             appendHistory({
@@ -953,6 +1031,19 @@ export function createHooks(options: HooksOptions): Hooks {
             continue;
           }
           if (decision.kind === "require-user-confirmation") {
+            if (
+              action.type === "http" &&
+              operation.kind === "operation" &&
+              operation.name === "remote-write" &&
+              options.adapters?.http?.authorize === undefined
+            ) {
+              const reason =
+                "Hook HTTP adapter cannot bind direct confirmation authority.";
+              if (failAction(action, "authority-unavailable", reason)) {
+                break;
+              }
+              continue;
+            }
             let confirmed = false;
             if (!invocation.unattended && options.adapters?.ui !== undefined) {
               const confirmation = await beforeDeadline(
@@ -1041,6 +1132,26 @@ export function createHooks(options: HooksOptions): Hooks {
                 block ??= { reason: decision.reason };
               }
               continue;
+            }
+            if (
+              decision.kind === "require-user-confirmation" &&
+              httpRequest &&
+              options.adapters?.http?.authorize
+            ) {
+              try {
+                httpAuthority = options.adapters.http.authorize(httpRequest);
+              } catch {
+                if (
+                  failAction(
+                    action,
+                    "authority-unavailable",
+                    "Hook HTTP confirmation authority could not be issued.",
+                  )
+                ) {
+                  break;
+                }
+                continue;
+              }
             }
           }
           if (!executionIsCurrent()) break;
@@ -1271,14 +1382,22 @@ export function createHooks(options: HooksOptions): Hooks {
               }
               continue;
             }
+            if (!httpRequest) {
+              if (
+                failAction(
+                  action,
+                  "invalid-request",
+                  "Hook HTTP request could not be bound.",
+                )
+              ) {
+                break;
+              }
+              continue;
+            }
             const execution = await beforeDeadline(
               adapter.invoke({
-                name: action.name,
-                ...(action.input === undefined ? {} : { input: action.input }),
-                cwd: invocation.cwd,
-                signal: actionSignal,
-                deadlineMs: deadlineAt,
-                outputCapBytes: registration.hook.outputCapBytes,
+                ...httpRequest,
+                ...(httpAuthority ? { authority: httpAuthority } : {}),
               }),
               Math.max(1, deadlineAt - Date.now()),
               controller,

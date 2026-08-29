@@ -10,16 +10,23 @@ import {
 } from "./src/core/persistence/index.ts";
 import type { StateStore } from "./src/core/persistence/state-store.ts";
 import { createStateStoreTriggerPersistence } from "./src/automation/triggers/state-store-persistence.ts";
+import {
+  triggerPayloadDigest,
+  type TriggerDurableRecord,
+} from "./src/automation/triggers/persistence.ts";
 import { createTriggerEngine } from "./src/automation/triggers/index.ts";
 
+const durablePayload = { body: "restart-safe" };
 const durableRecord = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2,
   eventId: "event-1",
   type: "fixture.event",
   occurredAt: 1_000,
   sourceKey: "a".repeat(64),
-  payloadDigest: "b".repeat(64),
-};
+  payload: durablePayload,
+  payloadDigest: triggerPayloadDigest(durablePayload),
+  cause: { rootEventId: "event-1", ancestry: [] },
+} satisfies TriggerDurableRecord;
 
 function claimInProcess(path: string, claimantId: string, now: number) {
   const child = spawn(
@@ -628,10 +635,10 @@ test("two SQLite processes claim once and recover a crashed claimant after lease
   }
 });
 
-test("TriggerEngine restart acknowledges SQLite receipts without persisting payload secrets", async () => {
+test("TriggerEngine restart acknowledges SQLite receipts with exact safe payload persistence", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-trigger-engine-state-"));
   const path = join(directory, "state.sqlite");
-  const secret = "TRIGGER-PAYLOAD-SECRET-3f57c9";
+  const payload = { body: "restart-safe-payload" };
   const clock = { now: () => 4_000 };
   let deliveries = 0;
   try {
@@ -672,7 +679,7 @@ test("TriggerEngine restart acknowledges SQLite receipts without persisting payl
     );
     const published = await firstSource.value.publish({
       type: "fixture.event",
-      payload: { body: secret, password: secret },
+      payload,
       durability: "restart-only",
     });
     assert.equal(published.ok, true);
@@ -715,9 +722,11 @@ test("TriggerEngine restart acknowledges SQLite receipts without persisting payl
       [path, `${path}-wal`, `${path}-shm`]
         .filter(existsSync)
         .some((candidate) =>
-          readFileSync(candidate).includes(Buffer.from(secret)),
+          readFileSync(candidate).includes(
+            Buffer.from(JSON.stringify(payload)),
+          ),
         ),
-      false,
+      true,
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

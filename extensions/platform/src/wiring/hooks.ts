@@ -28,6 +28,7 @@ import {
 import type { ActorRole, CapabilityPolicy } from "../core/policy/index.ts";
 import type { ResolvedProjectIdentity } from "../core/projects/index.ts";
 import type {
+  TriggerDelivery,
   TriggerEngineRuntime,
   TriggerSourcePublisher,
 } from "../automation/triggers/model.ts";
@@ -123,7 +124,10 @@ function nativeEventIsUnattended(
   event: NativeHookEvent,
   ctx: ExtensionContext,
 ) {
-  if (ctx.mode === "json" || ctx.mode === "print") return true;
+  if (!supportsHookUi(ctx)) return true;
+  if (event.type === "session_before_compact" && event.reason !== "manual") {
+    return true;
+  }
   const directUserGate = new Set<NativeHookEventName>([
     "input",
     "user_bash",
@@ -321,6 +325,7 @@ function decodeHookResponse(value: unknown): HookResponse | undefined {
 export function createHooksCapability(options: HooksCapabilityOptions) {
   const { pi, agentDir } = options;
   const eventContexts = new AsyncLocalStorage<ExtensionContext>();
+  const deliveryContexts = new AsyncLocalStorage<TriggerDelivery>();
   let active: ActiveHooksRuntime | undefined;
 
   const contextForAdapter = (runtime: ActiveHooksRuntime) =>
@@ -394,8 +399,9 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       unattended,
     };
     if (runtime.triggerPublisher) {
+      const publisher = deliveryContexts.getStore() ?? runtime.triggerPublisher;
       const published = await eventContexts.run(ctx, () =>
-        runtime.triggerPublisher!.publish({
+        publisher.publish({
           type: `hook:${eventName}`,
           payload: invocation,
         }),
@@ -806,17 +812,22 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
                   "TriggerEngine supplied an invalid Hook event.",
                 );
               }
-              const result = await hooks.handle(
-                {
-                  event:
-                    invocation.event as (typeof declarativeHookEvents)[number],
-                  payload: invocation.payload as Readonly<
-                    Record<string, PlainData>
-                  >,
-                  cwd: invocation.cwd,
-                  unattended: invocation.unattended,
-                },
-                delivery.signal,
+              const hookEvent = invocation.event;
+              const hookPayload = invocation.payload as Readonly<
+                Record<string, PlainData>
+              >;
+              const hookCwd = invocation.cwd;
+              const hookUnattended = invocation.unattended;
+              const result = await deliveryContexts.run(delivery, () =>
+                hooks.handle(
+                  {
+                    event: hookEvent as (typeof declarativeHookEvents)[number],
+                    payload: hookPayload,
+                    cwd: hookCwd,
+                    unattended: hookUnattended,
+                  },
+                  delivery.signal,
+                ),
               );
               if (!result.ok) throw new Error("Hook execution failed.");
               return result.value as unknown as import("../core/result.ts").JsonObject;

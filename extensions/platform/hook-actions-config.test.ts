@@ -61,6 +61,30 @@ test("named Hook action config rejects raw authority, duplicate IDs, and unsafe 
   assert.equal(JSON.stringify(decoded.diagnostics).includes("raw"), false);
 });
 
+test("named HTTP action config rejects method and effect mismatches", () => {
+  for (const definition of [
+    { method: "POST", effect: "network-read" },
+    { method: "GET", effect: "remote-write" },
+  ] as const) {
+    const decoded = decodeHookActionConfiguration({
+      http: [
+        {
+          id: "mismatched",
+          url: "https://build.example.test/status",
+          ...definition,
+          allowedOrigins: ["https://build.example.test"],
+          allowLoopback: false,
+        },
+      ],
+      mcp: [],
+    });
+    assert.equal(decoded.http.length, 0);
+    assert.ok(
+      decoded.diagnostics.some(({ path }) => path === "hookActions.http"),
+    );
+  }
+});
+
 test("project Hook action config may replace only an exact existing named mapping", () => {
   const base = decodeHookActionConfiguration({
     http: [

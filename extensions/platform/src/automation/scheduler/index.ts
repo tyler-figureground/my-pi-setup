@@ -14,11 +14,14 @@ import {
 import type {
   HostAuthority,
   PinnedScheduleProfile,
+  ResultDeliveryRequest,
   ScheduleChangeReceipt,
   ScheduleErrorCode,
+  ScheduleOccurrenceSnapshot,
   ScheduleOutcome,
   SchedulePolicy,
   ScheduleSnapshot,
+  Scheduler,
   SchedulerHostAuthorityOptions,
   SchedulerOptions,
 } from "./model.ts";
@@ -76,6 +79,8 @@ const COMMAND_TYPES = new Set([
   "delete",
 ]);
 const SCHEDULE_STATES = new Set(["active", "paused", "blocked", "deleted"]);
+const CANCELLATION_POLL_MS = 100;
+const CANCELLATION_ACK_WAIT_MS = 2_000;
 const DEFINITION_COMMAND_KEYS = new Set([
   "type",
   "requestId",
@@ -614,7 +619,16 @@ export function createSchedulerHostAuthority(
           },
         };
       }
-      const profile = options.profiles.resolve(request.profileName);
+      const profile = options.profiles.revalidate
+        ? await options.profiles.revalidate(request.profileName, {
+            projectRoot: resolved.value.canonicalCwd,
+            projectTrusted: true,
+          })
+        : (await options.profiles.reload({
+            projectRoot: resolved.value.canonicalCwd,
+            projectTrusted: true,
+          }),
+          options.profiles.resolve(request.profileName));
       if (!profile.ok || profile.value.policy.role !== "scheduled") {
         return {
           ok: false as const,
@@ -696,6 +710,7 @@ export async function createScheduler(options: SchedulerOptions) {
   const persistence = createSchedulerPersistence(
     options.state,
     options.binding.project.projectId,
+    options.binding.creatorSessionId,
   );
   const loadDefinitions = async () => {
     const entries: { value: PersistedSchedule; version: number }[] = [];
@@ -801,6 +816,7 @@ export async function createScheduler(options: SchedulerOptions) {
   const activeTasks = new Set<Promise<void>>();
   const activeDeliveries = new Set<Promise<unknown>>();
   const occurrenceDeliveries = new Map<string, Promise<unknown>>();
+  const deliveryControllers = new Map<string, AbortController>();
   const occurrenceTasks = new Map<string, Promise<void>>();
   const scheduleGenerations = new Map<string, number>();
   const activeClaims = new Map<
@@ -811,26 +827,19 @@ export async function createScheduler(options: SchedulerOptions) {
       readonly controller: AbortController;
       readonly generation: number;
       renewAt: number;
+      pollAt: number;
       timeoutAt?: number;
       timeout?: () => void;
     }
   >();
 
-  const boundedAwait = async (
+  const awaitCleanup = async (
     tasks: readonly (Promise<unknown> | undefined)[],
   ) => {
     const pending = tasks.filter(
       (task): task is Promise<unknown> => task !== undefined,
     );
-    if (pending.length === 0) return;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      Promise.allSettled(pending),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, 500);
-      }),
-    ]);
-    if (timeout) clearTimeout(timeout);
+    if (pending.length > 0) await Promise.allSettled(pending);
   };
 
   const generationFor = (scheduleId: string) =>
@@ -850,11 +859,14 @@ export async function createScheduler(options: SchedulerOptions) {
     );
   };
 
-  const deliver = (
-    request: Parameters<SchedulerOptions["delivery"]["deliver"]>[0],
-  ) => {
+  const deliver = (request: Omit<ResultDeliveryRequest, "generation">) => {
+    const controller = new AbortController();
+    const generation = generationFor(request.scheduleId);
+    deliveryControllers.set(request.occurrenceId, controller);
     const task = Promise.resolve()
-      .then(() => options.delivery.deliver(request))
+      .then(() =>
+        options.delivery.deliver({ ...request, generation }, controller.signal),
+      )
       .catch(() => ({
         ok: false as const,
         error: {
@@ -867,8 +879,10 @@ export async function createScheduler(options: SchedulerOptions) {
     occurrenceDeliveries.set(request.occurrenceId, task);
     const remove = () => {
       activeDeliveries.delete(task);
-      if (occurrenceDeliveries.get(request.occurrenceId) === task)
+      if (occurrenceDeliveries.get(request.occurrenceId) === task) {
         occurrenceDeliveries.delete(request.occurrenceId);
+        deliveryControllers.delete(request.occurrenceId);
+      }
     };
     void task.then(remove, remove);
     return task;
@@ -900,10 +914,12 @@ export async function createScheduler(options: SchedulerOptions) {
           ...(nextAt ? [Date.parse(nextAt)] : []),
           ...(pendingRunNow ? [Date.parse(pendingRunNow.dueAt)] : []),
         ]),
-      ...[...activeClaims.values()].flatMap(({ renewAt, timeoutAt }) => [
-        renewAt,
-        ...(timeoutAt === undefined ? [] : [timeoutAt]),
-      ]),
+      ...[...activeClaims.values()].flatMap(
+        ({ renewAt, pollAt, timeoutAt }) => [
+          Math.min(renewAt, pollAt),
+          ...(timeoutAt === undefined ? [] : [timeoutAt]),
+        ],
+      ),
       ...[...pendingRecovery.values()].map(({ at }) => at),
     ]
       .filter(Number.isFinite)
@@ -1274,6 +1290,8 @@ export async function createScheduler(options: SchedulerOptions) {
     }
     const promptText = new TextDecoder().decode(prompt.value.body);
     const initialAttempt = entry.value.currentOccurrence.attempt + 1;
+    const claim = activeClaims.get(occurrenceId);
+    if (!claim) return;
 
     for (let attempt = initialAttempt; ; attempt += 1) {
       entry = await refresh(scheduleId);
@@ -1285,13 +1303,16 @@ export async function createScheduler(options: SchedulerOptions) {
         !claimIsCurrent(scheduleId, occurrenceId, fence)
       )
         return;
-      const authority = await options.authority.authorize({
-        projectId: entry.value.binding.projectId,
-        cwd: entry.value.binding.cwd,
-        profileName: entry.value.profile.name,
-        expectedProfile: entry.value.profile,
-        credentialReferences: entry.value.credentialReferences,
-      });
+      const authority = await options.authority.authorize(
+        {
+          projectId: entry.value.binding.projectId,
+          cwd: entry.value.binding.cwd,
+          profileName: entry.value.profile.name,
+          expectedProfile: entry.value.profile,
+          credentialReferences: entry.value.credentialReferences,
+        },
+        claim.controller.signal,
+      );
       if (closed) return;
       if (
         !authority.ok ||
@@ -1355,8 +1376,6 @@ export async function createScheduler(options: SchedulerOptions) {
           entry.version + 1,
         ),
       });
-      const claim = activeClaims.get(occurrenceId);
-      if (!claim) return;
       options.hookEvents?.publish("schedule.started", {
         scheduleId,
         occurrenceId,
@@ -1526,6 +1545,7 @@ export async function createScheduler(options: SchedulerOptions) {
       renewAt:
         options.clock.now() +
         Math.max(1, Math.floor(configuration.leaseTtlMs / 3)),
+      pollAt: options.clock.now() + CANCELLATION_POLL_MS,
     });
     startExecution(scheduleId, occurrence.id, lease.fence);
   }
@@ -1705,7 +1725,11 @@ export async function createScheduler(options: SchedulerOptions) {
         entry.value.revision,
         "regular",
         dueAt,
-        options.binding.project.projectId,
+        `${options.binding.project.projectId}\0${
+          entry.value.scope === "session"
+            ? entry.value.binding.creatorSessionId
+            : "durable"
+        }`,
       );
     }
     const claimedAt = new Date(nowMs).toISOString();
@@ -1754,6 +1778,7 @@ export async function createScheduler(options: SchedulerOptions) {
       renewAt:
         options.clock.now() +
         Math.max(1, Math.floor(configuration.leaseTtlMs / 3)),
+      pollAt: options.clock.now() + CANCELLATION_POLL_MS,
     });
     options.hookEvents?.publish("schedule.due", {
       scheduleId: entry.value.id,
@@ -1771,6 +1796,51 @@ export async function createScheduler(options: SchedulerOptions) {
         claim.controller.abort(new Error("Scheduled occurrence timed out."));
         claim.timeout?.();
         claim.timeoutAt = undefined;
+      }
+      if (claim.pollAt <= now) {
+        claim.pollAt = now + CANCELLATION_POLL_MS;
+        const requested = await persistence.cancellation(occurrenceId);
+        if (!requested.ok) {
+          claim.controller.abort(
+            new Error("Scheduled cancellation state is unavailable."),
+          );
+          activeClaims.delete(occurrenceId);
+          continue;
+        }
+        if (
+          requested.value &&
+          requested.value.value.scheduleId === claim.scheduleId &&
+          requested.value.value.claimantOwner === options.ownerId &&
+          requested.value.value.fence === claim.fence &&
+          requested.value.value.acknowledgedAt === undefined
+        ) {
+          claim.controller.abort(
+            new Error(
+              `Scheduled occurrence was ${requested.value.value.action === "pause" ? "paused" : "deleted"}.`,
+            ),
+          );
+          deliveryControllers.get(occurrenceId)?.abort();
+          await awaitCleanup([
+            occurrenceTasks.get(occurrenceId),
+            occurrenceDeliveries.get(occurrenceId),
+          ]);
+          await persistence.releaseLease({
+            transactionId: `scheduler.cancel-release:${occurrenceId}:${claim.fence}`,
+            resource: occurrenceResource(occurrenceId),
+            owner: options.ownerId,
+            fence: claim.fence,
+          });
+          await persistence.acknowledgeCancellation({
+            occurrenceId,
+            cancellation: {
+              ...requested.value.value,
+              acknowledgedAt: new Date(options.clock.now()).toISOString(),
+            },
+            expectedVersion: requested.value.version,
+          });
+          activeClaims.delete(occurrenceId);
+          continue;
+        }
       }
       if (claim.renewAt > now) continue;
       const entry = await refresh(claim.scheduleId);
@@ -1895,7 +1965,81 @@ export async function createScheduler(options: SchedulerOptions) {
     };
   };
 
-  const scheduler = {
+  const coordinateCancellation = async (
+    scheduleId: string,
+    occurrence: ScheduleOccurrenceSnapshot | null,
+    action: "pause" | "delete",
+    requestId: string,
+  ) => {
+    if (!occurrence) return undefined;
+    const lease = await persistence.occurrenceLease(occurrence.id);
+    if (
+      !lease.ok ||
+      !lease.value ||
+      lease.value.owner === null ||
+      lease.value.expiresAt <= options.clock.now()
+    ) {
+      return "acknowledged" as const;
+    }
+    const cancellation = {
+      scheduleId,
+      occurrenceId: occurrence.id,
+      generation: generationFor(scheduleId),
+      action,
+      claimantOwner: lease.value.owner,
+      fence: lease.value.fence,
+      requestedAt: new Date(options.clock.now()).toISOString(),
+    };
+    const claim = activeClaims.get(occurrence.id);
+    const requested = await persistence.requestCancellation({
+      requestId,
+      cancellation,
+    });
+    if (!requested.ok && requested.error.code !== "VERSION_CONFLICT") {
+      return "unknown" as const;
+    }
+
+    if (
+      claim?.fence === cancellation.fence &&
+      cancellation.claimantOwner === options.ownerId
+    ) {
+      claim.controller.abort(new Error(`Scheduled occurrence was ${action}d.`));
+      deliveryControllers.get(occurrence.id)?.abort();
+      await awaitCleanup([
+        occurrenceTasks.get(occurrence.id),
+        occurrenceDeliveries.get(occurrence.id),
+      ]);
+      await persistence.releaseLease({
+        transactionId: `scheduler.cancel-release:${occurrence.id}:${claim.fence}`,
+        resource: occurrenceResource(occurrence.id),
+        owner: options.ownerId,
+        fence: claim.fence,
+      });
+      const pending = await persistence.cancellation(occurrence.id);
+      if (pending.ok && pending.value && !pending.value.value.acknowledgedAt) {
+        await persistence.acknowledgeCancellation({
+          occurrenceId: occurrence.id,
+          cancellation: {
+            ...pending.value.value,
+            acknowledgedAt: new Date(options.clock.now()).toISOString(),
+          },
+          expectedVersion: pending.value.version,
+        });
+      }
+      activeClaims.delete(occurrence.id);
+    }
+
+    const deadline = Date.now() + CANCELLATION_ACK_WAIT_MS;
+    while (Date.now() <= deadline) {
+      const current = await persistence.cancellation(occurrence.id);
+      if (!current.ok) return "unknown" as const;
+      if (current.value?.value.acknowledgedAt) return "acknowledged" as const;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+    return "unknown" as const;
+  };
+
+  const scheduler: Scheduler = {
     async change(
       input: Parameters<import("./model.ts").Scheduler["change"]>[0],
     ) {
@@ -2067,6 +2211,7 @@ export async function createScheduler(options: SchedulerOptions) {
           digest,
           schedule: replaced,
           expectedVersion: existing.version,
+          previousScope: existing.value.scope,
         });
         if (!committed.ok) {
           const replay = await recoverCommittedRequest(
@@ -2158,7 +2303,11 @@ export async function createScheduler(options: SchedulerOptions) {
                 updated.revision,
                 "run-now",
                 command.requestId,
-                options.binding.project.projectId,
+                `${options.binding.project.projectId}\0${
+                  existing.value.scope === "session"
+                    ? existing.value.binding.creatorSessionId
+                    : "durable"
+                }`,
               ),
               dueAt,
             },
@@ -2211,32 +2360,24 @@ export async function createScheduler(options: SchedulerOptions) {
             return storageFailure();
           }
           schedules.delete(command.id);
-          const currentTask = current
-            ? occurrenceTasks.get(current.id)
-            : undefined;
-          const currentDelivery = current
-            ? occurrenceDeliveries.get(current.id)
-            : undefined;
-          if (current) {
-            const claim = activeClaims.get(current.id);
-            if (claim) {
-              claim.controller.abort(
-                new Error("Scheduled occurrence was deleted."),
-              );
-              activeClaims.delete(current.id);
-              await persistence.releaseLease({
-                transactionId: `scheduler.delete-release:${command.requestId}`,
-                resource: occurrenceResource(current.id),
-                owner: options.ownerId,
-                fence: claim.fence,
-              });
-            }
-          }
-          await boundedAwait([currentTask, currentDelivery]);
+          const cancellation = await coordinateCancellation(
+            command.id,
+            current ?? null,
+            "delete",
+            command.requestId,
+          );
+          if (!current || cancellation === "acknowledged")
+            scheduleGenerations.delete(command.id);
           arm();
           return {
             ok: true as const,
-            value: { schedule: deleted, replayed: committed.value.replayed },
+            value: {
+              schedule: deleted,
+              replayed: committed.value.replayed,
+              ...(cancellation
+                ? { cancellation: { state: cancellation } }
+                : {}),
+            },
           };
         }
 
@@ -2267,31 +2408,22 @@ export async function createScheduler(options: SchedulerOptions) {
             existing.version + 1,
           ),
         });
-        if (command.type === "pause" && existing.value.currentOccurrence) {
-          const occurrenceId = existing.value.currentOccurrence.id;
-          const currentTask = occurrenceTasks.get(occurrenceId);
-          const currentDelivery = occurrenceDeliveries.get(occurrenceId);
-          const claim = activeClaims.get(occurrenceId);
-          if (claim) {
-            claim.controller.abort(
-              new Error("Scheduled occurrence was paused."),
-            );
-            activeClaims.delete(occurrenceId);
-            await persistence.releaseLease({
-              transactionId: `scheduler.pause-release:${command.requestId}`,
-              resource: occurrenceResource(occurrenceId),
-              owner: options.ownerId,
-              fence: claim.fence,
-            });
-          }
-          await boundedAwait([currentTask, currentDelivery]);
-        }
+        const cancellation =
+          command.type === "pause"
+            ? await coordinateCancellation(
+                command.id,
+                existing.value.currentOccurrence,
+                "pause",
+                command.requestId,
+              )
+            : undefined;
         arm();
         return {
           ok: true as const,
           value: {
             schedule: publicSnapshot(updated),
             replayed: committed.value.replayed,
+            ...(cancellation ? { cancellation: { state: cancellation } } : {}),
           },
         };
       }
@@ -2515,7 +2647,7 @@ export async function createScheduler(options: SchedulerOptions) {
         },
       };
     },
-  } satisfies import("./model.ts").Scheduler;
+  };
 
   return {
     ok: true as const,
@@ -2529,7 +2661,10 @@ export async function createScheduler(options: SchedulerOptions) {
         cancelWake = undefined;
         for (const claim of activeClaims.values())
           claim.controller.abort(new Error("Scheduler closed."));
-        await boundedAwait([...activeTasks, ...activeDeliveries]);
+        for (const controller of deliveryControllers.values())
+          controller.abort(new Error("Scheduler closed."));
+        await awaitCleanup([...activeTasks, ...activeDeliveries]);
+        scheduleGenerations.clear();
         await persistence.cleanupSession(
           options.binding.creatorSessionId,
           retention.maxRequestReceipts,

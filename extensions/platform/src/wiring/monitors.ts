@@ -282,11 +282,7 @@ function normalizeSource(value: unknown, scope: "session" | "durable") {
       url.username ||
       url.password ||
       url.hash ||
-      [...url.searchParams.keys()].some((key) =>
-        /^(?:authorization|password|secret|token|api[-_]?key|credential)$/i.test(
-          key,
-        ),
-      )
+      url.search
     )
       throw new Error("WebSocket Monitor source input is invalid.");
     return {

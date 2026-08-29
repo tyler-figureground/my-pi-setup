@@ -810,6 +810,89 @@ test("named poll adapter backs off offline without overlap and rejects arbitrary
   }
 });
 
+test("WebSocket core and source reject every query string before persistence or client load", async () => {
+  const origin = "wss://events.example.test";
+  let clientLoads = 0;
+  const sourceFactory = createWebSocketMonitorSourceFactory({
+    allowedOrigins: [origin],
+    control: {
+      async authorize() {
+        throw new Error("must not authorize query URL");
+      },
+    },
+    async loadClient() {
+      clientLoads += 1;
+      throw new Error("must not load query URL");
+    },
+  });
+  await assert.rejects(
+    sourceFactory.open(
+      {
+        id: "query-source",
+        revision: 1,
+        scope: "durable",
+        state: "active",
+        source: {
+          kind: "websocket",
+          url: `${origin}/events?access_token=source-secret`,
+        },
+        delivery: { kind: "session", sessionId: "parent-session" },
+      },
+      () => undefined,
+      new AbortController().signal,
+    ),
+    /invalid/u,
+  );
+  assert.equal(clientLoads, 0);
+
+  const state = createMemoryStateStore();
+  const fixture = createFixture();
+  let opens = 0;
+  fixture.options.sources = {
+    async open() {
+      opens += 1;
+      return { close() {} };
+    },
+  };
+  const opened = await createMonitorRegistry({
+    ...fixture.options,
+    state,
+    configuration: {
+      maxActive: 128,
+      maxRemote: 16,
+      batchWindowMs: 10,
+      pollMinimumMs: 5_000,
+      allowedWebSocketOrigins: [origin],
+      allowLoopback: false,
+      pollTargets: [],
+    },
+  });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const rejected = await opened.value.registry.change({
+    type: "create",
+    requestId: "query-core-create",
+    id: "query-core",
+    expectedRevision: 0,
+    scope: "durable",
+    source: {
+      kind: "websocket",
+      url: `${origin}/events?access_token=core-secret`,
+    },
+    delivery: { kind: "session", sessionId: "parent-session" },
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(opens, 0);
+  const exported = await state.export({ format: "snapshot" });
+  assert.equal(exported.ok, true);
+  if (exported.ok)
+    assert.equal(JSON.stringify(exported.value).includes("core-secret"), false);
+
+  await opened.value.close();
+  await fixture.triggers.close();
+  await fixture.lifecycle.shutdown("quit");
+});
+
 test("WebSocket source pins lookup, caps payload, disables compression, and reauthorizes reconnect", async () => {
   const server = new WebSocketServer({ port: 0, perMessageDeflate: true });
   await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -1130,6 +1213,117 @@ test("durable definitions restore blocked until authority is revalidated", async
   await replayFixture.lifecycle.shutdown("quit");
 });
 
+test("restore overwrites stale or forged persisted delivery with current host session", async () => {
+  const state = createMemoryStateStore();
+  const writer = createFixture();
+  writer.options.binding = {
+    ...writer.options.binding,
+    sessionId: "stale-session",
+  };
+  const opened = await createMonitorRegistry({ ...writer.options, state });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "create",
+        requestId: "forged-route-create",
+        id: "forged-route",
+        expectedRevision: 0,
+        scope: "durable",
+        source: { kind: "file", root: "C:/monitor-test" },
+        delivery: { kind: "session", sessionId: "stale-session" },
+      })
+    ).ok,
+    true,
+  );
+  await opened.value.close();
+  await writer.triggers.close();
+  await writer.lifecycle.shutdown("reload");
+
+  const exported = await state.export({ format: "snapshot" });
+  assert.equal(exported.ok, true);
+  if (!exported.ok) return;
+  const definition = exported.value.snapshot.records.find(({ collection }) =>
+    collection.startsWith("monitor.definitions."),
+  );
+  assert.ok(definition);
+  const forgedMetadata = structuredClone(definition.metadata) as {
+    definition: { delivery: { kind: "session"; sessionId: string } };
+  };
+  forgedMetadata.definition.delivery.sessionId = "attacker-session";
+  assert.equal(
+    (
+      await state.transact({
+        transactionId: "forge-monitor-recipient",
+        operations: [
+          {
+            type: "put-record",
+            collection: definition.collection,
+            key: definition.key,
+            expectedVersion: definition.version,
+            metadata: forgedMetadata,
+          },
+        ],
+      })
+    ).ok,
+    true,
+  );
+
+  const restored = createFixture();
+  restored.options.binding = {
+    ...restored.options.binding,
+    sessionId: "current-session",
+  };
+  let emit!: (event: MonitorSourceEvent) => void;
+  let authorizedSession = "";
+  const routes: string[] = [];
+  restored.options.sources = {
+    async open(_definition, publish) {
+      emit = publish;
+      return { close() {} };
+    },
+  };
+  restored.options.authority = {
+    async authorize({ definition }) {
+      authorizedSession = definition.delivery.sessionId;
+      return { ok: true, value: { allowed: true } };
+    },
+  };
+  restored.options.delivery = {
+    async deliver(request) {
+      routes.push(request.route.sessionId);
+      return { ok: true, value: { state: "delivered" } };
+    },
+  };
+  const reopened = await createMonitorRegistry({
+    ...restored.options,
+    state,
+    limits: { batchWindowMs: 1 },
+  });
+  assert.equal(reopened.ok, true);
+  if (!reopened.ok) return;
+  const inspected = await reopened.value.registry.inspect({
+    id: "forged-route",
+  });
+  assert.equal(inspected.ok, true);
+  if (inspected.ok)
+    assert.equal(
+      inspected.value.monitors[0]?.delivery.sessionId,
+      "current-session",
+    );
+  assert.equal(authorizedSession, "current-session");
+
+  emit({ type: "filesystem.change", payload: { path: "ready.txt" } });
+  for (let spin = 0; routes.length === 0 && spin < 50; spin += 1)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(routes, ["current-session"]);
+
+  await reopened.value.close();
+  await restored.triggers.close();
+  await restored.lifecycle.shutdown("quit");
+});
+
 test("replace, resume, stop, and delete transition one revision at a time", async () => {
   const fixture = createFixture();
   const closedSources: string[] = [];
@@ -1220,6 +1414,191 @@ test("replace, resume, stop, and delete transition one revision at a time", asyn
   assert.equal(inspected.ok, true);
   if (inspected.ok) assert.deepEqual(inspected.value.monitors, []);
   assert.deepEqual(closedSources, ["terminal-a", "terminal-a", "terminal-b"]);
+
+  await opened.value.close();
+  await fixture.triggers.close();
+  await fixture.lifecycle.shutdown("quit");
+});
+
+test("monitor lifecycle revokes Trigger sources on pause replace stop delete and close", async () => {
+  const fixture = createFixture();
+  let revocations = 0;
+  const triggers = fixture.triggers;
+  fixture.options.triggers = {
+    ...triggers,
+    revokeSource(source) {
+      revocations += 1;
+      return triggers.revokeSource(source);
+    },
+  };
+  const opened = await createMonitorRegistry(fixture.options);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const create = async (id: string) => {
+    const created = await opened.value.registry.change({
+      type: "create",
+      requestId: `${id}-create`,
+      id,
+      expectedRevision: 0,
+      scope: "session",
+      source: { kind: "terminal", terminalId: `${id}-terminal` },
+      delivery: { kind: "session", sessionId: "parent-session" },
+    });
+    assert.equal(created.ok, true);
+  };
+  for (const id of [
+    "pause-revoke",
+    "replace-revoke",
+    "stop-revoke",
+    "delete-revoke",
+    "close-revoke",
+  ])
+    await create(id);
+
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "pause",
+        requestId: "pause-revoke-change",
+        id: "pause-revoke",
+        expectedRevision: 1,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "replace",
+        requestId: "replace-revoke-change",
+        id: "replace-revoke",
+        expectedRevision: 1,
+        scope: "session",
+        source: { kind: "terminal", terminalId: "replacement-terminal" },
+        delivery: { kind: "session", sessionId: "parent-session" },
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "stop",
+        requestId: "stop-revoke-change",
+        id: "stop-revoke",
+        expectedRevision: 1,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "delete",
+        requestId: "delete-revoke-change",
+        id: "delete-revoke",
+        expectedRevision: 1,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(revocations, 4);
+
+  await opened.value.close();
+  assert.equal(revocations, 6);
+  await fixture.triggers.close();
+  await fixture.lifecycle.shutdown("quit");
+});
+
+test("resolved credential canaries redact nested exact and encoded evidence with short sensitive retention", async () => {
+  const fixture = createFixture();
+  const state = createMemoryStateStore();
+  const secret = "phase7+/canary=91d0a6";
+  const requests: MonitorDeliveryRequest[] = [];
+  let emit!: (event: MonitorSourceEvent) => void;
+  fixture.options.credentialCanaries = async (definition) => {
+    assert.equal(
+      definition.source.kind === "poll"
+        ? definition.source.credentialReference
+        : undefined,
+      "credential:monitor-canary",
+    );
+    return [secret];
+  };
+  fixture.options.sources = {
+    async open(_definition, publish) {
+      emit = publish;
+      return { close() {} };
+    },
+  };
+  fixture.options.delivery = {
+    async deliver(request) {
+      requests.push(request);
+      return { ok: true, value: { state: "delivered" } };
+    },
+  };
+  const before = Date.now();
+  const opened = await createMonitorRegistry({
+    ...fixture.options,
+    state,
+    limits: { batchWindowMs: 1 },
+  });
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  assert.equal(
+    (
+      await opened.value.registry.change({
+        type: "create",
+        requestId: "canary-create",
+        id: "canary-monitor",
+        expectedRevision: 0,
+        scope: "durable",
+        source: {
+          kind: "poll",
+          adapter: "status",
+          intervalMs: 5_000,
+          credentialReference: "credential:monitor-canary",
+        },
+        delivery: { kind: "session", sessionId: "parent-session" },
+      })
+    ).ok,
+    true,
+  );
+
+  emit({
+    type: "poll.value",
+    payload: {
+      status: "READY",
+      nested: {
+        value: secret,
+        encoded: encodeURIComponent(secret),
+        base64: Buffer.from(secret).toString("base64"),
+      },
+    },
+  });
+  for (let spin = 0; requests.length === 0 && spin < 50; spin += 1)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(requests.length, 1);
+  const evidence = await fixture.artifacts.get(requests[0]!.evidence.id);
+  assert.equal(evidence.ok, true);
+  if (evidence.ok) {
+    const body = Buffer.from(evidence.value.body).toString("utf8");
+    assert.equal(body.includes(secret), false);
+    assert.equal(body.includes(encodeURIComponent(secret)), false);
+    assert.equal(body.includes(Buffer.from(secret).toString("base64")), false);
+    assert.equal((body.match(/\[REDACTED\]/gu) ?? []).length >= 3, true);
+    assert.equal(evidence.value.metadata.metadata?.retention, "sensitive");
+    assert.equal(
+      typeof evidence.value.metadata.expiresAt === "number" &&
+        evidence.value.metadata.expiresAt > before &&
+        evidence.value.metadata.expiresAt <= before + 60 * 60_000,
+      true,
+    );
+  }
+  const exported = await state.export({ format: "snapshot" });
+  assert.equal(exported.ok, true);
+  if (exported.ok)
+    assert.equal(JSON.stringify(exported.value).includes(secret), false);
 
   await opened.value.close();
   await fixture.triggers.close();

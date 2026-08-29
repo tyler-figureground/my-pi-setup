@@ -4,10 +4,11 @@ import type {
   StateRecord,
   StateStore,
 } from "../../core/persistence/state-store.ts";
-import type { ScheduleSnapshot } from "./model.ts";
+import type { ScheduleScope, ScheduleSnapshot } from "./model.ts";
 
 const DEFINITION_COLLECTION_PREFIX = "scheduler.definitions";
 const REQUEST_COLLECTION_PREFIX = "scheduler.requests";
+const CANCELLATION_COLLECTION_PREFIX = "scheduler.cancellations";
 
 export interface PersistedSchedule extends ScheduleSnapshot {
   readonly credentialReferences: readonly string[];
@@ -20,6 +21,17 @@ export interface PersistedSchedule extends ScheduleSnapshot {
 export interface PersistedScheduleRequest {
   readonly digest: string;
   readonly schedule: ScheduleSnapshot;
+}
+
+export interface PersistedCancellationRequest {
+  readonly scheduleId: string;
+  readonly occurrenceId: string;
+  readonly generation: number;
+  readonly action: "pause" | "delete";
+  readonly claimantOwner: string;
+  readonly fence: number;
+  readonly requestedAt: string;
+  readonly acknowledgedAt?: string;
 }
 
 function json(value: unknown) {
@@ -326,12 +338,22 @@ export function scheduleCommandDigest(command: unknown) {
 export function createSchedulerPersistence(
   state: StateStore,
   projectId: string,
+  creatorSessionId: string,
 ) {
   const namespace = createHash("sha256").update(projectId).digest("hex");
-  const DEFINITION_COLLECTION = `${DEFINITION_COLLECTION_PREFIX}.${namespace}`;
-  const REQUEST_COLLECTION = `${REQUEST_COLLECTION_PREFIX}.${namespace}`;
+  const creatorNamespace = createHash("sha256")
+    .update(creatorSessionId)
+    .digest("hex");
+  const DURABLE_DEFINITION_COLLECTION = `${DEFINITION_COLLECTION_PREFIX}.${namespace}`;
+  const SESSION_DEFINITION_COLLECTION = `${DEFINITION_COLLECTION_PREFIX}.${namespace}.session.${creatorNamespace}`;
+  const REQUEST_COLLECTION = `${REQUEST_COLLECTION_PREFIX}.${namespace}.${creatorNamespace}`;
+  const CANCELLATION_COLLECTION = `${CANCELLATION_COLLECTION_PREFIX}.${namespace}`;
+  const definitionCollection = (scope: ScheduleScope) =>
+    scope === "session"
+      ? SESSION_DEFINITION_COLLECTION
+      : DURABLE_DEFINITION_COLLECTION;
   const namespacedTransactionId = (value: string) =>
-    `scheduler:${namespace}:${createHash("sha256").update(value).digest("hex")}`;
+    `scheduler:${namespace}:${creatorNamespace}:${createHash("sha256").update(value).digest("hex")}`;
   const transact = (transaction: Parameters<StateStore["transact"]>[0]) =>
     state.transact({
       ...transaction,
@@ -355,36 +377,57 @@ export function createSchedulerPersistence(
       return (
         result.records.find(
           ({ collection, key }) =>
-            collection === DEFINITION_COLLECTION && key === id,
+            (collection === SESSION_DEFINITION_COLLECTION ||
+              collection === DURABLE_DEFINITION_COLLECTION) &&
+            key === id,
         )?.version ?? fallback
       );
     },
     async definition(id: string) {
-      const queried = await state.query({
-        type: "record",
-        collection: DEFINITION_COLLECTION,
-        key: id,
-      });
-      if (!queried.ok) return queried;
-      if (queried.value.type !== "record") return storageFailure();
-      return decodeDefinition(queried.value.record, projectId);
+      for (const collection of [
+        SESSION_DEFINITION_COLLECTION,
+        DURABLE_DEFINITION_COLLECTION,
+      ]) {
+        const queried = await state.query({
+          type: "record",
+          collection,
+          key: id,
+        });
+        if (!queried.ok) return queried;
+        if (queried.value.type !== "record") return storageFailure();
+        const decoded = decodeDefinition(queried.value.record, projectId);
+        if (!decoded.ok) return decoded;
+        if (decoded.value) return decoded;
+      }
+      return { ok: true as const, value: null };
     },
 
     async definitions(afterId?: string, limit = 1_000) {
-      const queried = await state.query({
-        type: "records",
-        collection: DEFINITION_COLLECTION,
-        ...(afterId ? { afterKey: afterId } : {}),
-        limit,
-      });
-      if (!queried.ok) return queried;
-      if (queried.value.type !== "records") return storageFailure();
-      const definitions: { value: PersistedSchedule; version: number }[] = [];
-      for (const record of queried.value.records) {
-        const decoded = decodeDefinition(record, projectId);
-        if (!decoded.ok) return decoded;
-        if (decoded.value) definitions.push(decoded.value);
+      const byId = new Map<
+        string,
+        { value: PersistedSchedule; version: number }
+      >();
+      for (const collection of [
+        DURABLE_DEFINITION_COLLECTION,
+        SESSION_DEFINITION_COLLECTION,
+      ]) {
+        const queried = await state.query({
+          type: "records",
+          collection,
+          limit: 1_000,
+        });
+        if (!queried.ok) return queried;
+        if (queried.value.type !== "records") return storageFailure();
+        for (const record of queried.value.records) {
+          const decoded = decodeDefinition(record, projectId);
+          if (!decoded.ok) return decoded;
+          if (decoded.value) byId.set(decoded.value.value.id, decoded.value);
+        }
       }
+      const definitions = [...byId.values()]
+        .filter(({ value }) => !afterId || value.id > afterId)
+        .sort((left, right) => left.value.id.localeCompare(right.value.id))
+        .slice(0, limit);
       return { ok: true as const, value: definitions };
     },
 
@@ -407,9 +450,10 @@ export function createSchedulerPersistence(
     },
 
     async cleanupSession(sessionId: string, limit: number) {
+      if (sessionId !== creatorSessionId) return storageFailure();
       const definitions = await state.query({
         type: "records",
-        collection: DEFINITION_COLLECTION,
+        collection: SESSION_DEFINITION_COLLECTION,
         limit,
       });
       const requests = await state.query({
@@ -436,7 +480,7 @@ export function createSchedulerPersistence(
         ) {
           sessionScheduleIds.add(decoded.value.value.id);
           targets.push({
-            collection: DEFINITION_COLLECTION,
+            collection: SESSION_DEFINITION_COLLECTION,
             key: record.key,
             version: record.version,
           });
@@ -510,6 +554,90 @@ export function createSchedulerPersistence(
       return { ok: true as const, value: lease };
     },
 
+    async cancellation(occurrenceId: string) {
+      const queried = await state.query({
+        type: "record",
+        collection: CANCELLATION_COLLECTION,
+        key: occurrenceId,
+      });
+      if (!queried.ok) return queried;
+      if (queried.value.type !== "record") return storageFailure();
+      if (!queried.value.record) return { ok: true as const, value: null };
+      const value = exact(
+        queried.value.record.metadata,
+        [
+          "scheduleId",
+          "occurrenceId",
+          "generation",
+          "action",
+          "claimantOwner",
+          "fence",
+          "requestedAt",
+        ],
+        ["acknowledgedAt"],
+      );
+      if (
+        !value ||
+        typeof value.scheduleId !== "string" ||
+        !/^[a-z][a-z0-9-]{0,127}$/.test(value.scheduleId) ||
+        value.occurrenceId !== occurrenceId ||
+        !/^[a-f0-9]{64}$/.test(occurrenceId) ||
+        !Number.isSafeInteger(value.generation) ||
+        (value.generation as number) < 1 ||
+        (value.action !== "pause" && value.action !== "delete") ||
+        !boundedString(value.claimantOwner, 512) ||
+        !Number.isSafeInteger(value.fence) ||
+        (value.fence as number) < 1 ||
+        !instant(value.requestedAt) ||
+        (value.acknowledgedAt !== undefined && !instant(value.acknowledgedAt))
+      )
+        return storageFailure();
+      return {
+        ok: true as const,
+        value: {
+          value: value as unknown as PersistedCancellationRequest,
+          version: queried.value.record.version,
+        },
+      };
+    },
+
+    requestCancellation(input: {
+      readonly requestId: string;
+      readonly cancellation: PersistedCancellationRequest;
+    }) {
+      return transact({
+        transactionId: `scheduler.cancel-request:${input.requestId}`,
+        operations: [
+          {
+            type: "put-record",
+            collection: CANCELLATION_COLLECTION,
+            key: input.cancellation.occurrenceId,
+            metadata: json(input.cancellation),
+            expectedVersion: null,
+          },
+        ],
+      });
+    },
+
+    acknowledgeCancellation(input: {
+      readonly occurrenceId: string;
+      readonly cancellation: PersistedCancellationRequest;
+      readonly expectedVersion: number;
+    }) {
+      return transact({
+        transactionId: `scheduler.cancel-ack:${input.occurrenceId}:${input.cancellation.generation}`,
+        operations: [
+          {
+            type: "put-record",
+            collection: CANCELLATION_COLLECTION,
+            key: input.occurrenceId,
+            metadata: json(input.cancellation),
+            expectedVersion: input.expectedVersion,
+          },
+        ],
+      });
+    },
+
     async request(requestId: string) {
       const queried = await state.query({
         type: "record",
@@ -526,21 +654,35 @@ export function createSchedulerPersistence(
       readonly digest: string;
       readonly schedule: PersistedSchedule;
       readonly expectedVersion: number | null;
+      readonly previousScope?: ScheduleScope;
     }) {
       const {
         credentialReferences: _credentialReferences,
         pendingRunNow: _pendingRunNow,
         ...receiptSchedule
       } = input.schedule;
+      const moved =
+        input.previousScope !== undefined &&
+        input.previousScope !== input.schedule.scope;
       return transact({
         transactionId: `scheduler.change:${input.requestId}`,
         operations: [
+          ...(moved
+            ? [
+                {
+                  type: "delete-record" as const,
+                  collection: definitionCollection(input.previousScope!),
+                  key: input.schedule.id,
+                  expectedVersion: input.expectedVersion,
+                },
+              ]
+            : []),
           {
             type: "put-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             metadata: json(input.schedule),
-            expectedVersion: input.expectedVersion,
+            expectedVersion: moved ? null : input.expectedVersion,
           },
           {
             type: "put-record",
@@ -566,7 +708,7 @@ export function createSchedulerPersistence(
         operations: [
           {
             type: "put-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             metadata: json(input.schedule),
             expectedVersion: input.expectedVersion,
@@ -600,7 +742,7 @@ export function createSchedulerPersistence(
         operations: [
           {
             type: "put-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             metadata: json(input.schedule),
             expectedVersion: input.expectedVersion,
@@ -648,7 +790,7 @@ export function createSchedulerPersistence(
         operations: [
           {
             type: "put-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             metadata: json(input.schedule),
             expectedVersion: input.expectedVersion,
@@ -673,7 +815,7 @@ export function createSchedulerPersistence(
         operations: [
           {
             type: "put-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             metadata: json(input.schedule),
             expectedVersion: input.expectedVersion,
@@ -693,7 +835,7 @@ export function createSchedulerPersistence(
         operations: [
           {
             type: "delete-record",
-            collection: DEFINITION_COLLECTION,
+            collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             expectedVersion: input.expectedVersion,
           },

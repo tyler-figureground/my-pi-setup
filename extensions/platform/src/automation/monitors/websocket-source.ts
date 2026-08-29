@@ -141,11 +141,7 @@ function canonicalWebSocket(value: string) {
     url.username ||
     url.password ||
     url.hash ||
-    [...url.searchParams.keys()].some((key) =>
-      /^(?:authorization|password|secret|token|api[-_]?key|credential)$/i.test(
-        key,
-      ),
-    )
+    url.search
   )
     throw new TypeError("WebSocket URL is invalid.");
   return url;

@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,10 +18,12 @@ import {
 } from "./src/core/policy/index.ts";
 import {
   createHooks,
+  createNamedHookHttpAdapter,
   createTriggerEngine,
   platformHookEvents,
   type HookProcessResult,
 } from "./src/automation/hooks/index.ts";
+import { createExternalIntegrationControls } from "./src/external/index.ts";
 
 async function fixture(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "pi-hooks-phase7-"));
@@ -712,6 +723,347 @@ hooks:
   });
 });
 
+test("named POST actions are remote writes and issue no request in Plan Mode", async () => {
+  await fixture(async (directory) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    const port = address && typeof address === "object" ? address.port : 0;
+    const origin = `http://plan-hook.example.test:${port}`;
+    const path = join(directory, "hooks.yaml");
+    await writeFile(
+      path,
+      `version: 2
+hooks:
+  - id: plan-post
+    event: tool_call
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: publish, input: { build: 42 } }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const adapter = createNamedHookHttpAdapter({
+      definitions: [
+        {
+          id: "publish",
+          url: `${origin}/status`,
+          method: "POST",
+          effect: "remote-write",
+          allowedOrigins: [origin],
+          allowLoopback: true,
+        },
+      ],
+      controls: createExternalIntegrationControls({
+        resolveHost: async () => ["127.0.0.1"],
+      }),
+      actor: () => "parent",
+      mode: () => "plan",
+    });
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "plan",
+      policy: allowEverything,
+      trust: { isTrusted: () => true },
+      adapters: { http: adapter },
+    });
+    try {
+      assert.equal(adapter.classify("publish"), "remote-write");
+      assert.equal(
+        (
+          await hooks.configure({
+            type: "apply",
+            sources: [{ scope: "global", path }],
+          })
+        ).ok,
+        true,
+      );
+      const handled = await hooks.handle({
+        event: "tool_call",
+        payload: {},
+        cwd: directory,
+        unattended: false,
+      });
+      assert.equal(handled.ok, true);
+      if (handled.ok)
+        assert.match(handled.value.block?.reason ?? "", /Plan Mode/i);
+      assert.equal(requests, 0);
+    } finally {
+      await hooks.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test("default-policy confirmation authorizes one named POST end to end", async () => {
+  await fixture(async (directory) => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests++;
+      assert.equal(request.method, "POST");
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ accepted: true }));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    const port = address && typeof address === "object" ? address.port : 0;
+    const origin = `http://confirmed-hook.example.test:${port}`;
+    const path = join(directory, "hooks.yaml");
+    await writeFile(
+      path,
+      `version: 2
+hooks:
+  - id: confirmed-named-post
+    event: tool_call
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: publish, input: { build: 42 } }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const grants = new Map<string, { scope: string; deadlineMs: number }>();
+    const controls = createExternalIntegrationControls({
+      resolveHost: async () => ["127.0.0.1"],
+      authority: {
+        verify(token) {
+          const grant = grants.get(token.value);
+          if (!grant) return false;
+          grants.delete(token.value);
+          return token.scope === grant.scope && Date.now() <= grant.deadlineMs;
+        },
+      },
+    });
+    let confirmations = 0;
+    const adapter = createNamedHookHttpAdapter({
+      definitions: [
+        {
+          id: "publish",
+          url: `${origin}/status`,
+          method: "POST",
+          effect: "remote-write",
+          allowedOrigins: [origin],
+          allowLoopback: true,
+        },
+      ],
+      controls,
+      actor: () => "parent",
+      mode: () => "normal",
+      issueAuthority(grant) {
+        const value = `confirmed-${grants.size + 1}`;
+        grants.set(value, grant);
+        return {
+          kind: "external-user-authority",
+          value,
+          scope: grant.scope,
+        };
+      },
+    });
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: createCapabilityPolicy(),
+      trust: { isTrusted: () => true },
+      adapters: {
+        http: adapter,
+        ui: {
+          notify() {},
+          setStatus() {},
+          async confirm() {
+            confirmations++;
+            return true;
+          },
+        },
+      },
+    });
+    try {
+      assert.equal(
+        (
+          await hooks.configure({
+            type: "apply",
+            sources: [{ scope: "global", path }],
+          })
+        ).ok,
+        true,
+      );
+      const handled = await hooks.handle({
+        event: "tool_call",
+        payload: {},
+        cwd: directory,
+        unattended: false,
+      });
+      assert.equal(handled.ok, true);
+      if (handled.ok) assert.equal(handled.value.block, undefined);
+      assert.equal(confirmations, 1);
+      assert.equal(requests, 1);
+      assert.equal(grants.size, 0);
+    } finally {
+      await hooks.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test("confirmed HTTP writes receive one exact generation-bound authority", async () => {
+  await fixture(async (directory) => {
+    const path = join(directory, "hooks.yaml");
+    await writeFile(
+      path,
+      `version: 2
+hooks:
+  - id: confirmed-http
+    event: tool_call
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: publish, input: { build: 42 } }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const authority = {
+      kind: "external-user-authority" as const,
+      value: "one-shot",
+      scope: "exact-http-operation",
+    };
+    let confirmations = 0;
+    let authorizations = 0;
+    let invocations = 0;
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: createCapabilityPolicy(),
+      trust: { isTrusted: () => true },
+      adapters: {
+        ui: {
+          notify() {},
+          setStatus() {},
+          async confirm() {
+            confirmations++;
+            return true;
+          },
+        },
+        http: {
+          classify: () => "remote-write",
+          authorize(request) {
+            authorizations++;
+            assert.equal(request.name, "publish");
+            assert.deepEqual(request.input, { build: 42 });
+            assert.equal(request.generation, 1);
+            return authority;
+          },
+          async invoke(request) {
+            invocations++;
+            assert.equal(request.authority, authority);
+            assert.equal(request.generation, 1);
+            return { output: "ok" };
+          },
+        },
+      },
+    });
+    assert.equal(
+      (
+        await hooks.configure({
+          type: "apply",
+          sources: [{ scope: "global", path }],
+        })
+      ).ok,
+      true,
+    );
+    const handled = await hooks.handle({
+      event: "tool_call",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(handled.ok, true);
+    if (handled.ok) assert.equal(handled.value.block, undefined);
+    assert.equal(confirmations, 1);
+    assert.equal(authorizations, 1);
+    assert.equal(invocations, 1);
+  });
+});
+
+test("HTTP writes without exact authority support fail before prompting", async () => {
+  await fixture(async (directory) => {
+    const path = join(directory, "hooks.yaml");
+    await writeFile(
+      path,
+      `version: 2
+hooks:
+  - id: unsupported-http-confirmation
+    event: tool_call
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: publish }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    let confirmations = 0;
+    let invocations = 0;
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: createCapabilityPolicy(),
+      trust: { isTrusted: () => true },
+      adapters: {
+        ui: {
+          notify() {},
+          setStatus() {},
+          async confirm() {
+            confirmations++;
+            return true;
+          },
+        },
+        http: {
+          classify: () => "remote-write",
+          async invoke() {
+            invocations++;
+            return {};
+          },
+        },
+      },
+    });
+    await hooks.configure({
+      type: "apply",
+      sources: [{ scope: "global", path }],
+    });
+    const handled = await hooks.handle({
+      event: "tool_call",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(handled.ok, true);
+    if (handled.ok)
+      assert.match(handled.value.block?.reason ?? "", /authority|confirm/i);
+    assert.equal(confirmations, 0);
+    assert.equal(invocations, 0);
+  });
+});
+
 test("global active-action cap of eight composes with per-hook concurrency", async () => {
   await fixture(async (directory) => {
     const path = join(directory, "hooks.yaml");
@@ -939,17 +1291,29 @@ hooks:
       sources: [source],
     });
     const applyElapsed = Date.now() - applyStarted;
-    const historyAfterApply = hooks.inspect().history.length;
     const wasAborted = observedSignal?.aborted === true;
-    late.resolve(processResult());
-    const stale = await oldHandle;
 
     assert.equal(applied.ok, true);
     assert.ok(applyElapsed < 1_000, `apply took ${applyElapsed}ms`);
     assert.equal(wasAborted, true);
+    const blockedUntilSettlement = await hooks.handle({
+      event: "context",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(blockedUntilSettlement.ok, true);
+    if (blockedUntilSettlement.ok)
+      assert.match(
+        blockedUntilSettlement.value.block?.reason ?? "",
+        /concurrency/i,
+      );
+
+    late.resolve(processResult());
+    const stale = await oldHandle;
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(stale.ok, true);
     if (stale.ok) assert.deepEqual(stale.value, { context: [] });
-    assert.equal(hooks.inspect().history.length, historyAfterApply);
 
     const fresh = await hooks.handle({
       event: "context",
@@ -961,6 +1325,106 @@ hooks:
     if (fresh.ok) {
       assert.deepEqual(fresh.value, { context: ["fresh-context"] });
     }
+  });
+});
+
+test("reload keeps abort-ignoring work in concurrency accounting until settlement", async () => {
+  await fixture(async (directory) => {
+    const path = join(directory, "hooks.yaml");
+    const yaml = (executable: string) => `version: 2
+hooks:
+  - id: settlement-owner
+    event: agent_end
+    priority: 0
+    match: {}
+    actions: [{ type: command, executable: ${executable}, args: [] }]
+    concurrency: 1
+    deadlineMs: 5000
+    outputCapBytes: 1024
+    failurePolicy: open
+`;
+    await writeFile(path, yaml("old"), "utf8");
+    const oldSettlement = deferred<void>();
+    let starts = 0;
+    let running = 0;
+    let maxRunning = 0;
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: allowEverything,
+      trust: { isTrusted: () => true },
+      adapters: {
+        command: {
+          run() {
+            starts++;
+            running++;
+            maxRunning = Math.max(maxRunning, running);
+            if (starts === 1) {
+              return oldSettlement.promise.then(() => {
+                running--;
+                return processResult();
+              });
+            }
+            running--;
+            return Promise.resolve(processResult());
+          },
+          async shutdown() {},
+        },
+      },
+    });
+    const source = { scope: "global" as const, path };
+    const initial = await hooks.configure({ type: "apply", sources: [source] });
+    assert.equal(initial.ok, true, JSON.stringify(initial));
+    const oldHandle = hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    while (starts === 0)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await writeFile(path, yaml("new"), "utf8");
+    const reloaded = await hooks.configure({
+      type: "apply",
+      expectedRevision: 1,
+      sources: [source],
+    });
+    assert.equal(reloaded.ok, true);
+    assert.ok(
+      hooks
+        .inspect()
+        .history.some(({ outcome }) => outcome === "drain-unresolved"),
+    );
+    const overlapping = await hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(overlapping.ok, true);
+    assert.ok(
+      hooks
+        .inspect()
+        .history.some(({ outcome }) => outcome === "concurrency-limited"),
+    );
+    assert.equal(starts, 1);
+    assert.equal(maxRunning, 1);
+
+    oldSettlement.resolve();
+    await oldHandle;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const afterSettlement = await hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(afterSettlement.ok, true);
+    if (afterSettlement.ok)
+      assert.equal(afterSettlement.value.block, undefined);
+    assert.equal(starts, 2);
+    assert.equal(maxRunning, 1);
   });
 });
 
@@ -1036,6 +1500,137 @@ hooks:
     });
     assert.equal(fresh.ok, true);
     if (fresh.ok) assert.deepEqual(fresh.value.context, ["fresh"]);
+  });
+});
+
+test("initially untrusted project config is skipped while global hooks apply", async () => {
+  await fixture(async (directory) => {
+    const globalPath = join(directory, "global-hooks.yaml");
+    const projectPath = join(directory, "project-hooks.yaml");
+    await writeFile(
+      globalPath,
+      `version: 2
+hooks:
+  - id: global-context
+    event: context
+    priority: 0
+    match: {}
+    actions: [{ type: context, content: global-applied }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    await writeFile(
+      projectPath,
+      `version: 2
+hooks:
+  - id: project-context
+    event: context
+    priority: 0
+    match: {}
+    actions: [{ type: context, content: project-must-not-apply }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: allowEverything,
+      trust: { isTrusted: (source) => source.scope === "global" },
+    });
+
+    const configured = await hooks.configure({
+      type: "apply",
+      sources: [
+        { scope: "global", path: globalPath },
+        { scope: "project", path: projectPath, trusted: false },
+      ],
+    });
+    assert.equal(configured.ok, true);
+    if (configured.ok) assert.equal(configured.value.hookCount, 1);
+    const handled = await hooks.handle({
+      event: "context",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(handled.ok, true);
+    if (handled.ok) assert.deepEqual(handled.value.context, ["global-applied"]);
+  });
+});
+
+test("accepted canonical source aliases revalidate the applied digest", async () => {
+  await fixture(async (directory) => {
+    const project = join(directory, "project");
+    const configDirectory = join(project, ".pi");
+    const alias = join(directory, "project-alias");
+    await mkdir(configDirectory, { recursive: true });
+    await symlink(
+      project,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const realPath = join(configDirectory, "hooks.yaml");
+    const sourceAlias =
+      process.platform === "win32" ? alias.toUpperCase() : alias;
+    const aliasPath = join(sourceAlias, ".pi", "hooks.yaml");
+    const yaml = (content: string) => `version: 2
+hooks:
+  - id: aliased-context
+    event: context
+    priority: 0
+    match: {}
+    actions: [{ type: context, content: ${content} }]
+    concurrency: 1
+    deadlineMs: 500
+    outputCapBytes: 1024
+    failurePolicy: closed
+`;
+    try {
+      await writeFile(realPath, yaml("old"), "utf8");
+      const hooks = createHooks({
+        actor: () => "parent",
+        mode: () => "normal",
+        policy: allowEverything,
+        trust: { isTrusted: () => true },
+      });
+      const applied = await hooks.configure({
+        type: "apply",
+        sources: [
+          {
+            scope: "project",
+            path: aliasPath,
+            root: sourceAlias,
+            trusted: true,
+          },
+        ],
+      });
+      assert.equal(applied.ok, true);
+      await writeFile(realPath, yaml("new"), "utf8");
+
+      const handled = await hooks.handle({
+        event: "context",
+        payload: {},
+        cwd: project,
+        unattended: false,
+      });
+      assert.equal(handled.ok, true);
+      if (handled.ok) {
+        assert.deepEqual(handled.value.context, []);
+        assert.match(handled.value.block?.reason ?? "", /changed|suspended/i);
+      }
+      assert.equal(hooks.inspect().sources[0]?.status, "suspended");
+    } finally {
+      if (process.platform === "win32") await rmdir(alias);
+      else await unlink(alias);
+    }
   });
 });
 
@@ -1313,6 +1908,11 @@ hooks:
     await hooks.close();
     const closeElapsed = Date.now() - closeStarted;
     const historyAfterClose = hooks.inspect().history.length;
+    assert.ok(
+      hooks
+        .inspect()
+        .history.some(({ outcome }) => outcome === "drain-unresolved"),
+    );
     const aborted = signal?.aborted === true;
     late.resolve(processResult());
     await pending;

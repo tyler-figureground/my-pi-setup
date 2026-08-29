@@ -114,9 +114,10 @@ test("named HTTP actions stay lazy and use pinned bounded JSON without exposing 
   );
 
   try {
-    const result = await adapter.invoke(
-      hookRequest("build-status", { build: 42 }),
-    );
+    const result = await adapter.invoke({
+      ...hookRequest("build-status", { build: 42 }),
+      generation: 1,
+    });
     assert.equal(requests, 1);
     assert.equal(result.output?.includes("vault-secret"), false);
     assert.equal(result.output?.includes("server-secret"), false);
@@ -128,13 +129,126 @@ test("named HTTP actions stay lazy and use pinned bounded JSON without exposing 
 
     await assert.rejects(
       adapter.invoke(
-        Object.assign(hookRequest("build-status", { build: 43 }), {
-          url: `http://127.0.0.1:${port}/stolen`,
-          headers: { authorization: "Bearer injected" },
-          credentialReference: "credential:attacker",
-        }),
+        Object.assign(
+          { ...hookRequest("build-status", { build: 43 }), generation: 1 },
+          {
+            url: `http://127.0.0.1:${port}/stolen`,
+            headers: { authorization: "Bearer injected" },
+            credentialReference: "credential:attacker",
+          },
+        ),
       ),
       /invalid/i,
+    );
+    assert.equal(requests, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("named HTTP adapters reject method and effect mismatches", () => {
+  const controls = createExternalIntegrationControls();
+  for (const definition of [
+    { method: "POST", effect: "network-read" },
+    { method: "GET", effect: "remote-write" },
+  ] as const) {
+    assert.throws(
+      () =>
+        createNamedHookHttpAdapter({
+          definitions: [
+            {
+              id: "mismatched",
+              url: "https://build.example.test/status",
+              ...definition,
+              allowedOrigins: ["https://build.example.test"],
+              allowLoopback: false,
+            },
+          ],
+          controls,
+          actor: () => "parent",
+          mode: () => "normal",
+        }),
+      /effect.*method|method.*effect/i,
+    );
+  }
+});
+
+test("named HTTP POST authority is exact and one-shot under default policy", async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  const origin = `http://authority.example.test:${port}`;
+  const grants = new Map<string, { scope: string; deadlineMs: number }>();
+  const controls = createExternalIntegrationControls({
+    resolveHost: async () => ["127.0.0.1"],
+    authority: {
+      verify(token) {
+        const grant = grants.get(token.value);
+        if (
+          !grant ||
+          token.scope !== grant.scope ||
+          Date.now() > grant.deadlineMs
+        ) {
+          return false;
+        }
+        grants.delete(token.value);
+        return true;
+      },
+    },
+  });
+  let nextToken = 0;
+  const adapter = createNamedHookHttpAdapter({
+    definitions: [
+      {
+        id: "publish",
+        url: `${origin}/status`,
+        method: "POST",
+        effect: "remote-write",
+        allowedOrigins: [origin],
+        allowLoopback: true,
+      },
+    ],
+    controls,
+    actor: () => "parent",
+    mode: () => "normal",
+    issueAuthority(grant) {
+      const value = `grant-${++nextToken}`;
+      grants.set(value, grant);
+      return {
+        kind: "external-user-authority",
+        value,
+        scope: grant.scope,
+      };
+    },
+  });
+  const request = {
+    ...hookRequest("publish", { build: 42 }),
+    generation: 7,
+  };
+  try {
+    assert.equal(typeof adapter.authorize, "function");
+    const authority = adapter.authorize!(request);
+    await adapter.invoke({ ...request, authority });
+    assert.equal(requests, 1);
+
+    await assert.rejects(
+      adapter.invoke({ ...request, authority }),
+      /authority|approval|side effect/i,
+    );
+    const changedAuthority = adapter.authorize!(request);
+    await assert.rejects(
+      adapter.invoke({
+        ...request,
+        input: { build: 43 },
+        authority: changedAuthority,
+      }),
+      /authority/i,
     );
     assert.equal(requests, 1);
   } finally {
@@ -179,7 +293,7 @@ test("named HTTP GET actions never follow redirects", async () => {
   assert.equal(adapter.classify("read-status"), "network-read");
   try {
     await assert.rejects(
-      adapter.invoke(hookRequest("read-status")),
+      adapter.invoke({ ...hookRequest("read-status"), generation: 1 }),
       /redirects are disabled/i,
     );
     assert.equal(targetRequests, 0);

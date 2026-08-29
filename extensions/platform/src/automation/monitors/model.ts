@@ -207,6 +207,9 @@ export interface MonitorRegistryOptions {
   readonly sources: MonitorSourceFactory;
   readonly delivery: MonitorDelivery;
   readonly authority: MonitorAuthority;
+  readonly credentialCanaries?: (
+    definition: MonitorDefinition,
+  ) => Promise<readonly string[]>;
   readonly hookEvents?: PlatformHookEventProducer;
   readonly state?: StateStore;
   readonly configuration?: PlatformMonitorConfiguration;

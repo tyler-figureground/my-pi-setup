@@ -5,6 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import { loadPlatformFlags } from "./src/config.ts";
 import { decodePlatformFlags } from "./src/flags.ts";
+import {
+  decodeMonitorConfiguration,
+  defaultPlatformMonitorConfiguration,
+} from "./src/automation/monitors/config.ts";
 
 test("Phase 7 flags expose monitors and scheduler without enabling them by default", () => {
   const defaults = decodePlatformFlags();
@@ -16,6 +20,25 @@ test("Phase 7 flags expose monitors and scheduler without enabling them by defau
   assert.equal(enabled.flags.monitors, true);
   assert.equal(enabled.flags.scheduler, true);
   assert.deepEqual(enabled.diagnostics, []);
+});
+
+test("WebSocket origin configuration rejects every query string", () => {
+  const base = {
+    ...defaultPlatformMonitorConfiguration,
+    allowedWebSocketOrigins: ["wss://events.example.test"],
+  };
+  const decoded = decodeMonitorConfiguration(
+    {
+      allowedWebSocketOrigins: [
+        "wss://events.example.test?access_token=config-secret",
+      ],
+    },
+    base,
+  );
+  assert.deepEqual(decoded.monitors.allowedWebSocketOrigins, [
+    "wss://events.example.test",
+  ]);
+  assert.equal(decoded.diagnostics.length, 1);
 });
 
 test("Phase 7 settings merge trusted config while preserving host safety ceilings", async () => {

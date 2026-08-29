@@ -199,6 +199,7 @@ export interface TriggerEngineOptions {
   readonly maxQueueBytes?: number;
   readonly maxActiveConsumers?: number;
   readonly maxBindings?: number;
+  readonly maxSources?: number;
   readonly maxPendingPerBinding?: number;
   readonly maxRootFanout?: number;
   readonly maxRootFirings?: number;
@@ -215,5 +216,6 @@ export interface TriggerEngineRuntime {
   bindSource(
     input: TriggerSourceBinding,
   ): TriggerOutcome<TriggerSourcePublisher>;
+  revokeSource(source: TriggerSourcePublisher): TriggerOutcome<void>;
   close(reason?: string): Promise<void>;
 }

@@ -21,10 +21,11 @@ import {
   isBoundedIdentifier,
   isPlainData,
 } from "./validation.ts";
-import type {
-  TriggerDurableRecord,
-  TriggerPersistenceAttemptRequest,
-  TriggerPersistenceClaim,
+import {
+  snapshotTriggerDurableRecord,
+  triggerPayloadDigest,
+  type TriggerPersistenceAttemptRequest,
+  type TriggerPersistenceClaim,
 } from "./persistence.ts";
 
 interface QueuedDelivery {
@@ -264,48 +265,15 @@ function decodeClaimEnvelope(value: unknown) {
 
 function decodeDurableClaim(value: unknown) {
   const claim = decodeClaimEnvelope(value);
-  const record = dataDescriptors(claim?.record, [
-    "schemaVersion",
-    "eventId",
-    "type",
-    "occurredAt",
-    "sourceKey",
-    "payloadDigest",
-  ]);
-  if (
-    !claim ||
-    !record ||
-    Object.keys(record).length !== 6 ||
-    record.schemaVersion?.value !== 1 ||
-    record.eventId?.value !== claim.claimId ||
-    !isBoundedIdentifier(record.type?.value) ||
-    !Number.isSafeInteger(record.occurredAt?.value) ||
-    record.occurredAt.value < 0 ||
-    typeof record.sourceKey?.value !== "string" ||
-    !/^[a-f0-9]{64}$/.test(record.sourceKey.value) ||
-    typeof record.payloadDigest?.value !== "string" ||
-    !/^[a-f0-9]{64}$/.test(record.payloadDigest.value)
-  ) {
-    return undefined;
-  }
-  const durableRecord = {
-    schemaVersion: 1 as const,
-    eventId: record.eventId.value as string,
-    type: record.type.value as string,
-    occurredAt: record.occurredAt.value as number,
-    sourceKey: record.sourceKey.value,
-    payloadDigest: record.payloadDigest.value,
-  } satisfies TriggerDurableRecord;
-  if (Buffer.byteLength(JSON.stringify(durableRecord)) > 1_024) {
-    return undefined;
-  }
+  const record = snapshotTriggerDurableRecord(claim?.record);
+  if (!claim || !record || record.eventId !== claim.claimId) return undefined;
   return {
     claim: {
       claimId: claim.claimId,
       fence: claim.fence,
-      record: durableRecord,
+      record,
     } satisfies TriggerPersistenceClaim,
-    record: durableRecord,
+    record,
   };
 }
 
@@ -422,6 +390,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
   );
   const maxActiveConsumers = boundedOption(options.maxActiveConsumers, 8, 1, 8);
   const maxBindings = boundedOption(options.maxBindings, 1_024, 1, 1_024);
+  const maxSources = boundedOption(options.maxSources, 1_024, 1, 4_096);
   const maxPendingPerBinding = boundedOption(
     options.maxPendingPerBinding,
     128,
@@ -759,12 +728,16 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
                   : { metadata: structuredClone(authority.metadata) }),
               },
             },
-            cause: { rootEventId: record.eventId, ancestry: [] },
-            payload: {},
+            cause: structuredClone(record.cause),
+            payload: structuredClone(record.payload),
             durability: "restart-only",
           };
           const replayed = await publishStamped(
-            { type: record.type, payload: {}, durability: "restart-only" },
+            {
+              type: record.type,
+              payload: structuredClone(record.payload),
+              durability: "restart-only",
+            },
             authority,
             undefined,
             restoredEvent,
@@ -1323,17 +1296,31 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
           },
         };
       }
+      const durableRecord = snapshotTriggerDurableRecord({
+        schemaVersion: 2,
+        eventId: event.id,
+        type: event.type,
+        occurredAt: event.occurredAt,
+        sourceKey: sourceAuthority.sourceKey,
+        payload: event.payload,
+        payloadDigest: triggerPayloadDigest(event.payload),
+        cause: event.cause,
+      });
+      if (!durableRecord) {
+        releaseReservations();
+        releaseRoot();
+        return {
+          ok: false,
+          error: {
+            code: "PERSISTENCE_FAILED" as const,
+            message:
+              "Restart-only trigger payload is unsafe or exceeds the durable record bound.",
+            retryable: false,
+          },
+        };
+      }
       const saved = await persistence.store({
-        record: {
-          schemaVersion: 1,
-          eventId: event.id,
-          type: event.type,
-          occurredAt: event.occurredAt,
-          sourceKey: sourceAuthority.sourceKey,
-          payloadDigest: createHash("sha256")
-            .update(JSON.stringify(event.payload))
-            .digest("hex"),
-        },
+        record: durableRecord,
         claimantId: runtimeId,
         now: clock.now(),
         leaseUntil: clock.now() + persistenceClaimMs,
@@ -1542,6 +1529,16 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
     source: TriggerSourcePublisher,
     input: TriggerPublishInput,
   ) => {
+    if (closed) {
+      return Promise.resolve({
+        ok: false as const,
+        error: {
+          code: "CLOSED" as const,
+          message: "TriggerEngine is closed.",
+          retryable: false,
+        },
+      });
+    }
     const authority = sourceAuthorities.get(source);
     if (!authority) {
       return Promise.resolve({
@@ -1576,7 +1573,9 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
     );
   };
 
-  const bindSource = (input: TriggerSourceBinding) => {
+  const bindSource = (
+    input: TriggerSourceBinding,
+  ): TriggerOutcome<TriggerSourcePublisher> => {
     if (closed) {
       return {
         ok: false as const,
@@ -1632,6 +1631,17 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
     const identityKey = createHash("sha256")
       .update(`${snapshot.kind}\u0000${snapshot.id}`)
       .digest("hex");
+    if (!activeSources.has(identityKey) && activeSources.size >= maxSources) {
+      return {
+        ok: false as const,
+        error: {
+          code: "CAPACITY_EXCEEDED" as const,
+          message: "Trigger source capacity reached.",
+          retryable: false,
+          details: { maxSources },
+        },
+      };
+    }
     const sourceKey = createHash("sha256")
       .update(
         JSON.stringify({
@@ -1662,6 +1672,29 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
     return success(publisher);
   };
 
+  const revokeSource = (
+    source: TriggerSourcePublisher,
+  ): TriggerOutcome<void> => {
+    const authority = sourceAuthorities.get(source);
+    if (!authority) {
+      return {
+        ok: false as const,
+        error: {
+          code: "INVALID_ARGUMENT" as const,
+          message: "Trigger source publisher is not bound to this runtime.",
+          retryable: false,
+        },
+      };
+    }
+    sourceAuthorities.delete(source);
+    if (activeSources.get(authority.identityKey) === authority) {
+      activeSources.delete(authority.identityKey);
+      sourcesByKey.delete(authority.sourceKey);
+      sourceGenerations.delete(authority.identityKey);
+    }
+    return success(undefined);
+  };
+
   return {
     engine: {
       reconcile: (input: TriggerOwnerReconciliation) =>
@@ -1670,6 +1703,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
       inspect,
     },
     bindSource,
+    revokeSource,
     close(_reason = "close") {
       if (closePromise) return closePromise;
       closePromise = (async () => {
@@ -1678,6 +1712,9 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
           for (const state of owner.bindings) retire(state, "closed");
         }
         owners.clear();
+        sourcesByKey.clear();
+        activeSources.clear();
+        sourceGenerations.clear();
         const draining = Promise.allSettled([
           ...acceptedOperations,
           ...callbackTasks,

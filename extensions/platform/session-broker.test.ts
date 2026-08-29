@@ -464,6 +464,118 @@ test("send rejects authority-shaped fields and hard limit violations", async () 
   await lifecycle.shutdown("quit");
 });
 
+test("host automation delivery deduplicates across broker incarnation after commit crash window", async () => {
+  const state = createMemoryStateStore();
+  const artifacts = createInMemoryArtifactStore();
+  const senderProof = issueHostSessionProof();
+  const recipientProof = issueHostSessionProof();
+  const attach = async (
+    module: ReturnType<typeof createSessionBrokerModule>,
+    piSessionId: string,
+    proof: HostSessionProof,
+  ) =>
+    module.attach(
+      {
+        piSessionId,
+        proof,
+        executionRole: "parent",
+        project: project("project-one"),
+        cwd: "C:/project-one",
+        exposure: {
+          discoverableBy: "same-project",
+          acceptsFrom: "same-project",
+        },
+      },
+      delivery(piSessionId),
+    );
+  const request = {
+    requestId: "schedule-delivery:occurrence-a",
+    recipients: [{ piSessionId: "automation-recipient" }],
+    summary: "Schedule completed",
+    body: { kind: "text" as const, text: "Artifact result-a" },
+  };
+
+  const firstLifecycle = createLifecycleSupervisor();
+  const firstModule = createSessionBrokerModule({
+    state,
+    artifacts,
+    lifecycle: firstLifecycle,
+  });
+  const firstRecipient = await attach(
+    firstModule,
+    "automation-recipient",
+    recipientProof,
+  );
+  const firstSender = await attach(
+    firstModule,
+    "automation-sender",
+    senderProof,
+  );
+  assert.equal(firstRecipient.ok, true);
+  assert.equal(firstSender.ok, true);
+  if (!firstRecipient.ok || !firstSender.ok) return;
+  const first = await firstSender.value.send(request, undefined, {
+    producerId: "scheduler",
+    idempotencyKey: "occurrence-a",
+  });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  assert.equal(first.value.replayed, false);
+  const firstIncarnation = await firstSender.value.discover({ status: "all" });
+  await firstLifecycle.shutdown("reload");
+
+  const secondLifecycle = createLifecycleSupervisor();
+  const secondModule = createSessionBrokerModule({
+    state,
+    artifacts,
+    lifecycle: secondLifecycle,
+  });
+  const secondRecipient = await attach(
+    secondModule,
+    "automation-recipient",
+    recipientProof,
+  );
+  const secondSender = await attach(
+    secondModule,
+    "automation-sender",
+    senderProof,
+  );
+  assert.equal(secondRecipient.ok, true);
+  assert.equal(secondSender.ok, true);
+  if (!secondRecipient.ok || !secondSender.ok) return;
+  const replay = await secondSender.value.send(request, undefined, {
+    producerId: "scheduler",
+    idempotencyKey: "occurrence-a",
+  });
+  assert.equal(replay.ok, true);
+  if (replay.ok) {
+    assert.equal(replay.value.replayed, true);
+    assert.deepEqual(replay.value.deliveries, first.value.deliveries);
+  }
+  const secondIncarnation = await secondSender.value.discover({
+    status: "all",
+  });
+  assert.equal(firstIncarnation.ok, true);
+  assert.equal(secondIncarnation.ok, true);
+  if (firstIncarnation.ok && secondIncarnation.ok) {
+    const incarnationFor = (
+      sessions: typeof firstIncarnation.value,
+      id: string,
+    ) =>
+      sessions.find(({ address }) => address.piSessionId === id)?.incarnation;
+    assert.notEqual(
+      incarnationFor(firstIncarnation.value, "automation-sender"),
+      incarnationFor(secondIncarnation.value, "automation-sender"),
+    );
+  }
+  const mailbox = await secondRecipient.value.messages({
+    direction: "inbound",
+  });
+  assert.equal(mailbox.ok, true);
+  if (mailbox.ok) assert.equal(mailbox.value.length, 1);
+  await secondLifecycle.shutdown("quit");
+});
+
 test("offline mailbox pumps in recipient order after a new incarnation attaches", async () => {
   const lifecycle = createLifecycleSupervisor();
   const module = createSessionBrokerModule({

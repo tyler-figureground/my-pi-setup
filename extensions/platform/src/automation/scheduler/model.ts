@@ -180,6 +180,9 @@ export interface ScheduleInspection {
 export interface ScheduleChangeReceipt {
   readonly schedule: ScheduleSnapshot;
   readonly replayed: boolean;
+  readonly cancellation?: {
+    readonly state: "acknowledged" | "unknown";
+  };
 }
 
 export type ScheduleErrorCode =
@@ -211,7 +214,10 @@ export interface HostAuthorityRequest {
 }
 
 export interface HostAuthority {
-  authorize(request: HostAuthorityRequest): Promise<
+  authorize(
+    request: HostAuthorityRequest,
+    signal?: AbortSignal,
+  ): Promise<
     Outcome<
       {
         readonly project: ResolvedProjectIdentity;
@@ -225,6 +231,7 @@ export interface HostAuthority {
 
 export interface ResultDeliveryRequest {
   readonly deliveryId: string;
+  readonly generation: number;
   readonly route: ScheduleResultRoute;
   readonly scheduleId: string;
   readonly occurrenceId: string;
@@ -235,6 +242,7 @@ export interface ResultDeliveryError extends ModuleError<"delivery_failed"> {}
 export interface ResultDelivery {
   deliver(
     request: ResultDeliveryRequest,
+    signal: AbortSignal,
   ): Promise<
     Outcome<{ readonly state: "delivered" | "offline" }, ResultDeliveryError>
   >;

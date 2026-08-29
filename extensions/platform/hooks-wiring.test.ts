@@ -21,6 +21,10 @@ import {
 } from "./src/core/policy/index.ts";
 import { createHooksCapability } from "./src/wiring/hooks.ts";
 import { createTriggerEngine } from "./src/automation/triggers/index.ts";
+import {
+  bindPlatformHookEventSink,
+  platformHookEventProducerFor,
+} from "./src/automation/platform-hook-event-sink.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void>;
@@ -157,6 +161,187 @@ hooks:
       reason: "quit",
     });
     assert.equal(trigger.engine.inspect().bindings.length, 0);
+    await trigger.close();
+  });
+});
+
+test("production wiring keeps global hooks when project starts untrusted", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    const projectConfig = path.join(directory, ".pi");
+    await mkdir(agentDir, { recursive: true });
+    await mkdir(projectConfig, { recursive: true });
+    const config = (id: string, content: string) => `version: 2
+hooks:
+  - id: ${id}
+    event: before_agent_start
+    priority: 0
+    match: {}
+    actions: [{ type: context, content: ${content} }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: open
+`;
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      config("global-safe", "global-applied"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(projectConfig, "hooks.yaml"),
+      config("project-unsafe", "project-must-not-apply"),
+      "utf8",
+    );
+    const trigger = createTriggerEngine({ hostId: "hooks-untrusted-host" });
+    const harness = createPiHarness();
+    const ctx = createContext(directory, [], false);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-untrusted-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    const started = await capability.start(
+      { project, projectTrusted: false, ctx },
+      { type: "session_start", reason: "startup" },
+    );
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const result = await harness.emit(
+      "before_agent_start",
+      { type: "before_agent_start", systemPrompt: "base", prompt: "go" },
+      ctx,
+    );
+    assert.deepEqual(result[0], {
+      systemPrompt: "base\n\n## Declarative hook context\nglobal-applied",
+    });
+    assert.equal(capability.inspect().hooks.length, 1);
+    await capability.stop("quit", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    await trigger.close();
+  });
+});
+
+test("Hook action platform events retain one bounded causal root across producers", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const events = [
+      "tool_call",
+      "subagent.completed",
+      "task.completed",
+      "monitor.state_changed",
+      "schedule.completed",
+    ] as const;
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2\nhooks:\n${events
+        .map(
+          (event, index) =>
+            `  - id: causal-${index}\n    event: ${event}\n    priority: 0\n    match: {}\n    actions: [{ type: agent, profile: fixture, prompt: publish-next }]\n    concurrency: 8\n    deadlineMs: 5000\n    outputCapBytes: 1024\n    failurePolicy: open`,
+        )
+        .join("\n")}\n`,
+      "utf8",
+    );
+    const trigger = createTriggerEngine({
+      hostId: "hooks-causal-host",
+      maxRootFirings: 5,
+    });
+    const harness = createPiHarness();
+    const ctx = createContext(directory, []);
+    let calls = 0;
+    let capability!: ReturnType<typeof createHooksCapability>;
+    const nextEvents = [
+      "subagent.completed",
+      "task.completed",
+      "monitor.state_changed",
+      "schedule.completed",
+    ] as const;
+    const loader = {};
+    const producers = [
+      platformHookEventProducerFor(loader, "subagents"),
+      platformHookEventProducerFor(loader, "workflows"),
+      platformHookEventProducerFor(loader, "monitors"),
+      platformHookEventProducerFor(loader, "scheduler"),
+    ];
+    let eventTail = Promise.resolve();
+    const unbind = bindPlatformHookEventSink(loader, {
+      publish(envelope) {
+        eventTail = eventTail.then(async () => {
+          await capability.handlePlatformEvent(
+            envelope.event,
+            envelope.payload,
+          );
+        });
+      },
+    });
+    capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: allowAllPolicy,
+      mode: () => "normal",
+      triggers: trigger,
+      adapters: {
+        agent: {
+          async run() {
+            calls++;
+            if (calls === 1) {
+              for (const [index, next] of nextEvents.entries()) {
+                producers[index]!.publish(next, { calls });
+                await eventTail;
+              }
+            }
+            return { output: "published" };
+          },
+        },
+      },
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-causal-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    const started = await capability.start(
+      { project, projectTrusted: true, ctx },
+      { type: "session_start", reason: "startup" },
+    );
+    assert.equal(started.ok, true, JSON.stringify(started));
+    assert.equal(capability.inspect().hooks.length, 5);
+
+    await harness.emit(
+      "tool_call",
+      { type: "tool_call", toolName: "fixture", input: {} },
+      ctx,
+    );
+    assert.equal(calls, 1);
+    const history = trigger.engine.inspect().history;
+    for (const event of nextEvents) {
+      const suppressed = history.find(({ type }) => type === `hook:${event}`);
+      assert.equal(
+        suppressed?.routed,
+        0,
+        `${event} was not causally suppressed`,
+      );
+    }
+    unbind();
+    await capability.stop("quit", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
     await trigger.close();
   });
 });
@@ -596,7 +781,7 @@ test("reload fences old production actions and commands expose bounded history",
     const configPath = path.join(agentDir, "hooks.yaml");
     const marker = path.join(directory, "started.txt");
     await mkdir(agentDir, { recursive: true });
-    const slowScript = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setTimeout(() => {}, 10000)`;
+    const slowScript = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setTimeout(() => {}, 500)`;
     const oldConfig = `version: 2
 hooks:
   - id: revisioned
@@ -679,16 +864,21 @@ hooks:
       false,
     );
 
-    const fresh = await harness.emit(
-      "context",
-      { type: "context", messages: [] },
-      ctx,
-    );
-    assert.equal(
-      (fresh[0] as { messages?: Array<{ content?: string }> } | undefined)
-        ?.messages?.[0]?.content,
-      "fresh-context",
-    );
+    let freshContext: string | undefined;
+    const settlementDeadline = Date.now() + 2_000;
+    while (Date.now() < settlementDeadline && freshContext === undefined) {
+      const fresh = await harness.emit(
+        "context",
+        { type: "context", messages: [] },
+        ctx,
+      );
+      freshContext = (
+        fresh[0] as { messages?: Array<{ content?: string }> } | undefined
+      )?.messages?.[0]?.content;
+      if (freshContext === undefined)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(freshContext, "fresh-context");
     assert.equal(capability.inspect().revision, 2);
     assert.ok(
       capability
@@ -1133,6 +1323,99 @@ hooks:
     assert.equal(capability.inspect().revision, 1);
 
     await capability.stop("quit", { type: "session_shutdown", reason: "quit" });
+  });
+});
+
+test("only manual compaction is attended; threshold and overflow never prompt", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: compact-write
+    event: session_before_compact
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: publish }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const harness = createPiHarness();
+    let confirmations = 0;
+    let invocations = 0;
+    const ctx = {
+      ...createContext(directory, []),
+      ui: {
+        notify() {},
+        setStatus() {},
+        async confirm() {
+          confirmations++;
+          return true;
+        },
+      },
+    } as unknown as ExtensionContext;
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      adapters: {
+        http: {
+          classify: () => "remote-write",
+          authorize: () => ({
+            kind: "external-user-authority",
+            value: "compaction",
+            scope: "compaction",
+          }),
+          async invoke() {
+            invocations++;
+            return {};
+          },
+        },
+      },
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "compaction-attendance",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    await capability.start(
+      { project, projectTrusted: true, ctx },
+      { type: "session_start", reason: "startup" },
+    );
+
+    for (const reason of ["threshold", "overflow"] as const) {
+      const result = await harness.emit(
+        "session_before_compact",
+        { type: "session_before_compact", reason },
+        ctx,
+      );
+      assert.deepEqual(result[0], { cancel: true });
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(invocations, 0);
+
+    const manual = await harness.emit(
+      "session_before_compact",
+      { type: "session_before_compact", reason: "manual" },
+      ctx,
+    );
+    assert.equal(manual[0], undefined);
+    assert.equal(confirmations, 1);
+    assert.equal(invocations, 1);
+    await capability.stop("quit", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
   });
 });
 

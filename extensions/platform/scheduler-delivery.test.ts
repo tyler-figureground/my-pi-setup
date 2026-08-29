@@ -4,9 +4,11 @@ import { createSessionBrokerScheduleDelivery } from "./src/automation/scheduler/
 
 test("Schedule delivery uses one stable mailbox receipt without prompt or authority", async () => {
   const requests: unknown[] = [];
+  const hostIdentities: unknown[] = [];
   const delivery = createSessionBrokerScheduleDelivery({
-    async send(request) {
+    async send(request, _signal, hostAutomation) {
       requests.push(request);
+      hostIdentities.push(hostAutomation);
       return {
         ok: true,
         value: {
@@ -32,24 +34,31 @@ test("Schedule delivery uses one stable mailbox receipt without prompt or author
     },
   });
 
-  const result = await delivery.deliver({
-    deliveryId: "a".repeat(64),
-    route: { kind: "session", sessionId: "parent-session" },
-    scheduleId: "daily-check",
-    occurrenceId: "a".repeat(64),
-    artifact: {
-      id: "result-artifact",
-      sha256: "c".repeat(64),
-      size: 42,
-      mediaType: "text/plain",
+  const result = await delivery.deliver(
+    {
+      deliveryId: "a".repeat(64),
+      generation: 3,
+      route: { kind: "session", sessionId: "parent-session" },
+      scheduleId: "daily-check",
+      occurrenceId: "a".repeat(64),
+      artifact: {
+        id: "result-artifact",
+        sha256: "c".repeat(64),
+        size: 42,
+        mediaType: "text/plain",
+      },
     },
-  });
+    new AbortController().signal,
+  );
 
   assert.deepEqual(result, {
     ok: true,
     value: { state: "offline" },
   });
   assert.equal(requests.length, 1);
+  assert.deepEqual(hostIdentities, [
+    { producerId: "scheduler", idempotencyKey: "a".repeat(64) },
+  ]);
   const encoded = JSON.stringify(requests[0]);
   assert.match(encoded, /schedule-delivery:/);
   assert.match(encoded, /result-artifact/);
@@ -57,6 +66,7 @@ test("Schedule delivery uses one stable mailbox receipt without prompt or author
   assert.match(encoded, /Authority: none/);
   assert.doesNotMatch(encoded, /prompt/i);
   assert.doesNotMatch(encoded, /approval/i);
+  assert.doesNotMatch(encoded, /hostAutomation/i);
 });
 
 test("Schedule delivery returns bounded generic broker failure", async () => {
@@ -72,17 +82,21 @@ test("Schedule delivery returns bounded generic broker failure", async () => {
       };
     },
   });
-  const result = await delivery.deliver({
-    deliveryId: "d".repeat(64),
-    route: { kind: "session", sessionId: "parent-session" },
-    scheduleId: "daily-check",
-    occurrenceId: "d".repeat(64),
-    artifact: {
-      id: "result-artifact",
-      sha256: "e".repeat(64),
-      size: 42,
+  const result = await delivery.deliver(
+    {
+      deliveryId: "d".repeat(64),
+      generation: 8,
+      route: { kind: "session", sessionId: "parent-session" },
+      scheduleId: "daily-check",
+      occurrenceId: "d".repeat(64),
+      artifact: {
+        id: "result-artifact",
+        sha256: "e".repeat(64),
+        size: 42,
+      },
     },
-  });
+    new AbortController().signal,
+  );
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.equal(result.error.retryable, true);

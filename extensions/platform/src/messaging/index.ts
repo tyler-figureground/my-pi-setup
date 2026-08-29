@@ -149,6 +149,11 @@ export interface MessageEnvelope {
   readonly authority: "none";
 }
 
+export interface HostAutomationIdempotency {
+  readonly producerId: string;
+  readonly idempotencyKey: string;
+}
+
 export interface SendMessageRequest {
   readonly requestId: string;
   readonly recipients: readonly SessionAddress[];
@@ -224,6 +229,7 @@ export interface SessionBroker {
   send(
     request: SendMessageRequest,
     signal?: AbortSignal,
+    hostAutomation?: HostAutomationIdempotency,
   ): Promise<SessionBrokerResult<SendMessageReceipt>>;
   messages(
     query?: MessageQuery,
@@ -493,15 +499,38 @@ function renderDelivery(
   );
 }
 
-function requestKey(incarnation: string, requestId: string) {
-  return createHash("sha256")
-    .update(incarnation)
-    .update("\0")
-    .update(requestId)
-    .digest("hex");
+function requestKey(input: {
+  readonly incarnation: string;
+  readonly requestId: string;
+  readonly piSessionId: string;
+  readonly projectId: string;
+  readonly hostAutomation?: HostAutomationIdempotency;
+}) {
+  const hash = createHash("sha256");
+  if (input.hostAutomation) {
+    hash
+      .update("host-automation\0")
+      .update(input.projectId)
+      .update("\0")
+      .update(input.piSessionId)
+      .update("\0")
+      .update(input.hostAutomation.producerId)
+      .update("\0")
+      .update(input.hostAutomation.idempotencyKey);
+  } else {
+    hash
+      .update("session-incarnation\0")
+      .update(input.incarnation)
+      .update("\0")
+      .update(input.requestId);
+  }
+  return hash.digest("hex");
 }
 
-function requestFingerprint(request: SendMessageRequest) {
+function requestFingerprint(
+  request: SendMessageRequest,
+  hostAutomation?: HostAutomationIdempotency,
+) {
   const body =
     request.body.kind === "text"
       ? {
@@ -519,6 +548,7 @@ function requestFingerprint(request: SendMessageRequest) {
   return createHash("sha256")
     .update(
       JSON.stringify({
+        hostAutomation,
         recipients: request.recipients,
         summary: request.summary,
         body,
@@ -2051,7 +2081,7 @@ export function createSessionBrokerModule(
           }
           return success(summaries);
         },
-        async send(request, signal) {
+        async send(request, signal, hostAutomation) {
           if (closed) {
             return brokerFailure(
               "shutting_down",
@@ -2064,7 +2094,20 @@ export function createSessionBrokerModule(
           const valid = validateSendRequest(request, limits);
           if (!valid.ok) return valid;
           request = snapshotSendRequest(request);
-          const fingerprint = requestFingerprint(request);
+          if (
+            hostAutomation !== undefined &&
+            (!/^[a-z][a-z0-9.-]{0,127}$/.test(hostAutomation.producerId) ||
+              !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/.test(
+                hostAutomation.idempotencyKey,
+              ))
+          ) {
+            return brokerFailure(
+              "invalid_request",
+              "Host automation idempotency identity is invalid.",
+            );
+          }
+          hostAutomation = hostAutomation ? { ...hostAutomation } : undefined;
+          const fingerprint = requestFingerprint(request, hostAutomation);
           const sanitized = sanitizeSendRequest(request);
           if (sanitized.binarySecretDetected) {
             return brokerFailure(
@@ -2075,7 +2118,14 @@ export function createSessionBrokerModule(
           request = sanitized.request;
           const sanitizedValid = validateSendRequest(request, limits);
           if (!sanitizedValid.ok) return sanitizedValid;
-          const sendKey = request.requestId;
+          const persistedKey = requestKey({
+            incarnation,
+            requestId: request.requestId,
+            piSessionId: binding.piSessionId,
+            projectId: binding.project.projectId,
+            hostAutomation,
+          });
+          const sendKey = persistedKey;
           const previousSend = activeSends.get(sendKey) ?? Promise.resolve();
           let releaseLane = () => {};
           const lane = new Promise<void>((resolve) => {
@@ -2089,7 +2139,6 @@ export function createSessionBrokerModule(
             }
             const identity = await verifyIdentity();
             if (!identity.ok) return identity;
-            const persistedKey = requestKey(incarnation, request.requestId);
             const priorRequest = await record(
               options.state,
               REQUEST_COLLECTION,

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -76,6 +83,44 @@ test("ProfileCatalog resolves one bounded user profile with source provenance", 
       scope: "user",
       path: path.join(f.agentDir, "agents", "reviewer.yaml"),
     });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("ProfileCatalog revalidates source bytes and referenced material without following stale cache", async () => {
+  const f = await fixture();
+  try {
+    const profileDirectory = path.join(f.agentDir, "agents");
+    const source = path.join(profileDirectory, "scheduled.yaml");
+    const instructions = path.join(profileDirectory, "scheduled.md");
+    await writeFile(instructions, "first instruction", "utf8");
+    await writeFile(
+      source,
+      "name: scheduled\ndescription: Scheduled\nbackend: pi\ninstructions: { files: [scheduled.md] }\nskills: []\nrole: scheduled\n",
+      "utf8",
+    );
+    const catalog = createProfileCatalog({ agentDir: f.agentDir });
+    const context = { projectRoot: f.projectRoot, projectTrusted: false };
+    await catalog.reload(context);
+    const pinned = catalog.resolve("scheduled");
+    assert.equal(pinned.ok, true);
+    if (!pinned.ok) return;
+
+    await writeFile(instructions, "changed instruction", "utf8");
+    const changed = await catalog.revalidate!("scheduled", context);
+    assert.equal(changed.ok, true);
+    if (changed.ok) {
+      assert.notEqual(
+        changed.value.identity.contentDigest,
+        pinned.value.identity.contentDigest,
+      );
+    }
+
+    await unlink(source);
+    const missing = await catalog.revalidate!("scheduled", context);
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.error.code, "PROFILE_NOT_FOUND");
   } finally {
     await f.cleanup();
   }

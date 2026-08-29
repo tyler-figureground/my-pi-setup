@@ -847,6 +847,13 @@ test("definition decoder rejects host authority, raw credentials, headers, and n
     },
     {
       ...base,
+      source: {
+        kind: "websocket",
+        url: "wss://example.test/events?access_token=raw-secret",
+      },
+    },
+    {
+      ...base,
       source: { kind: "file", root: "." },
       projectId: "model-project",
       sessionId: "model-session",

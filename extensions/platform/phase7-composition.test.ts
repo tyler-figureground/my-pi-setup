@@ -16,6 +16,8 @@ import {
 } from "../shared/execution-role.ts";
 import { createLifecycleSupervisor } from "./src/core/lifecycle/supervisor.ts";
 import { createTriggerEngine } from "./src/automation/triggers/index.ts";
+import type { MonitorRegistryOptions } from "./src/automation/monitors/index.ts";
+import { createInMemoryCredentialVault } from "./src/external/credentials.ts";
 import { platformHookEventProducerFor } from "./src/automation/platform-hook-event-sink.ts";
 import { bindNamedProfileExecutionPort } from "./src/agents/named-profile-execution-service.ts";
 import { platformArtifactRoot } from "./src/composition.ts";
@@ -907,6 +909,115 @@ test("Hooks receive exact named HTTP, MCP, and Agent adapters from host configur
       reason: "quit",
     });
     unbindExecution();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Monitor composition feeds exact resolved credential canaries without configuration persistence", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pi-phase7-canary-"));
+  try {
+    const harness = createHarness();
+    harness.context.cwd = root;
+    const reference = "credential:phase7-monitor-canary";
+    const secret = "PHASE7_COMPOSITION_CANARY_91d0a6";
+    const vault = createInMemoryCredentialVault({
+      createReference: () => reference,
+    });
+    const binding = {
+      integration: "monitor" as const,
+      resourceId: "canary-monitor",
+      origin: "https://ci.example.test",
+    };
+    assert.equal((await vault.store({ binding, secret })).ok, true);
+    let captured: MonitorRegistryOptions | undefined;
+    createPlatformExtension({
+      agentDir: path.join(root, "agent"),
+      flags: {
+        ...defaultPlatformFlags,
+        messaging: true,
+        monitors: true,
+      },
+      monitors: {
+        maxActive: 8,
+        maxRemote: 2,
+        batchWindowMs: 250,
+        pollMinimumMs: 5_000,
+        allowedWebSocketOrigins: [],
+        allowLoopback: false,
+        pollTargets: [
+          {
+            id: "ci-status",
+            endpoint: "https://ci.example.test/status",
+            allowedOrigins: ["https://ci.example.test"],
+            allowLoopback: false,
+            credentialReference: reference,
+          },
+        ],
+      },
+      credentialVault: vault,
+      ...messagingFixtures(),
+      createMonitorSourceFactory: () => ({
+        async open() {
+          throw new Error("not used");
+        },
+      }),
+      async createMonitorRegistry(options) {
+        captured = options;
+        return {
+          ok: true as const,
+          value: {
+            registry: {
+              async change() {
+                throw new Error("not used");
+              },
+              async inspect() {
+                return {
+                  ok: true as const,
+                  value: { monitors: [], closed: false },
+                };
+              },
+            },
+            async close() {
+              return {
+                dropped: 0,
+                unresolvedCallbacks: 0,
+                unresolvedSources: 0,
+              };
+            },
+          },
+        };
+      },
+    })(harness.api);
+
+    await harness.emit("session_start", {
+      type: "session_start",
+      reason: "startup",
+    });
+    assert.ok(captured?.credentialCanaries);
+    const canaries = await captured.credentialCanaries({
+      id: "canary-monitor",
+      revision: 1,
+      scope: "durable",
+      state: "active",
+      source: {
+        kind: "poll",
+        adapter: "ci-status",
+        intervalMs: 5_000,
+        credentialReference: reference,
+      },
+      delivery: { kind: "session", sessionId: captured.binding.sessionId },
+    });
+    assert.deepEqual(canaries, [secret]);
+    assert.equal(
+      JSON.stringify(captured.configuration).includes(secret),
+      false,
+    );
+
+    await harness.emit("session_shutdown", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

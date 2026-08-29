@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import type { ActorRole } from "../../core/policy/index.ts";
 import type { JsonObject } from "../../core/result.ts";
 import type { CredentialVault } from "../../external/credentials.ts";
-import type { ExternalIntegrationControls } from "../../external/index.ts";
+import type {
+  ExternalIntegrationControls,
+  ExternalUserAuthorityToken,
+} from "../../external/index.ts";
 import { createPinnedFetch } from "../../external/pinned-fetch.ts";
 import type { ToolFederation } from "../../mcp/index.ts";
 import type {
@@ -12,6 +16,8 @@ import type {
   HookAdapterResult,
   HookAgentAdapter,
   HookHttpAdapter,
+  HookHttpAdapterRequest,
+  HookHttpAuthorityRequest,
   HookMcpAdapter,
   HookNamedAdapterRequest,
 } from "./phase7.ts";
@@ -32,12 +38,20 @@ export interface NamedHookHttpDefinition {
   readonly maxResponseBytes?: number;
 }
 
+export interface NamedHookHttpAuthorityGrant {
+  readonly scope: string;
+  readonly deadlineMs: number;
+}
+
 export interface NamedHookHttpAdapterOptions {
   readonly definitions: readonly NamedHookHttpDefinition[];
   readonly controls: ExternalIntegrationControls;
   readonly credentials?: CredentialVault;
   readonly actor: () => ActorRole;
   readonly mode: () => "normal" | "plan";
+  readonly issueAuthority?: (
+    grant: NamedHookHttpAuthorityGrant,
+  ) => ExternalUserAuthorityToken;
 }
 
 export interface NamedHookMcpDefinition {
@@ -284,6 +298,9 @@ function canonicalHttpDefinition(definition: NamedHookHttpDefinition) {
     definition.effect !== "remote-write"
   )
     throw new TypeError("Named HTTP action effect is invalid.");
+  const effect = definition.method === "GET" ? "network-read" : "remote-write";
+  if (definition.effect !== effect)
+    throw new TypeError("Named HTTP action effect does not match its method.");
   let url: URL;
   try {
     url = new URL(definition.url);
@@ -328,6 +345,7 @@ function canonicalHttpDefinition(definition: NamedHookHttpDefinition) {
     throw new TypeError("Named HTTP credential reference is invalid.");
   return Object.freeze({
     ...definition,
+    effect,
     allowedOrigins: Object.freeze([...definition.allowedOrigins]),
     maxRequestBytes: positiveBoundedInteger(
       definition.maxRequestBytes,
@@ -342,6 +360,60 @@ function canonicalHttpDefinition(definition: NamedHookHttpDefinition) {
       "Named HTTP maxResponseBytes",
     ),
   });
+}
+
+function httpRequestBody(
+  definition: ReturnType<typeof canonicalHttpDefinition>,
+  request: HookHttpAuthorityRequest,
+) {
+  if (!Number.isSafeInteger(request.generation) || request.generation < 0)
+    throw new TypeError("Hook HTTP generation is invalid.");
+  if (definition.method === "GET" && request.input !== undefined)
+    throw new TypeError("Named HTTP GET actions do not accept input.");
+  return definition.method === "POST"
+    ? encodedJson(
+        request.input ?? null,
+        definition.maxRequestBytes,
+        "Named HTTP action input",
+      )
+    : undefined;
+}
+
+function httpAuthorityScope(
+  definition: ReturnType<typeof canonicalHttpDefinition>,
+  request: HookHttpAuthorityRequest,
+  body: string | undefined,
+  actor: ActorRole,
+) {
+  const binding = JSON.stringify({
+    adapter: definition.id,
+    method: definition.method,
+    origin: new URL(definition.url).origin,
+    inputDigest: createHash("sha256")
+      .update(body ?? "")
+      .digest("hex"),
+    actor,
+    generation: request.generation,
+    deadlineMs: request.deadlineMs,
+  });
+  return `hook-http-v1:${createHash("sha256").update(binding).digest("hex")}`;
+}
+
+function validHttpAuthority(
+  authority: ExternalUserAuthorityToken,
+  expectedScope: string,
+) {
+  return (
+    isRecord(authority) &&
+    authority.kind === "external-user-authority" &&
+    typeof authority.value === "string" &&
+    authority.value.length > 0 &&
+    authority.value.length <= 4_096 &&
+    authority.scope === expectedScope &&
+    Object.keys(authority).every((key) =>
+      ["kind", "value", "scope"].includes(key),
+    )
+  );
 }
 
 async function boundedResponseBody(
@@ -414,11 +486,44 @@ export function createNamedHookHttpAdapter(
       throw new TypeError(`Duplicate named HTTP action ${definition.id}.`);
     definitions.set(definition.id, definition);
   }
+  const issueAuthority = options.issueAuthority;
   return {
     classify(name) {
       return definitions.get(name)?.effect;
     },
-    async invoke(request) {
+    ...(issueAuthority
+      ? {
+          authorize(request: HookHttpAuthorityRequest) {
+            validateDirectRequest(request, [
+              "name",
+              "input",
+              "cwd",
+              "signal",
+              "deadlineMs",
+              "outputCapBytes",
+              "generation",
+            ]);
+            const definition = definitions.get(request.name);
+            if (!definition)
+              throw new Error("Named HTTP action is not configured.");
+            const body = httpRequestBody(definition, request);
+            const scope = httpAuthorityScope(
+              definition,
+              request,
+              body,
+              options.actor(),
+            );
+            const authority = issueAuthority({
+              scope,
+              deadlineMs: request.deadlineMs,
+            });
+            if (!validHttpAuthority(authority, scope))
+              throw new Error("Issued Hook HTTP authority is invalid.");
+            return authority;
+          },
+        }
+      : {}),
+    async invoke(request: HookHttpAdapterRequest) {
       validateDirectRequest(request, [
         "name",
         "input",
@@ -426,18 +531,24 @@ export function createNamedHookHttpAdapter(
         "signal",
         "deadlineMs",
         "outputCapBytes",
+        "generation",
+        "authority",
       ]);
       const definition = definitions.get(request.name);
       if (!definition) throw new Error("Named HTTP action is not configured.");
-      if (definition.method === "GET" && request.input !== undefined)
-        throw new TypeError("Named HTTP GET actions do not accept input.");
-      let body: string | undefined;
-      if (definition.method === "POST")
-        body = encodedJson(
-          request.input ?? null,
-          definition.maxRequestBytes,
-          "Named HTTP action input",
-        );
+      const body = httpRequestBody(definition, request);
+      const actor = options.actor();
+      const expectedScope = httpAuthorityScope(
+        definition,
+        request,
+        body,
+        actor,
+      );
+      if (
+        request.authority !== undefined &&
+        !validHttpAuthority(request.authority, expectedScope)
+      )
+        throw new Error("Hook HTTP authority does not match this operation.");
       let credential: string | undefined;
       try {
         return await cancellable(
@@ -449,15 +560,6 @@ export function createNamedHookHttpAdapter(
               allowedOrigins: definition.allowedOrigins,
               allowLoopback: definition.allowLoopback,
             };
-            const decision = await options.controls.assess({
-              integration: "hook",
-              operation: definition.id,
-              effect: definition.effect,
-              actor: options.actor(),
-              mode: options.mode(),
-              destination,
-            });
-            if (decision.kind !== "allow") throw new Error(decision.reason);
             if (definition.credentialReference) {
               if (!options.credentials)
                 throw new Error("Credential vault is unavailable.");
@@ -486,14 +588,17 @@ export function createNamedHookHttpAdapter(
               maxRequestBytes: definition.maxRequestBytes,
               authorize: async (url) => {
                 if (url !== definition.url) return { allowed: false };
-                const current = await options.controls.assess({
-                  integration: "hook",
-                  operation: definition.id,
-                  effect: definition.effect,
-                  actor: options.actor(),
-                  mode: options.mode(),
-                  destination: { ...destination, url },
-                });
+                const current = await options.controls.assess(
+                  {
+                    integration: "hook",
+                    operation: definition.id,
+                    effect: definition.effect,
+                    actor,
+                    mode: options.mode(),
+                    destination: { ...destination, url },
+                  },
+                  request.authority,
+                );
                 return current.kind === "allow"
                   ? {
                       allowed: true,

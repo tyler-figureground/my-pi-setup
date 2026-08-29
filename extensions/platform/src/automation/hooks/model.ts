@@ -76,6 +76,7 @@ export interface HookProvenance {
   readonly scope: HookScope;
   readonly source: string;
   readonly trusted: boolean;
+  readonly sourceIndex?: number;
   readonly documentIndex?: number;
   readonly hookIndex?: number;
 }

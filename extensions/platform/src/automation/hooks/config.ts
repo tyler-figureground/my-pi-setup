@@ -528,9 +528,14 @@ export async function validateConfigSources(
   const hooks: HookRegistration[] = [];
   const diagnostics: HookDiagnostic[] = [];
   const sourceResults: ValidationResult["sources"][number][] = [];
-  for (const source of sources) {
+  for (const [sourceIndex, source] of sources.entries()) {
     const loaded = await loadSource(source, limits);
-    hooks.push(...loaded.hooks);
+    hooks.push(
+      ...loaded.hooks.map((registration) => ({
+        ...registration,
+        provenance: { ...registration.provenance, sourceIndex },
+      })),
+    );
     diagnostics.push(...loaded.diagnostics);
     sourceResults.push(...loaded.sources);
   }

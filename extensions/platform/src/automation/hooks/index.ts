@@ -71,6 +71,8 @@ export type {
   HookError,
   HookHistoryEntry,
   HookHttpAdapter,
+  HookHttpAdapterRequest,
+  HookHttpAuthorityRequest,
   HookInvocation,
   HookMcpAdapter,
   HookNamedAdapterRequest,

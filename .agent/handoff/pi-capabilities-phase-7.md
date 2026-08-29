@@ -1,6 +1,6 @@
 # Pi capabilities Phase 7 checkpoint
 
-Updated: 2026-08-28
+Updated: 2026-08-29
 Branch: `pi-capabilities-phase-7`
 Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-7`
 Base: accepted Phase 6 live head `4ee0cb6`
@@ -24,19 +24,19 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 - [x] Create isolated Phase 7 branch/worktree from `4ee0cb6`.
 - [x] Survey existing hooks, lifecycle, policy, mailbox, background-terminal, profiles, projects, persistence, and child-session seams.
 - [x] Compare three radically different interface designs; user confirmed external seams before tests.
-- [ ] Record Phase 7 architecture/domain language and package/adopt-wrap-build decisions. Architecture, glossary, ADR 0009, and package research recorded; dependency trials/ADR remain.
-- [ ] Build shared TriggerEngine test-first: core provenance, queue bounds, coalescing, recursion, concurrency, deadlines, lifecycle, fake clock, and adversarial hardening complete (37 tests); production StateStore persistence adapter running.
-- [ ] Build F15 MonitorRegistry test-first: ordered terminal observation and identity-safe Windows cleanup complete; MonitorRegistry/filesystem/poll/WebSocket implementation running.
-- [ ] Complete F08 test-first: hardened Hooks core, v1/v2 config, native/platform events, policy-gated named actions, history, trust/config revalidation, concurrency/deadlines, and close complete (35 focused tests); production wiring running.
-- [ ] Build F16 Scheduler test-first: strict calendar/DST semantics, scheduled child execution seam/adapter, and initial 27-test core complete; adversarial scheduler blockers under regression-driven hardening.
-- [ ] Run repeated independent adversarial review; fix every material finding with regression coverage.
+- [x] Record Phase 7 architecture/domain language and package/adopt-wrap-build decisions, including ADRs 0009-0011 and dependency trials.
+- [x] Build shared TriggerEngine test-first with provenance, bounded queues/maps, causal recursion controls, deadlines, exact restart replay, digest verification, source revocation, and StateStore persistence.
+- [x] Build F15 MonitorRegistry test-first with terminal/file/poll/WebSocket sources, host-bound restore delivery, query-free WebSockets, credential evidence redaction, expiring Artifacts, and lifecycle cleanup.
+- [x] Complete F08 test-first with v1/v2 config, native/platform events, named guarded actions, trust/config alias revalidation, exact POST authority, causal propagation, history, concurrency, and bounded drains.
+- [x] Build F16 Scheduler test-first with strict calendar/DST semantics, fenced SQLite claims/cancellation, creator-scoped session schedules, guarded scheduled workspaces, profile revalidation, durable dedupe, and bounded close.
+- [x] Run repeated independent adversarial review and fix every reported critical/high finding with regression coverage.
 - [ ] Run isolated full verification, performance benchmark, native multi-process tests, long-duration no-leak/no-duplicate soak, and live backend acceptance.
 - [ ] Record acceptance evidence in tracker/docs; publication preflight; publish branch; fast-forward and verify live `main` while preserving user state.
 - [ ] Stop before Phase 8 pending explicit approval.
 
 ## Current status
 
-Setup, design, and baseline complete. User confirmed minimal/caller hybrid seams. Releasable Lifecycle handles, schedule calendar, terminal observation, scheduled runner, Phase 7 config, TriggerEngine core, and Hooks core are green. Trigger SQLite, MonitorRegistry, Hooks wiring, and Scheduler hardening are active.
+Implementation and critical/high hardening complete. Combined focused verification passes 278/278 tests, including two native SQLite scheduler processes, cross-process cancellation, exact Trigger replay, credential-safe Monitor evidence, guarded scheduled workspaces, exact confirmed HTTP writes, causal recursion, and the 26-30 hour fake-time plus Windows real-resource soak. Typecheck, formatting, diff checks, and package audit pass. Remaining work: fresh independent sign-off, full isolated verification, lower-load startup benchmark, real Pi acceptance, acceptance/tracker docs, publication preflight, live fast-forward, and live verification.
 
 ### Dependency research run
 

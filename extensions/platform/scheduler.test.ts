@@ -84,6 +84,15 @@ class FakeClock implements SchedulerClock {
   }
 }
 
+class RealClock extends FakeClock {
+  override now = Date.now;
+
+  override arm(at: number, wake: () => void) {
+    const timeout = setTimeout(wake, Math.max(0, at - Date.now()));
+    return () => clearTimeout(timeout);
+  }
+}
+
 function createAuthority(boundProject = project): HostAuthority {
   return {
     async authorize(request) {
@@ -708,12 +717,26 @@ test("restart safely reclaims an expired pre-spawn occurrence", async () => {
   let authorityChecks = 0;
   let executionAuthorityStarted = false;
   const blockedAuthority: HostAuthority = {
-    async authorize() {
+    async authorize(_request, signal) {
       authorityChecks += 1;
       if (authorityChecks === 1)
         return { ok: true, value: { project, projectTrusted: true, profile } };
       executionAuthorityStarted = true;
-      return new Promise(() => {});
+      return new Promise((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () =>
+            resolve({
+              ok: false,
+              error: {
+                code: "project_denied",
+                message: "Authority check cancelled.",
+                retryable: false,
+              },
+            }),
+          { once: true },
+        );
+      });
     },
   };
   const first = await openScheduler(clock, {
@@ -861,9 +884,23 @@ test("post-spawn restart becomes blocked unknown without automatic replay", asyn
   const artifacts = createInMemoryArtifactStore({ clock: clock.now });
   let executions = 0;
   const executor: ScheduledAgentExecutor = {
-    async run() {
+    run(_request, signal) {
       executions += 1;
-      return new Promise(() => {});
+      return new Promise((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () =>
+            resolve({
+              ok: false,
+              error: {
+                code: "cancelled",
+                message: "Executor stopped during host crash simulation.",
+                retryable: false,
+              },
+            }),
+          { once: true },
+        );
+      });
     },
   };
   const first = await openScheduler(clock, {
@@ -979,7 +1016,7 @@ test("due occurrence revalidates authority, runs exact profile, stores result Ar
   assert.equal(executorRequests.length, 1);
   assert.deepEqual(executorRequests[0], {
     occurrenceId:
-      "d9da5e068839367ed091b9e3917cf1bb0289acef57aa26c112de35cb05dda7cf",
+      "d6ac24f5dd0cbb55610b5825eb343282d777d990290b1fb7e520ea54706cc7b6",
     prompt: "Run this exact Artifact prompt.",
     cwd: project.canonicalCwd,
     projectId: project.projectId,
@@ -1317,6 +1354,13 @@ test("host authority re-resolves project, trust, profile, and credentials", asyn
               },
             };
       },
+      async revalidate(name, context) {
+        assert.deepEqual(context, {
+          projectRoot: project.canonicalCwd,
+          projectTrusted: true,
+        });
+        return this.resolve(name);
+      },
       diagnostics() {
         return [];
       },
@@ -1353,14 +1397,20 @@ test("host authority re-resolves project, trust, profile, and credentials", asyn
   if (!deniedTrust.ok) assert.equal(deniedTrust.error.code, "trust_denied");
 });
 
-test("close boundedly awaits an exact in-flight delivery and fences late settlement", async () => {
+test("close seals and aborts delivery, then awaits its actual cleanup without a false timeout", async () => {
   const clock = new FakeClock();
   let deliveryStarted = false;
+  let deliveryAborted = false;
+  let deliveryGeneration: number | undefined;
   let releaseDelivery: (() => void) | undefined;
   const runtime = await openScheduler(clock, {
     delivery: {
-      async deliver() {
+      async deliver(request, signal) {
         deliveryStarted = true;
+        deliveryGeneration = request.generation;
+        signal.addEventListener("abort", () => {
+          deliveryAborted = true;
+        });
         await new Promise<void>((resolve) => {
           releaseDelivery = resolve;
         });
@@ -1388,7 +1438,9 @@ test("close boundedly awaits an exact in-flight delivery and fences late settlem
   const closing = runtime.close().then(() => {
     closeAcknowledged = true;
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(deliveryGeneration, 0);
+  assert.equal(deliveryAborted, true);
   assert.equal(closeAcknowledged, false);
   releaseDelivery?.();
   await closing;
@@ -1405,6 +1457,7 @@ test("close aborts active execution and ignores a stale successful completion", 
       started = true;
       signal?.addEventListener("abort", () => {
         aborted = true;
+        finish?.();
       });
       return new Promise((resolve) => {
         finish = () =>
@@ -1440,7 +1493,6 @@ test("close aborts active execution and ignores a stale successful completion", 
 
   await runtime.close();
   assert.equal(aborted, true);
-  finish?.();
   for (let spin = 0; spin < 5; spin += 1)
     await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(deliveries, 0);
@@ -1459,6 +1511,7 @@ test("delete aborts an in-flight occurrence and stale completion cannot deliver"
       started = true;
       signal?.addEventListener("abort", () => {
         aborted = true;
+        finish?.();
       });
       return new Promise((resolve) => {
         finish = () =>
@@ -1516,6 +1569,7 @@ test("pause fences and aborts an in-flight occurrence without delivering stale c
       started = true;
       signal?.addEventListener("abort", () => {
         aborted = true;
+        finish?.();
       });
       return new Promise((resolve) => {
         finish = () =>
@@ -1723,6 +1777,416 @@ test("corrupt persisted scheduler schema fails closed without exposing secret ca
     assert.equal(reopened.error.code, "storage_failed");
     assert.equal(JSON.stringify(reopened.error).includes("canary"), false);
   }
+});
+
+test("non-claimant pause and delete await native SQLite claimant cancellation acknowledgement", async () => {
+  for (const action of ["pause", "delete"] as const) {
+    const directory = await mkdtemp(join(tmpdir(), `scheduler-${action}-ack-`));
+    try {
+      const opened = createSqliteStateStore({
+        path: join(directory, "state.sqlite"),
+        now: Date.now,
+      });
+      assert.equal(opened.ok, true);
+      if (!opened.ok) continue;
+      const clock = new RealClock();
+      let started!: () => void;
+      const childStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let aborted = false;
+      let childSettled = false;
+      const claimant = await openScheduler(clock, {
+        state: opened.value,
+        ownerId: `${action}-claimant`,
+        creatorSessionId: `${action}-creator`,
+        executor: {
+          run(_request, signal) {
+            started();
+            return new Promise((resolve) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  aborted = true;
+                  setTimeout(() => {
+                    childSettled = true;
+                    resolve({
+                      ok: false,
+                      error: {
+                        code: "cancelled",
+                        message: "Exact scheduled child cancelled.",
+                        retryable: false,
+                      },
+                    });
+                  }, 30);
+                },
+                { once: true },
+              );
+            });
+          },
+        },
+      });
+      const created = await claimant.scheduler.change({
+        type: "create",
+        requestId: `${action}-create`,
+        id: `${action}-remote-control`,
+        expectedRevision: 0,
+        scope: "durable",
+        schedule: {
+          kind: "one-shot",
+          at: new Date(Date.now() + 50).toISOString(),
+        },
+        missedRunPolicy: "run-once",
+        profileName: "nightly",
+        prompt: `${action} exact child`,
+      });
+      assert.equal(created.ok, true);
+      await childStarted;
+
+      const controller = await openScheduler(new RealClock(), {
+        state: opened.value,
+        ownerId: `${action}-controller`,
+        creatorSessionId: `${action}-controller-session`,
+      });
+      const controlled = await controller.scheduler.change({
+        type: action,
+        requestId: `${action}-control`,
+        id: `${action}-remote-control`,
+        expectedRevision: 1,
+      });
+      assert.equal(controlled.ok, true);
+      if (controlled.ok) {
+        assert.equal(controlled.value.cancellation?.state, "acknowledged");
+      }
+      assert.equal(aborted, true);
+      assert.equal(childSettled, true);
+      await controller.close();
+      await claimant.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("non-claimant control returns explicit unknown when claimant cannot acknowledge within bound", async () => {
+  const claimantClock = new FakeClock();
+  const controllerClock = new FakeClock();
+  const state = createMemoryStateStore({ now: claimantClock.now });
+  let started!: () => void;
+  const childStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let aborted = false;
+  const claimant = await openScheduler(claimantClock, {
+    state,
+    ownerId: "degraded-claimant",
+    creatorSessionId: "degraded-creator",
+    executor: {
+      run(_request, signal) {
+        started();
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolve({
+                ok: false,
+                error: {
+                  code: "cancelled",
+                  message: "Delayed claimant cancellation.",
+                  retryable: false,
+                },
+              });
+            },
+            { once: true },
+          );
+        });
+      },
+    },
+  });
+  const created = await claimant.scheduler.change({
+    type: "create",
+    requestId: "degraded-create",
+    id: "degraded-control",
+    expectedRevision: 0,
+    scope: "durable",
+    schedule: { kind: "one-shot", at: "2027-01-01T00:00:00.001Z" },
+    missedRunPolicy: "run-once",
+    profileName: "nightly",
+    prompt: "Delay cancellation acknowledgement.",
+  });
+  assert.equal(created.ok, true);
+  await claimantClock.advanceTo(Date.parse("2027-01-01T00:00:00.001Z"));
+  await childStarted;
+
+  controllerClock.nowMs = claimantClock.nowMs;
+  const controller = await openScheduler(controllerClock, {
+    state,
+    ownerId: "degraded-controller",
+    creatorSessionId: "degraded-controller-session",
+  });
+  const paused = await controller.scheduler.change({
+    type: "pause",
+    requestId: "degraded-pause",
+    id: "degraded-control",
+    expectedRevision: 1,
+  });
+  assert.equal(paused.ok, true);
+  if (paused.ok) assert.equal(paused.value.cancellation?.state, "unknown");
+  assert.equal(aborted, false);
+
+  await claimantClock.advanceTo(
+    claimantClock.now() + CANCELLATION_POLL_TEST_MS,
+  );
+  for (let attempt = 0; !aborted && attempt < 20; attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(aborted, true);
+  await controller.close();
+  await claimant.close();
+});
+
+const CANCELLATION_POLL_TEST_MS = 100;
+
+test("non-claimant pause aborts exact claimant child across native Node processes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "scheduler-process-cancel-"));
+  const databasePath = join(directory, "state.sqlite");
+  const artifactRoot = join(directory, "artifacts");
+  const marker = join(directory, "child.txt");
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    const opened = createSqliteStateStore({
+      path: databasePath,
+      now: Date.now,
+    });
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const preparer = await openScheduler(new RealClock(), {
+      state: opened.value,
+      artifacts: createFileSystemArtifactStore({ root: artifactRoot }),
+      ownerId: "process-preparer",
+      creatorSessionId: "process-preparer-session",
+    });
+    const created = await preparer.scheduler.change({
+      type: "create",
+      requestId: "process-cancel-create",
+      id: "process-cancel",
+      expectedRevision: 0,
+      scope: "durable",
+      schedule: {
+        kind: "one-shot",
+        at: new Date(Date.now() + 1_500).toISOString(),
+      },
+      missedRunPolicy: "run-once",
+      profileName: "nightly",
+      prompt: "Cancel native claimant child.",
+    });
+    assert.equal(created.ok, true);
+    await preparer.close();
+
+    child = spawn(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        join(import.meta.dirname, "scheduler-cancellation-worker.ts"),
+        databasePath,
+        artifactRoot,
+        marker,
+        "native-cancellation-claimant",
+      ],
+      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const childExited = new Promise<number | null>((resolve, reject) => {
+      child!.once("error", reject);
+      child!.once("close", resolve);
+    });
+    let stdout = "";
+    let stderr = "";
+    const childStdout = child.stdout;
+    const childStderr = child.stderr;
+    assert.ok(childStdout);
+    assert.ok(childStderr);
+    childStdout.setEncoding("utf8");
+    childStderr.setEncoding("utf8");
+    childStdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    childStderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    for (
+      let attempt = 0;
+      !stdout.includes("READY\n") && attempt < 200;
+      attempt += 1
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(stdout, /READY/);
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      const text = await readFile(marker, "utf8").catch(() => "");
+      if (text.includes("STARTED:native-cancellation-claimant")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.match(await readFile(marker, "utf8"), /STARTED/);
+
+    const controller = await openScheduler(new RealClock(), {
+      state: opened.value,
+      artifacts: createFileSystemArtifactStore({ root: artifactRoot }),
+      ownerId: "process-controller",
+      creatorSessionId: "process-controller-session",
+    });
+    const paused = await controller.scheduler.change({
+      type: "pause",
+      requestId: "process-cancel-pause",
+      id: "process-cancel",
+      expectedRevision: 1,
+    });
+    assert.equal(paused.ok, true);
+    if (paused.ok)
+      assert.equal(paused.value.cancellation?.state, "acknowledged");
+    assert.match(await readFile(marker, "utf8"), /ABORTED/);
+    await controller.close();
+
+    const exited = await childExited;
+    assert.equal(exited, 0, stderr);
+    assert.match(stdout, /"cancelled":true/);
+  } finally {
+    if (child?.exitCode === null) child.kill();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("session schedules namespace IDs, receipts, inspection, and every control by creator", async () => {
+  const clock = new FakeClock();
+  const state = createMemoryStateStore({ now: clock.now });
+  const first = await openScheduler(clock, {
+    state,
+    ownerId: "owner-a",
+    creatorSessionId: "session-a",
+  });
+  const second = await openScheduler(clock, {
+    state,
+    ownerId: "owner-b",
+    creatorSessionId: "session-b",
+  });
+  const createFor = (runtime: typeof first, prompt: string) =>
+    runtime.scheduler.change({
+      type: "create",
+      requestId: "same-session-request",
+      id: "same-session-id",
+      expectedRevision: 0,
+      scope: "session",
+      schedule: { kind: "one-shot", at: "2027-01-02T00:00:00Z" },
+      missedRunPolicy: "run-once",
+      profileName: "nightly",
+      prompt,
+    });
+
+  const createdA = await createFor(first, "session A");
+  const createdB = await createFor(second, "session B");
+  assert.equal(createdA.ok, true);
+  assert.equal(createdB.ok, true);
+  const privateA = await first.scheduler.change({
+    type: "create",
+    requestId: "private-a-create",
+    id: "private-a",
+    expectedRevision: 0,
+    scope: "session",
+    schedule: { kind: "one-shot", at: "2027-01-02T00:00:00Z" },
+    missedRunPolicy: "run-once",
+    profileName: "nightly",
+    prompt: "private A",
+  });
+  assert.equal(privateA.ok, true);
+
+  const foreignControls = await Promise.all(
+    (["pause", "resume", "run-now", "delete"] as const).map((type, index) =>
+      second.scheduler.change({
+        type,
+        requestId: `foreign-${index}`,
+        id: "private-a",
+        expectedRevision: 1,
+      }),
+    ),
+  );
+  assert.deepEqual(
+    foreignControls.map((outcome) =>
+      outcome.ok ? "accepted" : outcome.error.code,
+    ),
+    ["not_found", "not_found", "not_found", "not_found"],
+  );
+
+  const pausedB = await second.scheduler.change({
+    type: "pause",
+    requestId: "pause-own-b",
+    id: "same-session-id",
+    expectedRevision: 1,
+  });
+  assert.equal(pausedB.ok, true);
+  const inspectedA = await first.scheduler.inspect({ id: "same-session-id" });
+  const inspectedB = await second.scheduler.inspect({ id: "same-session-id" });
+  assert.equal(inspectedA.ok, true);
+  assert.equal(inspectedB.ok, true);
+  if (inspectedA.ok && inspectedB.ok) {
+    assert.equal(inspectedA.value.schedules[0]?.state, "active");
+    assert.equal(inspectedB.value.schedules[0]?.state, "paused");
+    assert.equal(
+      inspectedA.value.schedules[0]?.binding.creatorSessionId,
+      "session-a",
+    );
+    assert.equal(
+      inspectedB.value.schedules[0]?.binding.creatorSessionId,
+      "session-b",
+    );
+  }
+
+  await second.close();
+  const afterSecondClose = await first.scheduler.inspect();
+  assert.equal(afterSecondClose.ok, true);
+  if (afterSecondClose.ok) {
+    assert.deepEqual(
+      afterSecondClose.value.schedules.map(({ id }) => id),
+      ["private-a", "same-session-id"],
+    );
+  }
+  await first.close();
+});
+
+test("delete and recreate churn safely clears sealed schedule generations", async () => {
+  const runtime = await openScheduler();
+  for (let generation = 0; generation < 100; generation += 1) {
+    const created = await runtime.scheduler.change({
+      type: "create",
+      requestId: `churn-create-${generation}`,
+      id: "generation-churn",
+      expectedRevision: 0,
+      scope: "session",
+      schedule: { kind: "one-shot", at: "2027-01-02T00:00:00Z" },
+      missedRunPolicy: "skip",
+      profileName: "nightly",
+      prompt: `generation ${generation}`,
+    });
+    assert.equal(created.ok, true);
+    const deleted = await runtime.scheduler.change({
+      type: "delete",
+      requestId: `churn-delete-${generation}`,
+      id: "generation-churn",
+      expectedRevision: 1,
+    });
+    assert.equal(deleted.ok, true);
+  }
+  const recreated = await runtime.scheduler.change({
+    type: "create",
+    requestId: "churn-final-create",
+    id: "generation-churn",
+    expectedRevision: 0,
+    scope: "session",
+    schedule: { kind: "one-shot", at: "2027-01-02T00:00:00Z" },
+    missedRunPolicy: "skip",
+    profileName: "nightly",
+    prompt: "final generation",
+  });
+  assert.equal(recreated.ok, true);
+  if (recreated.ok) assert.equal(recreated.value.schedule.revision, 1);
+  await runtime.close();
 });
 
 test("close removes its session definitions and receipts while durable records survive", async () => {

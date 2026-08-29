@@ -47,6 +47,8 @@ function httpDefinition(value: unknown): NamedHookHttpDefinition | undefined {
     typeof record.url !== "string" ||
     (record.method !== "GET" && record.method !== "POST") ||
     (record.effect !== "network-read" && record.effect !== "remote-write") ||
+    record.effect !==
+      (record.method === "GET" ? "network-read" : "remote-write") ||
     !Array.isArray(record.allowedOrigins) ||
     record.allowedOrigins.length < 1 ||
     record.allowedOrigins.length > 16 ||
@@ -108,7 +110,7 @@ function httpDefinition(value: unknown): NamedHookHttpDefinition | undefined {
     id: record.id,
     url: url.href,
     method: record.method,
-    effect: record.effect,
+    effect: record.method === "GET" ? "network-read" : "remote-write",
     allowedOrigins: [...origins],
     allowLoopback: record.allowLoopback,
     ...(record.credentialReference === undefined

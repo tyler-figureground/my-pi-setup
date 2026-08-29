@@ -441,6 +441,16 @@ export default function subagentsExtension(
         modelRegistry: current.modelRegistry,
       };
     },
+    workspaces: () => platformAgentServices(pi.events)?.workspaces,
+    sessionId: () => {
+      const current = sessionContext;
+      if (!current) {
+        throw new Error(
+          "Scheduled Agent executor is unavailable outside an active session.",
+        );
+      }
+      return current.sessionManager.getSessionId();
+    },
     generation: () => scheduledGeneration,
     lifecycleSignal: () => scheduledLifecycle.signal,
   });

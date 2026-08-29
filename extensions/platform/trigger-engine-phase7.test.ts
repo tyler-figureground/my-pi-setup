@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   createMemoryTriggerPersistence,
   createTriggerEngine,
   type TriggerDelivery,
 } from "./src/automation/triggers/index.ts";
+import { triggerPayloadDigest } from "./src/automation/triggers/persistence.ts";
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -209,6 +211,44 @@ test("source rebinding fences prior and cross-runtime publishers", async () => {
   await Promise.all([runtime.close(), other.close()]);
 });
 
+test("source revocation bounds active authority maps under high-cardinality churn", async () => {
+  const runtime = createTriggerEngine({ hostId: "host-a", maxSources: 2 });
+  const bind = (id: string) =>
+    runtime.bindSource({
+      kind: "fixture",
+      id,
+      projectId: "project-a",
+      trust: "untrusted",
+    });
+  const first = bind("source-1");
+  const second = bind("source-2");
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(bind("source-3").ok, false);
+  if (!first.ok) return;
+
+  assert.equal(runtime.revokeSource(first.value).ok, true);
+  const stale = await first.value.publish({
+    type: "fixture.event",
+    payload: {},
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(bind("source-3").ok, true);
+
+  for (let index = 0; index < 2_000; index += 1) {
+    const churned = bind(`churn-${index}`);
+    if (!churned.ok) {
+      assert.equal(churned.error.code, "CAPACITY_EXCEEDED");
+      const active = index % 2 === 0 ? second : bind("source-3");
+      if (active.ok) runtime.revokeSource(active.value);
+      continue;
+    }
+    assert.equal(runtime.revokeSource(churned.value).ok, true);
+  }
+
+  await runtime.close();
+});
+
 test("delivered event snapshots cannot mutate provenance for later bindings", async () => {
   const seen: string[] = [];
   const runtime = createTriggerEngine({ hostId: "host-a" });
@@ -304,9 +344,9 @@ test("reconcile rejects accessors and proxies without executing caller code", as
   await runtime.close();
 });
 
-test("restart persistence stores only bounded secret-free durable metadata", async () => {
+test("restart persistence stores exact bounded secret-free payload and cause", async () => {
   const memory = createMemoryTriggerPersistence();
-  const stored: unknown[] = [];
+  const stored: Parameters<typeof memory.store>[0][] = [];
   const persistence = {
     ...memory,
     async store(request: Parameters<typeof memory.store>[0]) {
@@ -319,10 +359,11 @@ test("restart persistence stores only bounded secret-free durable metadata", asy
     persistence,
     maxPayloadBytes: 1_024,
     maxEnvelopeBytes: 2_048,
+    createEventId: () => "durable-payload-1",
   });
   const bound = runtime.bindSource({
     kind: "terminal",
-    id: "token=source-secret",
+    id: "source-safe",
     projectId: "project-a",
     sessionId: "session-a",
     trust: "trusted-project",
@@ -331,38 +372,44 @@ test("restart persistence stores only bounded secret-free durable metadata", asy
   assert.equal(bound.ok, true);
   if (!bound.ok) return;
 
+  const payload = { body: "x".repeat(128), nested: { result: "READY" } };
   const durable = await bound.value.publish({
     type: "fixture.event",
-    payload: { password: "payload-secret", body: "x".repeat(128) },
+    payload,
     durability: "restart-only",
   });
   assert.equal(durable.ok, true);
   assert.equal(stored.length, 1);
+  assert.deepEqual(stored[0]?.record.payload, payload);
+  assert.deepEqual(stored[0]?.record.cause, {
+    rootEventId: "durable-payload-1",
+    ancestry: [],
+  });
   const serialized = JSON.stringify(stored);
   assert.equal(serialized.includes("source-secret"), false);
-  assert.equal(serialized.includes("payload-secret"), false);
-  assert.equal(serialized.includes('"payload"'), false);
-  assert.ok(Buffer.byteLength(serialized) < 1_024);
+  assert.ok(Buffer.byteLength(serialized) <= 48 * 1_024);
 
   await runtime.close();
 });
 
 test("memory persistence rejects secret-bearing or extended durable records", async () => {
   const persistence = createMemoryTriggerPersistence();
+  const secretPayload = { password: "raw-secret" };
   const stored = await persistence.store({
     record: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventId: "event-1",
       type: "fixture.event",
       occurredAt: 1,
       sourceKey: "a".repeat(64),
-      payloadDigest: "b".repeat(64),
-      payload: { password: "raw-secret" },
+      payload: secretPayload,
+      payloadDigest: triggerPayloadDigest(secretPayload),
+      cause: { rootEventId: "event-1", ancestry: [] },
     },
     claimantId: "runtime-1",
     now: 1,
     leaseUntil: 2,
-  } as Parameters<typeof persistence.store>[0]);
+  });
   assert.equal(stored.ok, false);
   const page = await persistence.claimPage({
     claimantId: "runtime-2",
@@ -372,6 +419,105 @@ test("memory persistence rejects secret-bearing or extended durable records", as
   });
   assert.equal(page.ok, true);
   if (page.ok) assert.deepEqual(page.value.claims, []);
+});
+
+test("restart-only ingress rejects secret-bearing and oversized durable bodies before persistence", async () => {
+  const memory = createMemoryTriggerPersistence();
+  let stores = 0;
+  const runtime = createTriggerEngine({
+    hostId: "host-a",
+    maxPayloadBytes: 64 * 1_024,
+    persistence: {
+      ...memory,
+      async store(request) {
+        stores += 1;
+        return memory.store(request);
+      },
+    },
+  });
+  const publisher = bindFixture(runtime);
+  const secret = await publisher.publish({
+    type: "fixture.event",
+    payload: { status: "READY", password: "never-persist" },
+    durability: "restart-only",
+  });
+  const oversized = await publisher.publish({
+    type: "fixture.event",
+    payload: { body: "x".repeat(49 * 1_024) },
+    durability: "restart-only",
+  });
+
+  assert.equal(secret.ok, false);
+  if (!secret.ok) assert.equal(secret.error.code, "PERSISTENCE_FAILED");
+  assert.equal(oversized.ok, false);
+  if (!oversized.ok) assert.equal(oversized.error.code, "PERSISTENCE_FAILED");
+  assert.equal(stores, 0);
+
+  await runtime.close();
+});
+
+test("durable replay verifies digest and restores exact causal ancestry", async () => {
+  const persistence = createMemoryTriggerPersistence();
+  const payload = { status: "READY", nested: { sequence: 7 } };
+  const sourceKey = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: "fixture",
+        id: "source",
+        projectId: "project-a",
+        sessionId: "session-a",
+        trust: "untrusted",
+      }),
+    )
+    .digest("hex");
+  const stored = await persistence.store({
+    record: {
+      schemaVersion: 2,
+      eventId: "causal-child-1",
+      type: "fixture.event",
+      occurredAt: 123,
+      sourceKey,
+      payload,
+      payloadDigest: triggerPayloadDigest(payload),
+      cause: {
+        rootEventId: "causal-root-1",
+        parentEventId: "causal-parent-1",
+        ancestry: ["owner/parent"],
+      },
+    },
+    claimantId: "writer",
+    now: 0,
+    leaseUntil: 1,
+  });
+  assert.equal(stored.ok, true);
+
+  const delivered: TriggerDelivery["events"][number][] = [];
+  const runtime = createTriggerEngine({
+    hostId: "host-restart",
+    persistence,
+    clock: { now: () => 2 },
+  });
+  bindFixture(runtime);
+  const reconciled = await runtime.engine.reconcile({
+    ownerId: "owner",
+    generation: 1,
+    bindings: [
+      {
+        id: "worker",
+        eventTypes: ["fixture.event"],
+        deliver: async ({ events }) => void delivered.push(...events),
+      },
+    ],
+  });
+  assert.equal(reconciled.ok, true);
+  assert.deepEqual(delivered[0]?.payload, payload);
+  assert.deepEqual(delivered[0]?.cause, {
+    rootEventId: "causal-root-1",
+    parentEventId: "causal-parent-1",
+    ancestry: ["owner/parent"],
+  });
+
+  await runtime.close();
 });
 
 test("bounds source, payload, and total envelope bytes and nodes", async () => {
@@ -1343,12 +1489,14 @@ test("corrupt durable rows are boundedly decoded and quarantined", async () => {
               claimId: "corrupt-1",
               fence: 1,
               record: {
-                schemaVersion: 1,
+                schemaVersion: 2,
                 eventId: "corrupt-1",
                 type: "fixture.event",
-                occurredAt: 1n,
+                occurredAt: 1,
                 sourceKey: "a".repeat(64),
+                payload: { status: "READY" },
                 payloadDigest: "b".repeat(64),
+                cause: { rootEventId: "corrupt-1", ancestry: [] },
               },
             },
           ],
@@ -1973,10 +2121,11 @@ test("restores only restart-only events through an injectable persistence port",
   });
   assert.equal(reconciled.ok, true);
   assert.deepEqual(
-    restored.map(({ id, occurredAt, provenance, payload }) => ({
+    restored.map(({ id, occurredAt, provenance, cause, payload }) => ({
       id,
       occurredAt,
       provenance,
+      cause,
       payload,
     })),
     [
@@ -1990,7 +2139,8 @@ test("restores only restart-only events through an injectable persistence port",
           trust: "untrusted",
           source: { kind: "fixture", id: "source", generation: 1 },
         },
-        payload: {},
+        cause: { rootEventId: "persisted-2", ancestry: [] },
+        payload: { durability: "restart-only" },
       },
     ],
   );

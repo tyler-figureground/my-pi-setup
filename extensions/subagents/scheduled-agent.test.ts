@@ -11,6 +11,7 @@ import subagentsExtension from "./index.ts";
 import { BackendRegistry } from "./src/backend.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
 import { createScheduledAgentExecutor } from "./src/scheduled-agent.ts";
+import type { WorkspaceManager } from "../platform/src/workspaces/index.ts";
 import type { SpawnTask, SubagentSnapshot } from "./src/domain.ts";
 import { SubagentManager, SubagentManagerLive } from "./src/manager.ts";
 
@@ -128,6 +129,120 @@ test("scheduled execution uses the exact resolved profile policy and consumes se
   assert.equal(capturedTask.execution?.role, "scheduled");
   assert.equal(capturedTask.parent.projectTrusted, false);
   assert.deepEqual(waited, [["sa-scheduled"]]);
+});
+
+test("isolated scheduled execution leases a verified Guarded Workspace and preserves failed work", async () => {
+  const protectedCwd = "C:\\protected-main";
+  const guardedCwd = "C:\\guarded-workspaces\\scheduled-a";
+  const isolatedProfile = {
+    ...profile,
+    policy: {
+      ...profile.policy,
+      tools: { allowed: ["read", "write", "edit"], denied: ["bash"] },
+      workspace: "isolated" as const,
+    },
+  };
+  let capturedTask: SpawnTask | undefined;
+  const dispositions: string[] = [];
+  const workspaceManager = {
+    async create() {
+      return {
+        ok: true as const,
+        value: {
+          workspaceId: "scheduled-a",
+          projectId: "git:scheduled-project",
+          projectRoot: protectedCwd,
+          path: guardedCwd,
+          branch: "pi-workspace/scheduled-a",
+          baseCommit: "a".repeat(40),
+          currentCommit: "a".repeat(40),
+          state: "ready" as const,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      };
+    },
+    async lease(request: Parameters<WorkspaceManager["lease"]>[0]) {
+      assert.deepEqual(request.owner, {
+        sessionId: "scheduler-host-session",
+        agentId: `schedule-${occurrenceId}`,
+      });
+      assert.equal(request.role, "scheduled");
+      assert.equal(request.profile, isolatedProfile.identity.name);
+      assert.equal(
+        request.profileDigest,
+        isolatedProfile.identity.contentDigest,
+      );
+      const snapshot = (await this.create()).value;
+      return {
+        ok: true as const,
+        value: {
+          workspaceId: snapshot.workspaceId,
+          owner: request.owner,
+          fence: 4,
+          expiresAt: Date.now() + request.ttlMs,
+          snapshot: { ...snapshot, state: "leased" as const },
+        },
+      };
+    },
+    async renew(lease: Parameters<WorkspaceManager["renew"]>[0]) {
+      return { ok: true as const, value: lease };
+    },
+    async disposition(
+      lease: Parameters<WorkspaceManager["disposition"]>[0],
+      action: Parameters<WorkspaceManager["disposition"]>[1],
+    ) {
+      dispositions.push(action.kind);
+      return {
+        ok: true as const,
+        value: { ...lease.snapshot, state: "dirty" as const },
+      };
+    },
+  };
+  const manager = {
+    async spawn(_backend: "pi" | "claude" | "codex", task: SpawnTask) {
+      capturedTask = task;
+      return snapshot(task);
+    },
+    async waitFor() {},
+    async get() {
+      return {
+        ...snapshot(capturedTask!, "done"),
+        status: "error" as const,
+        errorText: "child failed after writing guarded file",
+      };
+    },
+    async cancel() {},
+  };
+  const lifecycle = new AbortController();
+  const executor = createScheduledAgentExecutor({
+    manager: async () => manager,
+    parent: () => ({ parentCwd: protectedCwd, projectTrusted: true }),
+    workspaces: () => workspaceManager,
+    sessionId: () => "scheduler-host-session",
+    generation: () => 1,
+    lifecycleSignal: () => lifecycle.signal,
+  });
+
+  const outcome = await executor.run({
+    occurrenceId,
+    prompt: "Write maintenance result",
+    cwd: protectedCwd,
+    projectId: "git:scheduled-project",
+    profile: isolatedProfile,
+    timeoutMs: 10_000,
+    maxOutputBytes: 1_024,
+  });
+
+  assert.equal(outcome.ok, false);
+  assert.ok(capturedTask?.workspace);
+  assert.equal(capturedTask.cwd, guardedCwd);
+  assert.notEqual(capturedTask.cwd, protectedCwd);
+  assert.equal(capturedTask.workspace.path, guardedCwd);
+  assert.equal(capturedTask.workspace.projectId, "git:scheduled-project");
+  assert.equal(capturedTask.workspace.role, "scheduled");
+  assert.deepEqual(capturedTask.workspace.profile, isolatedProfile.identity);
+  assert.deepEqual(dispositions, ["preserve"]);
 });
 
 test("scheduled execution rejects invalid bounds and authority overrides before manager creation", async () => {
