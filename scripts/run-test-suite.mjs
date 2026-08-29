@@ -47,6 +47,7 @@ const unit = [
   "extensions/platform/scheduler-calendar.test.ts",
   "extensions/platform/state-store.test.ts",
   "extensions/platform/tool-federation.test.ts",
+  "extensions/platform/trigger-engine-phase7.test.ts",
   "extensions/shared/context-utilization.test.ts",
   "extensions/shared/execution-role.test.ts",
   "extensions/shared/scheduled-agent.test.ts",
