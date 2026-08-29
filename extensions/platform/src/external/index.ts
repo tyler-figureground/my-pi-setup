@@ -7,7 +7,7 @@ import {
   type OperationKind,
 } from "../core/policy/index.ts";
 
-export type ExternalIntegration = "mcp" | "browser";
+export type ExternalIntegration = "mcp" | "browser" | "monitor" | "hook";
 export type ExternalEffect = OperationKind;
 
 export interface ExternalDestination {

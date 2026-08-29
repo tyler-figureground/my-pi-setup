@@ -50,7 +50,7 @@ export function normalizeCredentialBinding(
 ): CredentialBinding {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(binding.resourceId) ||
-    (binding.integration !== "mcp" && binding.integration !== "browser")
+    !["mcp", "browser", "monitor", "hook"].includes(binding.integration)
   )
     throw new TypeError("Credential binding is invalid.");
   if (
@@ -60,13 +60,19 @@ export function normalizeCredentialBinding(
     throw new TypeError("Credential scope is invalid.");
   if (binding.origin === undefined) return { ...binding };
   const url = new URL(binding.origin);
+  const allowedProtocols =
+    binding.integration === "monitor"
+      ? new Set(["http:", "https:", "ws:", "wss:"])
+      : new Set(["http:", "https:"]);
   if (
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !allowedProtocols.has(url.protocol) ||
     url.origin !== binding.origin ||
     url.username ||
     url.password
   )
-    throw new TypeError("Credential origin must be one canonical HTTP origin.");
+    throw new TypeError(
+      "Credential origin must be one canonical integration origin.",
+    );
   return { ...binding, origin: url.origin };
 }
 

@@ -8,6 +8,42 @@ const binding = {
   origin: "https://mcp.example.test",
 };
 
+test("monitor and hook credentials remain exact-bound to reviewed protocol origins", async () => {
+  const vault = createInMemoryCredentialVault({
+    createReference: (() => {
+      let sequence = 0;
+      return () => `credential:phase7-${++sequence}`;
+    })(),
+  });
+  const monitor = {
+    integration: "monitor" as const,
+    resourceId: "build-events",
+    origin: "wss://events.example.test",
+  };
+  const hook = {
+    integration: "hook" as const,
+    resourceId: "build-status",
+    origin: "https://build.example.test",
+  };
+  const monitorStored = await vault.store({ binding: monitor, secret: "m" });
+  const hookStored = await vault.store({ binding: hook, secret: "h" });
+  assert.equal(monitorStored.ok, true);
+  assert.equal(hookStored.ok, true);
+  if (!monitorStored.ok || !hookStored.ok) return;
+  assert.equal(
+    await vault.resolve(monitorStored.value.reference, monitor),
+    "m",
+  );
+  assert.equal(await vault.resolve(hookStored.value.reference, hook), "h");
+  assert.equal(
+    await vault.resolve(monitorStored.value.reference, {
+      ...monitor,
+      origin: "https://events.example.test",
+    }),
+    undefined,
+  );
+});
+
 test("credential vault returns opaque references and resolves secrets only for the exact binding", async () => {
   const vault = createInMemoryCredentialVault({
     createReference: () => "credential:fixture-reference",
