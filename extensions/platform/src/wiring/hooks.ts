@@ -1,34 +1,50 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp, open, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { isProxy } from "node:util/types";
 import {
   CONFIG_DIR_NAME,
   type ExtensionAPI,
   type ExtensionContext,
+  type ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
-import { createHookProcessRunner } from "../automation/hooks/process.ts";
+import {
+  createHookProcessRunner,
+  createHooks,
+  nativeHookEvents,
+  platformHookEvents,
+  type HookAgentAdapter,
+  type HookConfigSource,
+  type HookHttpAdapter,
+  type HookMcpAdapter,
+  type HookMode,
+  type HookProcessRequest,
+  type HookProcessRunner,
+  type HookResponse,
+  type Hooks,
+  type PlainData,
+} from "../automation/hooks/index.ts";
 import type { ActorRole, CapabilityPolicy } from "../core/policy/index.ts";
 import type { ResolvedProjectIdentity } from "../core/projects/index.ts";
-import { containsLikelySecret } from "./secrets.ts";
-import {
-  createTriggerEngine,
-  hookEvents,
-  type HookConfigSource,
-  type HookEffect,
-  type HookEvent,
-  type HookLogEntry,
-  type HookMode,
-  type PlainData,
-  type TriggerEngine,
-} from "../automation/hooks/index.ts";
 
-interface HooksCapabilityOptions {
+export type PlatformHookEvent = (typeof platformHookEvents)[number];
+export type PlatformHookPayload = Readonly<Record<string, unknown>>;
+
+type NativeHookEventName = (typeof nativeHookEvents)[number];
+type NativeHookEvent<E extends NativeHookEventName = NativeHookEventName> =
+  Extract<ExtensionEvent, { type: E }>;
+type Dynamic<T> = T | (() => T);
+
+export interface HooksCapabilityOptions {
   readonly pi: ExtensionAPI;
   readonly agentDir: string;
-  readonly actor: ActorRole;
-  readonly policy: CapabilityPolicy;
+  readonly actor: Dynamic<ActorRole>;
+  readonly policy: Dynamic<CapabilityPolicy>;
   readonly mode: () => HookMode;
+  readonly adapters?: {
+    readonly http?: HookHttpAdapter;
+    readonly mcp?: HookMcpAdapter;
+    readonly agent?: HookAgentAdapter;
+  };
 }
 
 interface HooksSessionContext {
@@ -37,29 +53,37 @@ interface HooksSessionContext {
   readonly ctx: ExtensionContext;
 }
 
-interface HostHookLog {
-  readonly sequence: number;
-  readonly effectId: string;
-  readonly hookId: string;
-  readonly outcome: "ok" | "failed" | "blocked" | "truncated";
-  readonly message: string;
-  readonly outputPath?: string;
+interface PayloadBudget {
+  nodes: number;
+  bytes: number;
+  bounded: boolean;
+  readonly seen: WeakSet<object>;
 }
 
+interface ActiveHooksRuntime {
+  readonly hooks: Hooks;
+  readonly process: HookProcessRunner;
+  readonly ctx: ExtensionContext;
+  readonly project: ResolvedProjectIdentity;
+  readonly statusKeys: Set<string>;
+  readonly suspensionNotices: Set<string>;
+  acceptingEffects: boolean;
+  stopPromise?: Promise<{
+    readonly status: "stopped";
+    readonly reason: string;
+  }>;
+}
+
+const MAX_PAYLOAD_NODES = 512;
+const MAX_PAYLOAD_DEPTH = 6;
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+const MAX_STRING_BYTES = 8 * 1024;
+const MAX_COLLECTION_ENTRIES = 64;
+const STATUS_PREFIX = "platform-hook:";
+const CONFIGURATION_STATUS_KEY = `${STATUS_PREFIX}configuration`;
 const sensitiveKey =
   /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
-const sensitiveAssignment =
-  /\b(authorization|cookie|password|passwd|secret|token|api[-_]?key)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
-const bearerValue = /\bbearer\s+[a-z0-9._~+\-/]+=*/gi;
-
-function redactHostMessage(message: string) {
-  return message
-    .replace(sensitiveAssignment, "$1=[REDACTED]")
-    .replace(bearerValue, "Bearer [REDACTED]");
-}
-const HOST_DISPATCH_TIMEOUT_MS = 30_000;
-
-const interceptableEvents = new Set<HookEvent>([
+const gateEvents = new Set<NativeHookEventName>([
   "session_before_switch",
   "session_before_fork",
   "session_before_compact",
@@ -70,423 +94,431 @@ const interceptableEvents = new Set<HookEvent>([
   "input",
 ]);
 
+function resolveDynamic<T>(value: Dynamic<T>) {
+  return typeof value === "function" ? (value as () => T)() : value;
+}
+
 function projectRoot(project: ResolvedProjectIdentity) {
   if (project.kind === "git") return project.currentWorktree;
   return project.canonicalCwd;
 }
 
-interface PayloadBudget {
-  nodes: number;
-  bounded: boolean;
+function supportsHookUi(ctx: ExtensionContext) {
+  return (ctx.mode === "tui" || ctx.mode === "rpc") && ctx.hasUI;
+}
+
+function nativeEventIsUnattended(
+  event: NativeHookEvent,
+  ctx: ExtensionContext,
+) {
+  if (ctx.mode === "json" || ctx.mode === "print") return true;
+  const directUserGate = new Set<NativeHookEventName>([
+    "input",
+    "user_bash",
+    "tool_call",
+    "session_before_switch",
+    "session_before_fork",
+    "session_before_compact",
+    "session_before_tree",
+  ]);
+  if (!directUserGate.has(event.type)) return true;
+  return event.type === "input" && event.source === "extension";
+}
+
+function accountText(text: string, budget: PayloadBudget) {
+  const remaining = Math.max(0, MAX_PAYLOAD_BYTES - budget.bytes);
+  const byteLimit = Math.min(MAX_STRING_BYTES, remaining);
+  if (Buffer.byteLength(text) <= byteLimit) {
+    budget.bytes += Buffer.byteLength(text);
+    return text;
+  }
+  budget.bounded = true;
+  let output = text.slice(0, byteLimit);
+  while (Buffer.byteLength(output) > byteLimit) output = output.slice(0, -1);
+  budget.bytes += Buffer.byteLength(output);
+  return output || "[BOUNDED]";
 }
 
 function boundedPlain(
   value: unknown,
+  budget: PayloadBudget,
   depth = 0,
-  budget: PayloadBudget = { nodes: 0, bounded: false },
 ): PlainData {
   budget.nodes += 1;
-  if (budget.nodes > 512 || depth > 6) {
+  if (
+    budget.nodes > MAX_PAYLOAD_NODES ||
+    depth > MAX_PAYLOAD_DEPTH ||
+    budget.bytes >= MAX_PAYLOAD_BYTES
+  ) {
     budget.bounded = true;
     return "[BOUNDED]";
   }
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "number")
     return Number.isFinite(value) ? value : "[NON_FINITE]";
-  if (typeof value === "string") {
-    if (value.length > 8_192) budget.bounded = true;
-    return value.slice(0, 8_192);
+  if (typeof value === "string") return accountText(value, budget);
+  if (
+    typeof value === "undefined" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol" ||
+    typeof value === "function"
+  ) {
+    return `[${typeof value}]`;
   }
+  if (isProxy(value)) {
+    budget.bounded = true;
+    return "[PROXY]";
+  }
+  if (budget.seen.has(value)) {
+    budget.bounded = true;
+    return "[CYCLE]";
+  }
+  budget.seen.add(value);
+
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    budget.bounded = true;
+    return "[UNREADABLE]";
+  }
+
   if (Array.isArray(value)) {
-    if (value.length > 64) budget.bounded = true;
-    return value
-      .slice(0, 64)
-      .map((item) => boundedPlain(item, depth + 1, budget));
-  }
-  if (typeof value === "object" && value !== null) {
-    const output: Record<string, PlainData> = {};
-    const entries = Object.entries(value);
-    if (entries.length > 64) budget.bounded = true;
-    for (const [key, entry] of entries.slice(0, 64)) {
-      output[key] = sensitiveKey.test(key)
-        ? "[REDACTED]"
-        : boundedPlain(entry, depth + 1, budget);
+    const output: PlainData[] = [];
+    const length = Math.min(value.length, MAX_COLLECTION_ENTRIES);
+    if (value.length > length) budget.bounded = true;
+    for (let index = 0; index < length; index++) {
+      const descriptor = descriptors[String(index)];
+      output.push(
+        descriptor && "value" in descriptor
+          ? boundedPlain(descriptor.value, budget, depth + 1)
+          : "[ACCESSOR]",
+      );
+      if (!descriptor || !("value" in descriptor)) budget.bounded = true;
     }
     return output;
   }
-  return `[${typeof value}]`;
-}
 
-function eventPayload(event: unknown): {
-  readonly payload: Readonly<Record<string, PlainData>>;
-  readonly bounded: boolean;
-} {
-  if (typeof event !== "object" || event === null) {
-    return { payload: {}, bounded: false };
-  }
-  const budget: PayloadBudget = { nodes: 0, bounded: false };
-  const plain = boundedPlain(event, 0, budget);
-  if (typeof plain !== "object" || plain === null || Array.isArray(plain)) {
-    return { payload: {}, bounded: budget.bounded };
-  }
-  const record = plain as Readonly<Record<string, PlainData>>;
-  const { type: _type, ...payload } = record;
-  return { payload, bounded: budget.bounded };
-}
-
-function engineLogs(engine: TriggerEngine, hostLogs: readonly HostHookLog[]) {
-  const dispatch = engine
-    .inspect()
-    .logs.map(
-      (entry: HookLogEntry) =>
-        `${entry.sequence} ${entry.event} ${entry.hookId ?? "-"} ${entry.outcome}: ${entry.message}`,
-    );
-  const host = hostLogs.map(
-    (entry) =>
-      `host-${entry.sequence} ${entry.hookId} ${entry.outcome}: ${entry.message}${entry.outputPath ? ` output=${entry.outputPath}` : ""}`,
+  const output: Record<string, PlainData> = {};
+  const entries = Object.entries(descriptors).filter(
+    ([key, descriptor]) => key !== "type" && descriptor.enumerable,
   );
-  return [...dispatch, ...host];
+  if (entries.length > MAX_COLLECTION_ENTRIES) budget.bounded = true;
+  for (const [rawKey, descriptor] of entries.slice(0, MAX_COLLECTION_ENTRIES)) {
+    const key = accountText(rawKey.slice(0, 256), budget);
+    if (rawKey.length > 256) budget.bounded = true;
+    if (sensitiveKey.test(rawKey)) output[key] = "[REDACTED]";
+    else if ("value" in descriptor)
+      output[key] = boundedPlain(descriptor.value, budget, depth + 1);
+    else {
+      budget.bounded = true;
+      output[key] = "[ACCESSOR]";
+    }
+  }
+  return output;
+}
+
+function eventPayload(event: unknown) {
+  const budget: PayloadBudget = {
+    nodes: 0,
+    bytes: 0,
+    bounded: false,
+    seen: new WeakSet(),
+  };
+  const converted = boundedPlain(event, budget);
+  if (
+    typeof converted !== "object" ||
+    converted === null ||
+    Array.isArray(converted)
+  ) {
+    return { payload: {}, bounded: budget.bounded } as const;
+  }
+  return {
+    payload: converted as Readonly<Record<string, PlainData>>,
+    bounded: budget.bounded,
+  } as const;
+}
+
+function sourcesFor(
+  agentDir: string,
+  project: ResolvedProjectIdentity,
+  ctx: ExtensionContext,
+): readonly HookConfigSource[] {
+  const root = projectRoot(project);
+  return [
+    {
+      scope: "global",
+      path: path.join(agentDir, "hooks.yaml"),
+      root: agentDir,
+      optional: true,
+    },
+    ...(root
+      ? [
+          {
+            scope: "project" as const,
+            path: path.join(root, CONFIG_DIR_NAME, "hooks.yaml"),
+            root,
+            trusted: ctx.isProjectTrusted(),
+            optional: true,
+          },
+        ]
+      : []),
+  ];
+}
+
+function boundedNotice(message: string) {
+  return message.slice(0, 50 * 1024);
 }
 
 export function createHooksCapability(options: HooksCapabilityOptions) {
-  const { pi, agentDir, actor, policy } = options;
-  const engine = createTriggerEngine({ instanceId: "platform-hooks" });
-  let processRunner: ReturnType<typeof createHookProcessRunner> | undefined =
-    createHookProcessRunner();
-  const activeHookCommands = new Set<string>();
-  const commandControllers = new Set<AbortController>();
-  const statusKeys = new Set<string>();
-  const hostLogs: HostHookLog[] = [];
-  let nextHostLog = 0;
-  let sources: readonly HookConfigSource[] = [];
-  let currentContext: ExtensionContext | undefined;
+  const { pi, agentDir } = options;
+  const eventContexts = new AsyncLocalStorage<ExtensionContext>();
+  let active: ActiveHooksRuntime | undefined;
 
-  const appendHostLog = (entry: Omit<HostHookLog, "sequence">) => {
-    hostLogs.push({
-      ...entry,
-      hookId: sensitiveKey.test(entry.hookId) ? "[REDACTED]" : entry.hookId,
-      message: redactHostMessage(entry.message).slice(0, 2_000),
-      sequence: ++nextHostLog,
-    });
-    if (hostLogs.length > 256) hostLogs.splice(0, hostLogs.length - 256);
+  const contextForAdapter = (runtime: ActiveHooksRuntime) =>
+    eventContexts.getStore() ?? runtime.ctx;
+
+  const setHostStatus = (
+    runtime: ActiveHooksRuntime,
+    key: string,
+    text: string | undefined,
+  ) => {
+    const ctx = contextForAdapter(runtime);
+    if (!supportsHookUi(ctx)) return;
+    ctx.ui.setStatus(key, text);
+    if (text === undefined) runtime.statusKeys.delete(key);
+    else runtime.statusKeys.add(key);
   };
 
-  async function executeCommand(
-    effect: Extract<HookEffect, { type: "command" }>,
-    ctx: ExtensionContext,
-    timeoutMs: number,
-  ) {
-    const policyDecision = policy.decide(
-      { kind: "operation", name: "process" },
-      actor,
-      { kind: options.mode() },
+  const reportSuspensions = (runtime: ActiveHooksRuntime) => {
+    if (active !== runtime || !runtime.acceptingEffects) return;
+    const ctx = contextForAdapter(runtime);
+    if (!supportsHookUi(ctx)) return;
+    const suspended = runtime.hooks
+      .inspect()
+      .sources.filter(({ status }) => status === "suspended");
+    if (suspended.length === 0) {
+      if (runtime.statusKeys.has(CONFIGURATION_STATUS_KEY))
+        setHostStatus(runtime, CONFIGURATION_STATUS_KEY, undefined);
+      runtime.suspensionNotices.clear();
+      return;
+    }
+    setHostStatus(
+      runtime,
+      CONFIGURATION_STATUS_KEY,
+      `${suspended.length} hook source(s) suspended`,
     );
-    if (policyDecision.kind !== "allow") {
-      appendHostLog({
-        effectId: effect.effectId,
-        hookId: effect.hookId,
-        outcome: "blocked",
-        message: policyDecision.reason,
-      });
-      return { ok: false, reason: policyDecision.reason } as const;
+    for (const source of suspended) {
+      const notice = `${source.path}:${source.reason ?? "Hook source suspended."}`;
+      if (runtime.suspensionNotices.has(notice)) continue;
+      runtime.suspensionNotices.add(notice);
+      ctx.ui.notify(
+        boundedNotice(
+          `Hook source suspended: ${source.path}\n${source.reason ?? "Configuration or trust changed. Run /hooks inspect, then /hooks reload."}`,
+        ),
+        "warning",
+      );
     }
-    if (activeHookCommands.has(effect.hookId) || activeHookCommands.size >= 8) {
-      const reason = "Hook command concurrency limit reached.";
-      appendHostLog({
-        effectId: effect.effectId,
-        hookId: effect.hookId,
-        outcome: "blocked",
-        message: reason,
-      });
-      return { ok: false, reason } as const;
-    }
+  };
 
-    const controller = new AbortController();
-    activeHookCommands.add(effect.hookId);
-    commandControllers.add(controller);
-    const signal = ctx.signal
-      ? AbortSignal.any([ctx.signal, controller.signal])
-      : controller.signal;
-    const spillDirectory = await mkdtemp(
-      path.join(tmpdir(), `pi-hook-output-${randomUUID()}-`),
-    );
-    const stdoutPath = path.join(spillDirectory, "stdout.log");
-    const stderrPath = path.join(spillDirectory, "stderr.log");
-    const stdoutHandle = await open(stdoutPath, "wx", 0o600);
-    const stderrHandle = await open(stderrPath, "wx", 0o600);
-    let sensitiveOutput = false;
-    const tails = { stdout: "", stderr: "" };
-    try {
-      const environment: Record<string, string> = {};
-      for (const key of [
-        "PATH",
-        "PATHEXT",
-        "SystemRoot",
-        "WINDIR",
-        "COMSPEC",
-        "TEMP",
-        "TMP",
-        "HOME",
-        "USERPROFILE",
-      ]) {
-        const value = process.env[key];
-        if (value !== undefined) environment[key] = value;
-      }
-      const runner = processRunner;
-      if (!runner) throw new Error("Hook process runner is not active.");
-      const result = await runner.run({
-        executable: effect.executable,
-        args: effect.args,
-        cwd: ctx.cwd,
-        env: environment,
-        timeoutMs: Math.min(effect.timeoutMs, timeoutMs),
-        outputCapBytes: effect.outputCapBytes,
-        spillCapBytes: 16 * 1024 * 1024,
-        signal,
-        async onSpill({ stream, chunk }) {
-          const handle = stream === "stdout" ? stdoutHandle : stderrHandle;
-          await handle.write(chunk);
-          const probe = `${tails[stream]}${chunk.toString("utf8")}`;
-          sensitiveOutput ||= containsLikelySecret(probe);
-          tails[stream] = probe.slice(-256);
-        },
-      });
-      await Promise.all([stdoutHandle.sync(), stderrHandle.sync()]);
-      await Promise.all([stdoutHandle.close(), stderrHandle.close()]);
-      const ok =
-        result.code === 0 && !result.killed && !result.spillLimitExceeded;
-      const retainOutput = result.truncated && !sensitiveOutput;
-      appendHostLog({
-        effectId: effect.effectId,
-        hookId: effect.hookId,
-        outcome: ok ? (result.truncated ? "truncated" : "ok") : "failed",
-        message: ok
-          ? sensitiveOutput
-            ? `Command completed with ${result.totalBytes} output byte(s); likely-sensitive output was not persisted.`
-            : `Command completed with ${result.totalBytes} output byte(s).`
-          : result.spillLimitExceeded
-            ? "Command exceeded the 16 MiB spill limit and was terminated."
-            : `Command failed with code ${result.code}${result.killed ? " after termination" : ""}.`,
-        ...(retainOutput ? { outputPath: spillDirectory } : {}),
-      });
-      if (!retainOutput)
-        await rm(spillDirectory, { recursive: true, force: true });
-      return ok
-        ? ({ ok: true } as const)
-        : ({
-            ok: false,
-            reason: `Hook ${effect.hookId} command failed.`,
-          } as const);
-    } catch (error) {
-      await Promise.all([
-        stdoutHandle.close().catch(() => undefined),
-        stderrHandle.close().catch(() => undefined),
-      ]);
-      await rm(spillDirectory, { recursive: true, force: true });
-      const reason = error instanceof Error ? error.message : String(error);
-      appendHostLog({
-        effectId: effect.effectId,
-        hookId: effect.hookId,
-        outcome: "failed",
-        message: reason.slice(0, 500),
-      });
-      return {
-        ok: false,
-        reason: `Hook ${effect.hookId} command failed.`,
-      } as const;
-    } finally {
-      await Promise.all([
-        stdoutHandle.close().catch(() => undefined),
-        stderrHandle.close().catch(() => undefined),
-      ]);
-      activeHookCommands.delete(effect.hookId);
-      commandControllers.delete(controller);
-    }
-  }
-
-  async function applyEffects(
-    event: HookEvent,
-    effects: readonly HookEffect[],
-    ctx: ExtensionContext,
-  ) {
-    const context: string[] = [];
-    let blockReason: string | undefined;
-    const deadline =
-      Date.now() +
-      (event === "session_shutdown" ? 2_000 : HOST_DISPATCH_TIMEOUT_MS);
-    for (const effect of effects) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        blockReason ??= "Hook effect dispatch exceeded its host deadline.";
-        break;
-      }
-      if (effect.type === "command") {
-        const result = await executeCommand(effect, ctx, remainingMs);
-        if (!result.ok && effect.failurePolicy === "closed") {
-          blockReason ??= result.reason;
-        }
-        continue;
-      }
-      if (effect.type === "notify") {
-        ctx.ui.notify(effect.message, effect.level);
-        continue;
-      }
-      if (effect.type === "status") {
-        const key = `platform-hook:${effect.key}`;
-        ctx.ui.setStatus(key, effect.text ?? undefined);
-        if (effect.text === null) statusKeys.delete(key);
-        else statusKeys.add(key);
-        continue;
-      }
-      if (effect.type === "context") {
-        context.push(effect.content);
-        continue;
-      }
-      if (effect.decision === "deny") {
-        blockReason ??= effect.reason;
-        continue;
-      }
-      if (effect.decision === "require-user-confirmation") {
-        const confirmed =
-          ctx.hasUI &&
-          (await ctx.ui.confirm(
-            `Hook ${effect.hookId} requests confirmation`,
-            effect.reason,
-            { timeout: Math.min(effect.timeoutMs, remainingMs) },
-          ));
-        if (!confirmed) blockReason ??= effect.reason;
-      }
-      // An allow effect is advisory. CapabilityPolicy remains authoritative.
-    }
-    return { event, context, blockReason };
-  }
-
-  async function dispatch(
-    eventName: HookEvent,
+  const handle = async (
+    eventName: NativeHookEventName | PlatformHookEvent,
     event: unknown,
     ctx: ExtensionContext,
-  ) {
+    unattended: boolean,
+  ): Promise<HookResponse> => {
+    const runtime = active;
+    if (!runtime || !runtime.acceptingEffects) return { context: [] };
     const converted = eventPayload(event);
-    if (converted.bounded && interceptableEvents.has(eventName)) {
+    if (converted.bounded && gateEvents.has(eventName as NativeHookEventName)) {
       return {
-        event: eventName,
         context: [],
-        blockReason:
-          "Hook policy input exceeded safety bounds and was denied closed.",
+        block: {
+          reason:
+            "Hook policy input exceeded safety bounds and was denied closed.",
+        },
       };
     }
-    const result = await engine.dispatch({
-      event: eventName,
-      mode: options.mode(),
-      payload: converted.payload,
-    });
-    const applied = await applyEffects(eventName, result.effects, ctx);
-    if (result.status === "bounded" && interceptableEvents.has(eventName)) {
-      applied.blockReason ??= "Hook dispatch reached a safety bound.";
+    const result = await eventContexts.run(ctx, () =>
+      runtime.hooks.handle(
+        {
+          event: eventName,
+          payload: converted.payload,
+          cwd: ctx.cwd,
+          unattended,
+        },
+        ctx.signal,
+      ),
+    );
+    if (active !== runtime || !runtime.acceptingEffects) return { context: [] };
+    reportSuspensions(runtime);
+    if (!result.ok) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(result.error.message, "error");
+      return gateEvents.has(eventName as NativeHookEventName)
+        ? { context: [], block: { reason: result.error.message } }
+        : { context: [] };
     }
-    return applied;
-  }
+    return result.value;
+  };
+
+  const handleNative = (event: NativeHookEvent, ctx: ExtensionContext) =>
+    handle(event.type, event, ctx, nativeEventIsUnattended(event, ctx));
 
   pi.registerCommand("hooks", {
     description:
       "Inspect, validate, reload, or show bounded declarative-hook logs.",
     handler: async (rawArgs, ctx) => {
-      if (!ctx.hasUI) {
-        throw new Error("Hook commands require TUI or RPC UI mode.");
+      if (!supportsHookUi(ctx))
+        throw new Error("/hooks requires TUI or RPC mode.");
+      const runtime = active;
+      if (!runtime || !runtime.acceptingEffects) {
+        ctx.ui.notify("Hooks runtime is inactive.", "warning");
+        return;
       }
       const args = rawArgs.trim();
-      if (args === "validate") {
-        const result = await engine.validate(sources);
-        ctx.ui.notify(
-          result.valid
-            ? `Hook configuration valid: ${result.hooks.length} hook(s).`
-            : result.diagnostics
-                .map((entry) => `[${entry.code}] ${entry.message}`)
-                .join("\n"),
-          result.valid ? "info" : "error",
+      if (!["", "inspect", "validate", "reload", "logs"].includes(args)) {
+        throw new Error("Usage: /hooks [inspect|validate|reload|logs]");
+      }
+      if (args === "validate" || args === "reload") {
+        const command =
+          args === "validate"
+            ? {
+                type: "validate" as const,
+                sources: sourcesFor(agentDir, runtime.project, ctx),
+              }
+            : {
+                type: "apply" as const,
+                expectedRevision: runtime.hooks.inspect().revision,
+                sources: sourcesFor(agentDir, runtime.project, ctx),
+              };
+        const result = await eventContexts.run(ctx, () =>
+          runtime.hooks.configure(command),
         );
+        if (active !== runtime || !runtime.acceptingEffects) return;
+        reportSuspensions(runtime);
+        if (result.ok) {
+          ctx.ui.notify(
+            args === "validate"
+              ? `Hook configuration valid: ${result.value.hookCount} hook(s).`
+              : `Reloaded ${result.value.hookCount} hook(s) at revision ${result.value.revision}.`,
+            "info",
+          );
+        } else {
+          const diagnostics =
+            result.error.diagnostics
+              ?.map((entry) => `[${entry.code}] ${entry.message}`)
+              .join("\n") ?? "";
+          ctx.ui.notify(
+            boundedNotice(
+              `${result.error.message}${diagnostics ? `\n${diagnostics}` : ""}`,
+            ),
+            "error",
+          );
+        }
         return;
       }
-      if (args === "reload") {
-        const result = await engine.reload(sources);
-        ctx.ui.notify(
-          result.applied
-            ? `Reloaded ${result.hooks.length} hook(s).`
-            : `Hook reload rejected; last known-good configuration retained.\n${result.diagnostics
-                .map((entry) => `[${entry.code}] ${entry.message}`)
-                .join("\n")}`,
-          result.applied ? "info" : "error",
-        );
-        return;
-      }
+
+      const inspection = runtime.hooks.inspect();
       if (args === "logs") {
         ctx.ui.notify(
-          engineLogs(engine, hostLogs).join("\n") || "No hook activity.",
+          boundedNotice(
+            inspection.history
+              .map(
+                (entry) =>
+                  `${entry.sequence} ${entry.type} ${entry.hookId ?? "-"} ${entry.outcome}: ${entry.message}`,
+              )
+              .join("\n") || "No hook activity.",
+          ),
           "info",
         );
         return;
       }
-      const inspection = engine.inspect();
+      const hooks = inspection.hooks.map(
+        (hook) =>
+          `${hook.id} ${hook.event} [${hook.actions.join(", ")}] - ${hook.source}`,
+      );
+      const sourceState = inspection.sources.map(
+        (source) =>
+          `${source.scope} ${source.status} - ${source.path}${source.reason ? ` (${source.reason})` : ""}`,
+      );
+      const diagnostics = inspection.diagnostics.map(
+        (entry) => `[${entry.code}] ${entry.message}`,
+      );
       ctx.ui.notify(
-        inspection.hooks
-          .map(
-            (hook) =>
-              `${hook.id} ${hook.event} ${hook.action} ${hook.failurePolicy} - ${hook.source}`,
-          )
-          .join("\n") || "No declarative hooks configured.",
-        inspection.diagnostics.length > 0 ? "warning" : "info",
+        boundedNotice(
+          [...hooks, ...sourceState, ...diagnostics].join("\n") ||
+            "No declarative hooks configured.",
+        ),
+        diagnostics.length > 0 ? "warning" : "info",
       );
     },
   });
 
-  const genericOn = pi.on.bind(pi) as (
-    event: HookEvent,
-    handler: (event: unknown, ctx: ExtensionContext) => unknown,
-  ) => void;
-  const special = new Set<HookEvent>([
-    "session_start",
-    "session_shutdown",
-    "before_agent_start",
-    "context",
-    "tool_call",
-    "input",
-    "user_bash",
-    "session_before_switch",
-    "session_before_fork",
-    "session_before_compact",
-    "session_before_tree",
-  ]);
-  for (const eventName of hookEvents) {
-    if (special.has(eventName)) continue;
-    genericOn(eventName, async (event, ctx) => {
-      await dispatch(eventName, event, ctx);
+  const registerObserver = <E extends NativeHookEventName>(eventName: E) => {
+    const on = pi.on as unknown as (
+      event: E,
+      handler: (
+        event: NativeHookEvent<E>,
+        ctx: ExtensionContext,
+      ) => Promise<void>,
+    ) => void;
+    on(eventName, async (event, ctx) => {
+      await handleNative(event, ctx);
     });
+  };
+
+  for (const eventName of [
+    "resources_discover",
+    "session_info_changed",
+    "session_compact",
+    "session_compact_failed",
+    "session_tree",
+    "agent_start",
+    "agent_end",
+    "agent_settled",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_update",
+    "message_end",
+    "before_provider_headers",
+    "before_provider_request",
+    "after_provider_response",
+    "model_select",
+    "thinking_level_select",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+    "tool_result",
+  ] as const) {
+    registerObserver(eventName);
   }
 
   pi.on("before_agent_start", async (event, ctx) => {
-    const applied = await dispatch("before_agent_start", event, ctx);
-    if (applied.context.length > 0) {
+    const response = await handleNative(event, ctx);
+    if (response.context.length > 0) {
       return {
-        systemPrompt: `${event.systemPrompt}\n\n## Declarative hook context\n${applied.context.join("\n\n")}`,
+        systemPrompt: `${event.systemPrompt}\n\n## Declarative hook context\n${response.context.join("\n\n")}`,
       };
     }
   });
 
   pi.on("context", async (event, ctx) => {
-    const applied = await dispatch(
+    const response = await handle(
       "context",
       { messageCount: event.messages.length },
       ctx,
+      nativeEventIsUnattended(event, ctx),
     );
-    if (applied.blockReason) {
-      ctx.ui.notify(applied.blockReason, "error");
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "error");
       ctx.abort();
     }
-    if (applied.context.length > 0) {
+    if (response.context.length > 0) {
       return {
         messages: [
           ...event.messages,
-          ...applied.context.map((content) => ({
+          ...response.context.map((content) => ({
             role: "custom" as const,
             customType: "platform-hook-context",
             content,
@@ -499,25 +531,24 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    const applied = await dispatch("tool_call", event, ctx);
-    if (applied.blockReason)
-      return { block: true, reason: applied.blockReason };
+    const response = await handleNative(event, ctx);
+    if (response.block) return { block: true, reason: response.block.reason };
   });
 
   pi.on("input", async (event, ctx) => {
-    const applied = await dispatch("input", event, ctx);
-    if (applied.blockReason) {
-      ctx.ui.notify(applied.blockReason, "warning");
+    const response = await handleNative(event, ctx);
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
       return { action: "handled" as const };
     }
   });
 
   pi.on("user_bash", async (event, ctx) => {
-    const applied = await dispatch("user_bash", event, ctx);
-    if (applied.blockReason) {
+    const response = await handleNative(event, ctx);
+    if (response.block) {
       return {
         result: {
-          output: applied.blockReason,
+          output: response.block.reason,
           exitCode: 1,
           cancelled: false,
           truncated: false,
@@ -526,74 +557,198 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
     }
   });
 
-  for (const eventName of [
-    "session_before_switch",
-    "session_before_fork",
-    "session_before_compact",
-    "session_before_tree",
-  ] as const) {
-    genericOn(eventName, async (event, ctx) => {
-      const applied = await dispatch(eventName, event, ctx);
-      if (applied.blockReason) {
-        ctx.ui.notify(applied.blockReason, "warning");
-        return { cancel: true };
-      }
-    });
-  }
+  pi.on("session_before_switch", async (event, ctx) => {
+    const response = await handleNative(event, ctx);
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      return { cancel: true };
+    }
+  });
 
-  return {
-    async start(input: HooksSessionContext, startEvent: unknown) {
-      processRunner ??= createHookProcessRunner();
-      currentContext = input.ctx;
-      const root = projectRoot(input.project);
-      sources = [
-        {
-          scope: "global",
-          path: path.join(agentDir, "hooks.yaml"),
-          root: agentDir,
-          optional: true,
+  pi.on("session_before_fork", async (event, ctx) => {
+    const response = await handleNative(event, ctx);
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      return { cancel: true };
+    }
+  });
+
+  pi.on("session_before_compact", async (event, ctx) => {
+    const response = await handleNative(event, ctx);
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      return { cancel: true };
+    }
+  });
+
+  pi.on("session_before_tree", async (event, ctx) => {
+    const response = await handleNative(event, ctx);
+    if (response.block) {
+      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      return { cancel: true };
+    }
+  });
+
+  const start = async (input: HooksSessionContext, startEvent: unknown) => {
+    const processRunner = createHookProcessRunner();
+    let runtime!: ActiveHooksRuntime;
+    const commandAdapter = {
+      run(request: HookProcessRequest) {
+        return processRunner.run({
+          ...request,
+          args: [...request.args],
+          env: { ...request.env },
+        });
+      },
+      async shutdown() {
+        // Wiring owns process shutdown so close and host shutdown errors aggregate.
+      },
+    } satisfies HookProcessRunner;
+    const policyAdapter: CapabilityPolicy = {
+      decide(operation, actor, mode) {
+        return resolveDynamic(options.policy).decide(operation, actor, mode);
+      },
+    };
+    const hooks = createHooks({
+      actor: () => resolveDynamic(options.actor),
+      mode: options.mode,
+      policy: policyAdapter,
+      trust: {
+        isTrusted(source) {
+          if (source.scope === "global") return true;
+          return active === runtime && runtime.ctx.isProjectTrusted();
         },
-        ...(root
-          ? [
-              {
-                scope: "project" as const,
-                path: path.join(root, CONFIG_DIR_NAME, "hooks.yaml"),
-                root,
-                trusted: input.projectTrusted,
-                optional: true,
-              },
-            ]
-          : []),
-      ];
-      const result = await engine.start(sources);
-      for (const diagnostic of result.diagnostics) {
-        if (diagnostic.severity === "error") {
-          input.ctx.ui.notify(
-            `[${diagnostic.code}] ${diagnostic.message}`,
-            "error",
-          );
+      },
+      adapters: {
+        command: commandAdapter,
+        ui: {
+          notify(message, level) {
+            if (
+              active !== runtime ||
+              !runtime.acceptingEffects ||
+              !supportsHookUi(contextForAdapter(runtime))
+            )
+              return;
+            contextForAdapter(runtime).ui.notify(message, level);
+          },
+          setStatus(key, text) {
+            if (active !== runtime && text !== undefined) return;
+            if (!runtime.acceptingEffects && text !== undefined) return;
+            setHostStatus(runtime, `${STATUS_PREFIX}${key}`, text);
+          },
+          async confirm(title, message, timeoutMs) {
+            const ctx = contextForAdapter(runtime);
+            if (
+              active !== runtime ||
+              !runtime.acceptingEffects ||
+              !supportsHookUi(ctx)
+            )
+              return false;
+            return ctx.ui.confirm(title, message, { timeout: timeoutMs });
+          },
+        },
+        ...(options.adapters?.http ? { http: options.adapters.http } : {}),
+        ...(options.adapters?.mcp ? { mcp: options.adapters.mcp } : {}),
+        ...(options.adapters?.agent ? { agent: options.adapters.agent } : {}),
+      },
+    });
+    runtime = {
+      hooks,
+      process: processRunner,
+      ctx: input.ctx,
+      project: input.project,
+      statusKeys: new Set(),
+      suspensionNotices: new Set(),
+      acceptingEffects: true,
+    };
+    active = runtime;
+    const configured = await eventContexts.run(input.ctx, () =>
+      hooks.configure({
+        type: "apply",
+        expectedRevision: 0,
+        sources: sourcesFor(agentDir, input.project, input.ctx),
+      }),
+    );
+    if (active !== runtime || !runtime.acceptingEffects) return configured;
+    if (!configured.ok && supportsHookUi(input.ctx)) {
+      const diagnostics =
+        configured.error.diagnostics
+          ?.map((entry) => `[${entry.code}] ${entry.message}`)
+          .join("\n") ?? "";
+      input.ctx.ui.notify(
+        boundedNotice(
+          `${configured.error.message}${diagnostics ? `\n${diagnostics}` : ""}`,
+        ),
+        "error",
+      );
+    }
+    await handle(
+      "session_start",
+      startEvent,
+      input.ctx,
+      input.ctx.mode === "json" || input.ctx.mode === "print",
+    );
+    return configured;
+  };
+
+  const stop = async (reason: string, event: unknown) => {
+    const runtime = active;
+    if (!runtime) return { status: "stopped" as const, reason };
+    if (runtime.stopPromise) return runtime.stopPromise;
+    runtime.stopPromise = (async () => {
+      const failures: unknown[] = [];
+      try {
+        await handle(
+          "session_shutdown",
+          event,
+          runtime.ctx,
+          runtime.ctx.mode === "json" || runtime.ctx.mode === "print",
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+      runtime.acceptingEffects = false;
+      if (active === runtime) active = undefined;
+      const settled = await Promise.allSettled([
+        runtime.hooks.close(),
+        runtime.process.shutdown(2_000),
+      ]);
+      for (const result of settled) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
+      for (const key of [...runtime.statusKeys]) {
+        try {
+          runtime.ctx.ui.setStatus(key, undefined);
+          runtime.statusKeys.delete(key);
+        } catch (error) {
+          failures.push(error);
         }
       }
-      await dispatch("session_start", startEvent, input.ctx);
-      return result;
+      if (failures.length > 0)
+        throw new AggregateError(failures, "Hooks shutdown failed.");
+      return { status: "stopped" as const, reason };
+    })();
+    return runtime.stopPromise;
+  };
+
+  return {
+    start,
+    stop,
+    inspect: () =>
+      active?.hooks.inspect() ?? {
+        revision: 0,
+        hooks: [],
+        history: [],
+        diagnostics: [],
+        sources: [],
+      },
+    async handlePlatformEvent(
+      event: PlatformHookEvent,
+      payload: PlatformHookPayload,
+    ) {
+      const runtime = active;
+      if (!runtime || !runtime.acceptingEffects) return { context: [] };
+      return handle(event, payload, runtime.ctx, true);
     },
-    async stop(reason: string, event: unknown) {
-      for (const controller of commandControllers) controller.abort();
-      if (currentContext) {
-        await dispatch("session_shutdown", event, currentContext);
-      }
-      for (const controller of commandControllers) controller.abort();
-      await processRunner?.shutdown(2_000);
-      processRunner = undefined;
-      commandControllers.clear();
-      if (currentContext) {
-        for (const key of statusKeys)
-          currentContext.ui.setStatus(key, undefined);
-      }
-      statusKeys.clear();
-      currentContext = undefined;
-      return engine.stop(reason);
-    },
-    engine: () => engine,
   };
 }

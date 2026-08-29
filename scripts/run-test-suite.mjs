@@ -78,6 +78,7 @@ const integration = [
   "extensions/platform/credential-vault.integration.test.ts",
   "extensions/platform/hook-process.integration.test.ts",
   "extensions/platform/hooks.integration.test.ts",
+  "extensions/platform/hooks-wiring.test.ts",
   "extensions/platform/language-intelligence.integration.test.ts",
   "extensions/platform/lifecycle-supervisor.integration.test.ts",
   "extensions/platform/mcp-http.integration.test.ts",
