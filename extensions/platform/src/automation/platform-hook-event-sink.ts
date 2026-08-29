@@ -28,6 +28,26 @@ interface PayloadBudget {
   readonly seen: WeakSet<object>;
 }
 
+interface EventBusLike {
+  emit(channel: string, data: unknown): void;
+  on(channel: string, handler: (data: unknown) => void): () => void;
+}
+
+interface AvailabilityQuery {
+  readonly kind: "query";
+  readonly version: 1;
+  claimed: boolean;
+}
+
+interface PublicationInvocation {
+  readonly kind: "publish";
+  readonly version: 1;
+  readonly request: PlatformHookEventEnvelope;
+  claimed: boolean;
+}
+
+// Coordination among trusted extension code. Hook core validates publications.
+const CHANNEL = "platform:hook-event-sink:private";
 const MAX_PAYLOAD_BYTES = 24 * 1024;
 const MAX_STRING_BYTES = 4 * 1024;
 const MAX_KEY_BYTES = 128;
@@ -46,7 +66,74 @@ const reservedKey =
   /^(?:authority|capabilities|event|eventType|permissions?|provenance|source|trusted|trust)$/i;
 const sensitiveKey =
   /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
-const sinks = new WeakMap<object, PlatformHookEventSink>();
+const bindings = new WeakMap<
+  object,
+  { readonly sink: PlatformHookEventSink; readonly unlisten: () => void }
+>();
+
+function isEventBusLike(value: object): value is object & EventBusLike {
+  return (
+    "emit" in value &&
+    typeof value.emit === "function" &&
+    "on" in value &&
+    typeof value.on === "function"
+  );
+}
+
+function hasSink(eventBus: EventBusLike) {
+  const query: AvailabilityQuery = {
+    kind: "query",
+    version: 1,
+    claimed: false,
+  };
+  eventBus.emit(CHANNEL, query);
+  return query.claimed;
+}
+
+function protocolMessage(value: unknown) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("version" in value) ||
+    value.version !== 1 ||
+    !("kind" in value) ||
+    !("claimed" in value) ||
+    typeof value.claimed !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (value.kind === "query") return value as AvailabilityQuery;
+  if (value.kind === "publish" && "request" in value) {
+    return value as unknown as PublicationInvocation;
+  }
+  return undefined;
+}
+
+function validEnvelope(value: unknown): value is PlatformHookEventEnvelope {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "event" in value &&
+    typeof value.event === "string" &&
+    eventNames.has(value.event) &&
+    "source" in value &&
+    typeof value.source === "string" &&
+    sourceNames.has(value.source) &&
+    "payload" in value &&
+    !!value.payload &&
+    typeof value.payload === "object" &&
+    !Array.isArray(value.payload)
+  );
+}
+
+function publishToSink(sink: PlatformHookEventSink, request: unknown) {
+  if (!validEnvelope(request)) return;
+  try {
+    sink.publish(request);
+  } catch {
+    // Observe-only publication must not roll back a committed transition.
+  }
+}
 
 function boundedText(text: string, limit: number, budget: PayloadBudget) {
   const remaining = Math.max(0, MAX_PAYLOAD_BYTES - budget.bytes);
@@ -154,14 +241,29 @@ export function bindPlatformHookEventSink(
   loader: object,
   sink: PlatformHookEventSink,
 ) {
-  if (sinks.has(loader)) {
+  if (bindings.has(loader) || (isEventBusLike(loader) && hasSink(loader))) {
     throw new Error(
       "A platform hook event sink is already bound to this loader.",
     );
   }
-  sinks.set(loader, sink);
+  const unlisten = isEventBusLike(loader)
+    ? loader.on(CHANNEL, (value) => {
+        const message = protocolMessage(value);
+        if (!message || message.claimed) return;
+        message.claimed = true;
+        if (message.kind === "query") return;
+        publishToSink(sink, message.request);
+      })
+    : () => {};
+  bindings.set(loader, { sink, unlisten });
+  let bound = true;
   return () => {
-    if (sinks.get(loader) === sink) sinks.delete(loader);
+    if (!bound) return;
+    bound = false;
+    const binding = bindings.get(loader);
+    if (binding?.sink !== sink) return;
+    bindings.delete(loader);
+    binding.unlisten();
   };
 }
 
@@ -172,18 +274,24 @@ export function platformHookEventProducerFor(
   return {
     publish(event, input) {
       if (!eventNames.has(event) || !sourceNames.has(source)) return;
-      const sink = sinks.get(loader);
-      if (!sink) return;
       const envelope = Object.freeze({
         event,
         source,
         payload: payload(input),
       });
-      try {
-        sink.publish(envelope);
-      } catch {
-        // Observe-only publication must not roll back a committed transition.
+      const sink = bindings.get(loader)?.sink;
+      if (sink) {
+        publishToSink(sink, envelope);
+        return;
       }
+      if (!isEventBusLike(loader)) return;
+      const invocation: PublicationInvocation = {
+        kind: "publish",
+        version: 1,
+        request: envelope,
+        claimed: false,
+      };
+      loader.emit(CHANNEL, invocation);
     },
   };
 }

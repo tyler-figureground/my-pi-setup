@@ -1,10 +1,61 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createEventBus, type EventBus } from "@earendil-works/pi-coding-agent";
 import {
   bindPlatformHookEventSink,
   platformHookEventProducerFor,
   type PlatformHookEventEnvelope,
 } from "./src/automation/platform-hook-event-sink.ts";
+
+function eventBusWrapper(shared: EventBus): EventBus {
+  return {
+    emit: (channel, data) => shared.emit(channel, data),
+    on: (channel, handler) => shared.on(channel, handler),
+  };
+}
+
+test("platform hook events cross distinct wrappers as sanitized envelopes", () => {
+  const shared = createEventBus();
+  const sinkEvents = eventBusWrapper(shared);
+  const producerEvents = eventBusWrapper(shared);
+  const published: PlatformHookEventEnvelope[] = [];
+  const unbind = bindPlatformHookEventSink(sinkEvents, {
+    publish(envelope) {
+      published.push(envelope);
+      throw new Error("observe-only sink failure");
+    },
+  });
+  const producer = platformHookEventProducerFor(producerEvents, "scheduler");
+
+  assert.doesNotThrow(() =>
+    producer.publish("schedule.completed", {
+      occurrenceId: "occurrence-1",
+      authority: "system",
+      token: "secret",
+      output: "x".repeat(100_000),
+    }),
+  );
+  assert.equal(published.length, 1);
+  assert.equal(published[0]?.payload.occurrenceId, "occurrence-1");
+  assert.equal(Object.hasOwn(published[0]?.payload ?? {}, "authority"), false);
+  assert.equal(published[0]?.payload.token, "[REDACTED]");
+  assert.ok(Object.isFrozen(published[0]));
+  assert.ok(Object.isFrozen(published[0]?.payload));
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(published[0]?.payload)) <= 32 * 1024,
+  );
+  assert.throws(
+    () => bindPlatformHookEventSink(producerEvents, { publish() {} }),
+    /already bound/i,
+  );
+
+  unbind();
+  assert.doesNotThrow(() =>
+    producer.publish("schedule.failed", { occurrenceId: "occurrence-2" }),
+  );
+  assert.equal(published.length, 1);
+  unbind();
+});
 
 test("platform hook event sinks are loader-local, exclusive, and fenced by unbind", () => {
   const firstLoader = {};

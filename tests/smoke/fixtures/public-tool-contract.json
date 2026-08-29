@@ -783,6 +783,134 @@
     }
   },
   {
+    "name": "schedule_change",
+    "parameters": {
+      "type": "object",
+      "required": ["action", "id", "expectedRevision"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["create", "replace", "pause", "resume", "run-now", "delete"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["session", "durable"]
+        },
+        "schedule": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["one-shot", "interval", "cron"]
+            },
+            "at": { "type": "string", "minLength": 20, "maxLength": 64 },
+            "anchor": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 64
+            },
+            "everyMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "expression": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 256
+            },
+            "timeZone": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "additionalProperties": false
+        },
+        "missedRunPolicy": {
+          "type": "string",
+          "enum": ["skip", "run-once"]
+        },
+        "profileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 262144 },
+        "credentialReferences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 3600000
+            },
+            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "maxOutputBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "schedule_inspect",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["active", "paused", "blocked"]
+        },
+        "includeHistory": { "type": "boolean" },
+        "afterId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "scrape",
     "parameters": {
       "type": "object",

@@ -110,6 +110,22 @@ function readLog() {
     .map((line) => JSON.parse(line));
 }
 
+function assertPrivateProtocols(record, expected, phase) {
+  assert.ok(record, `private protocols recorded for ${phase}`);
+  for (const field of [
+    "scheduledExecutor",
+    "namedProfileExecution",
+    "terminalObservation",
+    "profiles",
+  ]) {
+    assert.equal(
+      record[field],
+      expected,
+      `${phase} ${field}: ${JSON.stringify(record)}`,
+    );
+  }
+}
+
 async function matchingProcesses(token) {
   if (process.platform === "win32") {
     const escaped = token.replaceAll("'", "''");
@@ -209,7 +225,7 @@ async function smokeRepositoryExtensions() {
       "--print",
     ],
     {
-      cwd: tempRoot,
+      cwd: os.tmpdir(),
       env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -254,6 +270,8 @@ async function smokeRepositoryExtensions() {
     "memory_search",
     "monitor_inspect",
     "monitor_change",
+    "schedule_inspect",
+    "schedule_change",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -306,17 +324,35 @@ async function smokeRepositoryExtensions() {
     "memory",
     "monitor",
     "monitors",
+    "schedule",
+    "schedules",
   ]) {
     assert.ok(
       surface.commands.includes(command),
       `registered command ${command}`,
     );
   }
+  assertPrivateProtocols(
+    events.find(
+      (event) =>
+        event.event === "private_protocols" &&
+        event.phase === "resources_discover:startup",
+    ),
+    true,
+    "repository startup",
+  );
+  assert.ok(
+    events.some(
+      (event) => event.event === "platform_event_flow" && event.claimed,
+    ),
+    "platform event crosses isolated extension modules",
+  );
   await assertNoLeak(token);
 }
 
 async function smokePlatformRpc() {
   const token = `pi-smoke-platform-rpc-${process.pid}-${Date.now()}`;
+  const before = readLog().length;
   const child = spawn(
     process.execPath,
     [
@@ -329,14 +365,14 @@ async function smokePlatformRpc() {
       "--no-prompt-templates",
       "--no-themes",
       "--no-context-files",
-      "--no-approve",
+      "--approve",
       "--name",
       token,
       "--mode",
       "rpc",
     ],
     {
-      cwd: tempRoot,
+      cwd: os.tmpdir(),
       env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -354,7 +390,7 @@ async function smokePlatformRpc() {
     60_000,
   );
   assert.equal(commands.success, true);
-  for (const name of ["plan", "rules", "hooks"]) {
+  for (const name of ["plan", "rules", "hooks", "schedule", "schedules"]) {
     assert.ok(
       commands.data.commands.some((command) => command.name === name),
       `platform RPC command ${name}`,
@@ -365,6 +401,7 @@ async function smokePlatformRpc() {
     ["plan-status", "/plan status"],
     ["rules", "/rules"],
     ["hooks", "/hooks validate"],
+    ["schedules", "/schedules"],
   ]) {
     send({ id, type: "prompt", message });
     const response = await reader.waitFor((record) => record.id === id);
@@ -381,6 +418,22 @@ async function smokePlatformRpc() {
   child.stdin.end();
   const result = await waitForExit(child, 60_000);
   assert.equal(result.code, 0, stderr || result.stderr);
+  const events = readLog().slice(before);
+  assertPrivateProtocols(
+    events.find(
+      (event) =>
+        event.event === "private_protocols" &&
+        event.phase === "resources_discover:startup",
+    ),
+    true,
+    "RPC startup",
+  );
+  assert.ok(
+    events.some(
+      (event) => event.event === "platform_event_flow" && event.claimed,
+    ),
+    "platform event crosses isolated modules in RPC mode",
+  );
   await assertNoLeak(token);
 }
 

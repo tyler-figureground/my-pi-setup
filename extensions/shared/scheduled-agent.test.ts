@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createEventBus, type EventBus } from "@earendil-works/pi-coding-agent";
 import type { ResolvedAgentProfile } from "./agent-profile.ts";
 import {
   bindScheduledAgentExecutor,
@@ -25,6 +26,77 @@ const profile = {
     workspace: "current",
   },
 } as const satisfies ResolvedAgentProfile;
+
+function eventBusWrapper(shared: EventBus): EventBus {
+  return {
+    emit: (channel, data) => shared.emit(channel, data),
+    on: (channel, handler) => shared.on(channel, handler),
+  };
+}
+
+test("scheduled executor crosses distinct event wrappers with structural private invocations", async () => {
+  const shared = createEventBus();
+  const providerEvents = eventBusWrapper(shared);
+  const consumerEvents = eventBusWrapper(shared);
+  const emitted: unknown[] = [];
+  const observingConsumerEvents: EventBus = {
+    emit(channel, data) {
+      emitted.push(data);
+      shared.emit(channel, data);
+    },
+    on: (channel, handler) => shared.on(channel, handler),
+  };
+  const prompts: string[] = [];
+  const executor: ScheduledAgentExecutor = {
+    async run(request) {
+      prompts.push(request.prompt);
+      assert.ok(Object.isFrozen(request));
+      assert.equal(Object.hasOwn(request, "model"), false);
+      assert.equal(Object.hasOwn(request, "authority"), false);
+      return {
+        ok: true,
+        value: { status: "completed", output: "done", outputBytes: 4 },
+      };
+    },
+  };
+
+  assert.equal(scheduledAgentExecutorFor(consumerEvents), undefined);
+  const unbind = bindScheduledAgentExecutor(providerEvents, executor);
+  const client = scheduledAgentExecutorFor(observingConsumerEvents);
+  assert.ok(client);
+  assert.notEqual(client, executor);
+  const request = {
+    occurrenceId: "occurrence-cross-wrapper",
+    prompt: "Inspect CI",
+    cwd: "C:/fixture",
+    projectId: "git:fixture",
+    profile,
+    timeoutMs: 10_000,
+    maxOutputBytes: 1_024,
+  };
+  const result = await client.run(request);
+  assert.equal(result.ok, true);
+  assert.deepEqual(prompts, ["Inspect CI"]);
+  assert.deepEqual(
+    emitted.map((value) => (value as { kind: string }).kind),
+    ["query", "run"],
+  );
+  assert.ok(
+    emitted.every(
+      (value) =>
+        (value as { version: number }).version === 1 &&
+        (value as { claimed: boolean }).claimed,
+    ),
+  );
+  assert.throws(
+    () => bindScheduledAgentExecutor(consumerEvents, executor),
+    /already bound/i,
+  );
+
+  unbind();
+  assert.equal(scheduledAgentExecutorFor(consumerEvents), undefined);
+  await assert.rejects(() => client.run(request), /unavailable/i);
+});
 
 test("scheduled executor binding is host-local, exclusive, and releasable", async () => {
   const eventBus = {};
