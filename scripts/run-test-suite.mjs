@@ -98,6 +98,7 @@ const integration = [
   "extensions/platform/rules.integration.test.ts",
   "extensions/platform/session-broker.test.ts",
   "extensions/platform/state-store.integration.test.ts",
+  "extensions/platform/trigger-persistence.integration.test.ts",
   "extensions/platform/workspaces.test.ts",
   "extensions/shared/child-session.test.ts",
   "extensions/subagents/manager.test.ts",
