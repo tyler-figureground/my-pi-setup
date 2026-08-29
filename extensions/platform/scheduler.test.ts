@@ -12,6 +12,7 @@ import {
   type HostAuthority,
   type ResultDelivery,
   type SchedulerClock,
+  type SchedulerOptions,
 } from "./src/automation/scheduler/index.ts";
 import type { ArtifactStore } from "./src/core/artifacts/index.ts";
 import type { StateStore } from "./src/core/persistence/index.ts";
@@ -137,6 +138,7 @@ async function openScheduler(
     retention?: { maxOccurrences?: number; maxInspection?: number };
     project?: typeof project;
     creatorSessionId?: string;
+    hookEvents?: SchedulerOptions["hookEvents"];
   } = {},
 ) {
   const boundProject = overrides.project ?? project;
@@ -148,6 +150,7 @@ async function openScheduler(
     authority: overrides.authority ?? createAuthority(boundProject),
     executor: overrides.executor ?? createExecutor(),
     delivery: overrides.delivery ?? createDelivery(),
+    ...(overrides.hookEvents ? { hookEvents: overrides.hookEvents } : {}),
     ownerId: overrides.ownerId ?? "scheduler-owner",
     retention: overrides.retention,
     binding: {
@@ -160,6 +163,39 @@ async function openScheduler(
   if (!opened.ok) throw new Error("Scheduler failed to open.");
   return { ...opened.value, clock };
 }
+
+test("committed Schedule Occurrences publish typed due, started, and completed events", async () => {
+  const clock = new FakeClock();
+  const events: string[] = [];
+  const runtime = await openScheduler(clock, {
+    hookEvents: {
+      publish(event) {
+        events.push(event);
+      },
+    },
+  });
+  const at = new Date(clock.now() + 1).toISOString();
+  const created = await runtime.scheduler.change({
+    type: "create",
+    requestId: "hook-event-create",
+    id: "hook-event-schedule",
+    expectedRevision: 0,
+    scope: "durable",
+    schedule: { kind: "one-shot", at },
+    missedRunPolicy: "run-once",
+    profileName: "nightly",
+    prompt: "Publish committed lifecycle events.",
+  });
+  assert.equal(created.ok, true);
+  await clock.advanceTo(clock.now() + 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, [
+    "schedule.due",
+    "schedule.started",
+    "schedule.completed",
+  ]);
+  await runtime.close();
+});
 
 test("runtime missed policy collapses backlog and preserves anchored cadence", async () => {
   const clock = new FakeClock();

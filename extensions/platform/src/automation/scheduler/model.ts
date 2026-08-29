@@ -54,6 +54,7 @@ import type {
 } from "../../profiles/index.ts";
 import type { ProjectIdentity } from "../../core/projects/index.ts";
 import type { ScheduledAgentExecutor } from "../../../../shared/scheduled-agent.ts";
+import type { PlatformHookEventProducer } from "../platform-hook-event-sink.ts";
 
 export type ScheduleScope = "session" | "durable";
 export type ScheduleState = "active" | "paused" | "blocked" | "deleted";
@@ -263,6 +264,7 @@ export interface SchedulerOptions {
   readonly authority: HostAuthority;
   readonly executor: ScheduledAgentExecutor;
   readonly delivery: ResultDelivery;
+  readonly hookEvents?: PlatformHookEventProducer;
   readonly ownerId: string;
   readonly binding: ScheduleHostBinding;
   readonly configuration?: Partial<PlatformSchedulerConfiguration>;

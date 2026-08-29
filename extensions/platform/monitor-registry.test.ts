@@ -97,6 +97,43 @@ function createFixture() {
   };
 }
 
+test("committed Monitor state and matched delivery publish typed platform events", async () => {
+  const fixture = createFixture();
+  const events: string[] = [];
+  let emit: ((event: MonitorSourceEvent) => void) | undefined;
+  fixture.options.hookEvents = {
+    publish(event) {
+      events.push(event);
+    },
+  };
+  fixture.options.limits = { batchWindowMs: 1 };
+  fixture.options.sources = {
+    async open(_definition, listener) {
+      emit = listener;
+      return { close() {} };
+    },
+  };
+  const opened = await createMonitorRegistry(fixture.options);
+  assert.equal(opened.ok, true);
+  if (!opened.ok) return;
+  const created = await opened.value.registry.change({
+    type: "create",
+    requestId: "event-monitor-create",
+    id: "event-monitor",
+    expectedRevision: 0,
+    scope: "session",
+    source: { kind: "terminal", terminalId: "terminal-1" },
+    delivery: { kind: "session", sessionId: "result-session" },
+  });
+  assert.equal(created.ok, true);
+  emit?.({ type: "terminal.line", payload: { line: "ready" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["monitor.state_changed", "monitor.matched"]);
+  await opened.value.close();
+  await fixture.triggers.close();
+  await fixture.lifecycle.shutdown("quit");
+});
+
 test("create is revisioned and replays the same request without another source", async () => {
   const fixture = createFixture();
   const opened = await createMonitorRegistry(fixture.options);

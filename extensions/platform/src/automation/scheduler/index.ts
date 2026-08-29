@@ -1038,6 +1038,11 @@ export async function createScheduler(options: SchedulerOptions) {
       version: recordVersion(released.value, scheduleId, latest.version + 1),
     });
     activeClaims.delete(occurrenceId);
+    options.hookEvents?.publish("schedule.completed", {
+      scheduleId,
+      occurrenceId,
+      state: "completed",
+    });
   }
 
   async function completeFailed(
@@ -1181,6 +1186,12 @@ export async function createScheduler(options: SchedulerOptions) {
       version: recordVersion(released.value, scheduleId, latest.version + 1),
     });
     activeClaims.delete(occurrenceId);
+    options.hookEvents?.publish("schedule.failed", {
+      scheduleId,
+      occurrenceId,
+      state: "failed",
+      code: safeCode,
+    });
   }
 
   async function blockOccurrence(
@@ -1228,6 +1239,12 @@ export async function createScheduler(options: SchedulerOptions) {
       version: recordVersion(released.value, scheduleId, entry.version + 1),
     });
     activeClaims.delete(occurrenceId);
+    options.hookEvents?.publish("schedule.blocked", {
+      scheduleId,
+      occurrenceId,
+      state: "blocked",
+      code,
+    });
   }
 
   async function executeOccurrence(
@@ -1340,6 +1357,11 @@ export async function createScheduler(options: SchedulerOptions) {
       });
       const claim = activeClaims.get(occurrenceId);
       if (!claim) return;
+      options.hookEvents?.publish("schedule.started", {
+        scheduleId,
+        occurrenceId,
+        attempt,
+      });
       claim.timeoutAt = options.clock.now() + running.policy.timeoutMs;
       const timedOut = new Promise<
         Awaited<ReturnType<typeof options.executor.run>>
@@ -1732,6 +1754,12 @@ export async function createScheduler(options: SchedulerOptions) {
       renewAt:
         options.clock.now() +
         Math.max(1, Math.floor(configuration.leaseTtlMs / 3)),
+    });
+    options.hookEvents?.publish("schedule.due", {
+      scheduleId: entry.value.id,
+      occurrenceId,
+      dueAt,
+      kind,
     });
     startExecution(entry.value.id, occurrenceId, lease.fence);
   }

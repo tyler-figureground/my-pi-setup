@@ -7,6 +7,7 @@ import type { JsonObject, ModuleError, Outcome } from "../../core/result.ts";
 import type { TriggerEngineRuntime } from "../triggers/model.ts";
 import type { PlatformMonitorConfiguration } from "./config.ts";
 import type { StateStore } from "../../core/persistence/state-store.ts";
+import type { PlatformHookEventProducer } from "../platform-hook-event-sink.ts";
 
 export type MonitorScope = "session" | "durable";
 export type MonitorState =
@@ -206,6 +207,7 @@ export interface MonitorRegistryOptions {
   readonly sources: MonitorSourceFactory;
   readonly delivery: MonitorDelivery;
   readonly authority: MonitorAuthority;
+  readonly hookEvents?: PlatformHookEventProducer;
   readonly state?: StateStore;
   readonly configuration?: PlatformMonitorConfiguration;
   readonly limits?: {

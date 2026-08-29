@@ -918,6 +918,12 @@ export async function createMonitorRegistry(
         ? { lastError: "Monitor delivery is queued offline." }
         : {}),
     };
+    options.hookEvents?.publish("monitor.matched", {
+      monitorId: entry.value.id,
+      revision: expectedRevision,
+      eventCount: delivery.events.length,
+      deliveryState: result.value.state,
+    });
   };
 
   const bindings = () =>
@@ -1494,6 +1500,15 @@ export async function createMonitorRegistry(
     requests.set(requestId, { digest, receipt });
   };
 
+  const publishState = (receipt: MonitorChangeReceipt) => {
+    options.hookEvents?.publish("monitor.state_changed", {
+      monitorId: receipt.monitor.id,
+      revision: receipt.monitor.revision,
+      state: receipt.monitor.state,
+      sourceKind: receipt.monitor.source.kind,
+    });
+  };
+
   let mutationTail = Promise.resolve();
   const serializeMutation = async <T>(operation: () => Promise<T>) => {
     const previous = mutationTail;
@@ -1767,6 +1782,7 @@ export async function createMonitorRegistry(
             replayed: false,
           };
           rememberReceipt(command.requestId, digest, receipt);
+          publishState(receipt);
           return success(receipt);
         }
         if (command.type !== "create") {
@@ -1921,6 +1937,7 @@ export async function createMonitorRegistry(
               monitors.delete(command.id);
               const receipt = { monitor: deleted, replayed: false };
               rememberReceipt(command.requestId, digest, receipt);
+              publishState(receipt);
               return success(receipt);
             }
           } else {
@@ -2030,6 +2047,7 @@ export async function createMonitorRegistry(
             replayed: false,
           };
           rememberReceipt(command.requestId, digest, receipt);
+          publishState(receipt);
           return success(receipt);
         }
         if (command.expectedRevision !== 0)
@@ -2164,6 +2182,7 @@ export async function createMonitorRegistry(
         if (stale()) return staleAfterCommit(entry, undefined, "change", null);
         const receipt = { monitor: structuredClone(value), replayed: false };
         rememberReceipt(command.requestId, digest, receipt);
+        publishState(receipt);
         return success(receipt);
       });
     },

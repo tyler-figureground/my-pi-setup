@@ -2,7 +2,8 @@ import { isProxy } from "node:util/types";
 import { platformHookEvents, type PlainData } from "./hooks/model.ts";
 
 export type PlatformHookEvent = (typeof platformHookEvents)[number];
-export type PlatformHookEventSource = "workspaces" | "subagents" | "workflows";
+export type PlatformHookEventSource =
+  "workspaces" | "subagents" | "workflows" | "monitors" | "scheduler";
 
 export interface PlatformHookEventEnvelope {
   readonly event: PlatformHookEvent;
@@ -34,7 +35,13 @@ const MAX_NODES = 256;
 const MAX_DEPTH = 6;
 const MAX_ENTRIES = 64;
 const eventNames = new Set<string>(platformHookEvents);
-const sourceNames = new Set<string>(["workspaces", "subagents", "workflows"]);
+const sourceNames = new Set<string>([
+  "workspaces",
+  "subagents",
+  "workflows",
+  "monitors",
+  "scheduler",
+]);
 const reservedKey =
   /^(?:authority|capabilities|event|eventType|permissions?|provenance|source|trusted|trust)$/i;
 const sensitiveKey =
