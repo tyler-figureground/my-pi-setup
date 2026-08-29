@@ -518,6 +518,222 @@
     }
   },
   {
+    "name": "monitor_change",
+    "parameters": {
+      "type": "object",
+      "required": ["action", "id", "expectedRevision"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["create", "replace", "pause", "resume", "stop", "delete"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["session", "durable"]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["kind", "terminalId"],
+              "properties": {
+                "kind": { "type": "string", "const": "terminal" },
+                "terminalId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "framing": {
+                  "type": "string",
+                  "enum": ["line", "chunk"]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind", "root"],
+              "properties": {
+                "kind": { "type": "string", "const": "file" },
+                "root": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32768
+                },
+                "recursive": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind", "adapter", "intervalMs"],
+              "properties": {
+                "kind": { "type": "string", "const": "poll" },
+                "adapter": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "intervalMs": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "input": {
+                  "type": "object",
+                  "patternProperties": {
+                    "^.*$": {
+                      "$defs": {
+                        "JsonValue": {
+                          "$id": "JsonValue",
+                          "anyOf": [
+                            { "type": "null" },
+                            { "type": "boolean" },
+                            { "type": "number" },
+                            { "type": "string", "maxLength": 8192 },
+                            {
+                              "type": "array",
+                              "items": { "$ref": "JsonValue" },
+                              "maxItems": 64
+                            },
+                            {
+                              "type": "object",
+                              "patternProperties": {
+                                "^.*$": { "$ref": "JsonValue" }
+                              },
+                              "maxProperties": 64
+                            }
+                          ]
+                        }
+                      },
+                      "$ref": "JsonValue"
+                    }
+                  },
+                  "maxProperties": 64
+                },
+                "credentialReference": {
+                  "type": "string",
+                  "minLength": 12,
+                  "maxLength": 235,
+                  "pattern": "^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind", "url"],
+              "properties": {
+                "kind": { "type": "string", "const": "websocket" },
+                "url": {
+                  "type": "string",
+                  "minLength": 6,
+                  "maxLength": 8192
+                },
+                "credentialReference": {
+                  "type": "string",
+                  "minLength": 12,
+                  "maxLength": 235,
+                  "pattern": "^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "matcher": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "type": "string", "const": "literal" },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["kind", "field", "equals"],
+              "properties": {
+                "kind": { "type": "string", "const": "field" },
+                "field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "equals": {
+                  "anyOf": [
+                    { "type": "string", "maxLength": 4096 },
+                    { "type": "number" },
+                    { "type": "boolean" },
+                    { "type": "null" }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "monitor_inspect",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["active", "paused", "stopped", "blocked"]
+        },
+        "afterId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "rg",
     "parameters": {
       "type": "object",

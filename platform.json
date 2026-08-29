@@ -10,6 +10,8 @@
   "browser": true,
   "messaging": true,
   "memory": true,
+  "monitors": true,
+  "scheduler": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -25,6 +27,25 @@
     "defaultScope": "project",
     "automaticRecall": false,
     "automaticExtraction": false
+  },
+  "monitorSettings": {
+    "maxActive": 128,
+    "maxRemote": 16,
+    "batchWindowMs": 250,
+    "pollMinimumMs": 5000,
+    "allowedWebSocketOrigins": [],
+    "allowLoopback": false,
+    "pollTargets": []
+  },
+  "schedulerSettings": {
+    "maxSchedules": 1000,
+    "maxConcurrent": 4,
+    "defaultTimeoutMs": 900000,
+    "leaseTtlMs": 60000
+  },
+  "hookActions": {
+    "http": [],
+    "mcp": []
   },
   "plan": {
     "defaultScope": "user",

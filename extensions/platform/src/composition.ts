@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import {
   getAgentDir,
@@ -10,6 +11,7 @@ import {
 import {
   createLifecycleSupervisor,
   type LifecycleResource,
+  type ReleasableLifecycleSupervisor,
   type LifecycleSupervisor,
 } from "./core/lifecycle/supervisor.ts";
 import {
@@ -36,7 +38,11 @@ import {
 import type { BrowserAdapter } from "./browser/index.ts";
 import type { CredentialVault } from "./external/credentials.ts";
 import { createExternalIntegrationControls } from "./external/index.ts";
-import type { McpServerDefinition, McpTransportAdapter } from "./mcp/index.ts";
+import type {
+  McpServerDefinition,
+  McpTransportAdapter,
+  ToolFederation,
+} from "./mcp/index.ts";
 import { bindPlatformAgentServices } from "./agents/services.ts";
 import { createFileSystemArtifactStore } from "./core/artifacts/index.ts";
 import { createCapabilityPolicy } from "./core/policy/index.ts";
@@ -48,6 +54,8 @@ import {
 } from "./core/projects/index.ts";
 import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
+import { createMonitorCapability } from "./wiring/monitors.ts";
+import { createSchedulerCapability } from "./wiring/scheduler.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
 import type {
@@ -56,6 +64,7 @@ import type {
   LanguageServerDefinition,
 } from "./language/model.ts";
 import { createProfileCatalog } from "./profiles/index.ts";
+import type { ProfileCatalog } from "./profiles/index.ts";
 import type { LocalReview, ReviewRequest } from "./review/index.ts";
 import { localReviewerFor } from "./review/reviewer-service.ts";
 import { createLanguageCapability } from "./wiring/language.ts";
@@ -85,11 +94,52 @@ import type { Outcome } from "./core/result.ts";
 import {
   createSessionBrokerModule,
   issueHostSessionProof,
+  type SessionBroker,
 } from "./messaging/index.ts";
 import {
   createPiSessionDeliveryAdapter,
   type PiSessionDeliveryAdapter,
 } from "./messaging/pi-delivery.ts";
+import {
+  createNamedHookAgentAdapter,
+  createNamedHookHttpAdapter,
+  createNamedHookMcpAdapter,
+  defaultPlatformHookActionConfiguration,
+  type PlatformHookActionConfiguration,
+} from "./automation/hooks/index.ts";
+import {
+  createTriggerEngine,
+  type TriggerEngineRuntime,
+} from "./automation/triggers/index.ts";
+import { createStateStoreTriggerPersistence } from "./automation/triggers/state-store-persistence.ts";
+import {
+  createJsonPollAdapter,
+  createMonitorRegistry,
+  createProductionMonitorSourceFactory,
+  createSessionBrokerMonitorDelivery,
+  defaultPlatformMonitorConfiguration,
+  type MonitorAuthority,
+} from "./automation/monitors/index.ts";
+import type { PlatformMonitorConfiguration } from "./automation/monitors/config.ts";
+import {
+  createScheduler,
+  createSchedulerHostAuthority,
+  createSessionBrokerScheduleDelivery,
+  createSystemSchedulerClock,
+} from "./automation/scheduler/index.ts";
+import {
+  defaultPlatformSchedulerConfiguration,
+  type PlatformSchedulerConfiguration,
+} from "./automation/scheduler/config.ts";
+import {
+  bindPlatformHookEventSink,
+  platformHookEventProducerFor,
+  type PlatformHookEventEnvelope,
+} from "./automation/platform-hook-event-sink.ts";
+import { createPinnedFetch } from "./external/pinned-fetch.ts";
+import { terminalObservationSourceFor } from "../../background-terminals/src/observation-service.ts";
+import { scheduledAgentExecutorFor } from "../../shared/scheduled-agent.ts";
+import { namedProfileExecutionPortFor } from "./agents/named-profile-execution-service.ts";
 
 export function canOwnPlatformDaemons(role: ExecutionRole) {
   return role === "parent";
@@ -272,6 +322,15 @@ function createDaemonAcquirer(
   };
 }
 
+function isReleasableLifecycleSupervisor(
+  lifecycle: LifecycleSupervisor,
+): lifecycle is ReleasableLifecycleSupervisor {
+  return (
+    "acquireHandle" in lifecycle &&
+    typeof lifecycle.acquireHandle === "function"
+  );
+}
+
 export interface PlatformExtensionOptions {
   flags?: unknown;
   plan?: Partial<PlatformPlanConfiguration>;
@@ -280,6 +339,9 @@ export interface PlatformExtensionOptions {
   browser?: PlatformBrowserConfiguration;
   messaging?: PlatformMessagingConfiguration;
   memory?: PlatformMemoryConfiguration;
+  monitors?: PlatformMonitorConfiguration;
+  scheduler?: PlatformSchedulerConfiguration;
+  hookActions?: PlatformHookActionConfiguration;
   mcpAdapter?: McpTransportAdapter;
   browserAdapter?: BrowserAdapter;
   credentialVault?: CredentialVault;
@@ -292,6 +354,17 @@ export interface PlatformExtensionOptions {
   createSessionBrokerModule?: typeof createSessionBrokerModule;
   createSessionDeliveryAdapter?: typeof createPiSessionDeliveryAdapter;
   currentWorkspaceLeaseProvider?: CurrentWorkspaceLeaseProvider;
+  createStateStore?: typeof createSqliteStateStore;
+  createArtifactStore?: typeof createFileSystemArtifactStore;
+  createProfileCatalog?: typeof createProfileCatalog;
+  createNamedHookHttpAdapter?: typeof createNamedHookHttpAdapter;
+  createNamedHookMcpAdapter?: typeof createNamedHookMcpAdapter;
+  createNamedHookAgentAdapter?: typeof createNamedHookAgentAdapter;
+  createTriggerEngine?: typeof createTriggerEngine;
+  createMonitorRegistry?: typeof createMonitorRegistry;
+  createMonitorSourceFactory?: typeof createProductionMonitorSourceFactory;
+  createScheduler?: typeof createScheduler;
+  createSchedulerClock?: typeof createSystemSchedulerClock;
 }
 
 export function createPlatformExtension(
@@ -311,6 +384,10 @@ export function createPlatformExtension(
           browser: options.browser ?? defaultPlatformBrowserConfiguration,
           messaging: options.messaging ?? defaultPlatformMessagingConfiguration,
           memory: options.memory ?? defaultPlatformMemoryConfiguration,
+          monitors: options.monitors ?? defaultPlatformMonitorConfiguration,
+          scheduler: options.scheduler ?? defaultPlatformSchedulerConfiguration,
+          hookActions:
+            options.hookActions ?? defaultPlatformHookActionConfiguration,
         };
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
@@ -336,6 +413,11 @@ export function createPlatformExtension(
       memory?: ReturnType<typeof createMemoryCapability>;
       messaging?: ReturnType<typeof createMessagingCapability>;
       messagingDelivery?: PiSessionDeliveryAdapter;
+      triggers?: TriggerEngineRuntime;
+      monitors?: ReturnType<typeof createMonitorCapability>;
+      scheduler?: ReturnType<typeof createSchedulerCapability>;
+      hookEventTail?: Promise<void>;
+      unbindHookEventSink?: () => void;
       unbindAgentServices?: () => void;
     };
     let runtime: PlatformRuntime | undefined;
@@ -351,6 +433,10 @@ export function createPlatformExtension(
     let memoryCapability: ReturnType<typeof createMemoryCapability> | undefined;
     let messagingCapability:
       ReturnType<typeof createMessagingCapability> | undefined;
+    let monitorCapability:
+      ReturnType<typeof createMonitorCapability> | undefined;
+    let schedulerCapability:
+      ReturnType<typeof createSchedulerCapability> | undefined;
     let memoryAuthority:
       | {
           readonly runtime: PlatformRuntime;
@@ -368,12 +454,37 @@ export function createPlatformExtension(
       const failures: unknown[] = [];
       memoryAuthority = undefined;
       try {
-        current.messagingDelivery?.handleEvent({ type: "session_shutdown" });
+        await current.scheduler?.stop();
       } catch (error) {
         failures.push(error);
       }
       try {
-        await current.messaging?.stop(reason);
+        await current.monitors?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        current.unbindHookEventSink?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.hookEventTail;
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.hooks?.stop(reason, event);
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        current.unbindAgentServices?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.triggers?.close(reason);
       } catch (error) {
         failures.push(error);
       }
@@ -403,12 +514,12 @@ export function createPlatformExtension(
         failures.push(error);
       }
       try {
-        current.unbindAgentServices?.();
+        current.messagingDelivery?.handleEvent({ type: "session_shutdown" });
       } catch (error) {
         failures.push(error);
       }
       try {
-        await current.hooks?.stop(reason, event);
+        await current.messaging?.stop(reason);
       } catch (error) {
         failures.push(error);
       }
@@ -489,7 +600,9 @@ export function createPlatformExtension(
         configuration.flags.mcp ||
         configuration.flags.browser ||
         configuration.flags.messaging ||
-        configuration.flags.memory;
+        configuration.flags.memory ||
+        configuration.flags.monitors ||
+        configuration.flags.scheduler;
       if (!platformEnabled || role !== "parent") return;
 
       const projectIdentity = makeProjectIdentity();
@@ -503,17 +616,20 @@ export function createPlatformExtension(
       const project = resolved.value;
       const memoryEnabled = configuration.flags.memory && projectTrusted;
       const messagingEnabled = configuration.flags.messaging && projectTrusted;
-      const artifacts =
-        configuration.flags.languageIntelligence ||
-        configuration.flags.review ||
-        configuration.flags.mcp ||
-        configuration.flags.browser ||
-        messagingEnabled ||
-        memoryEnabled
-          ? createFileSystemArtifactStore({
-              root: platformArtifactRoot(agentDir),
-            })
-          : undefined;
+      const makeStateStore = options.createStateStore ?? createSqliteStateStore;
+      const makeArtifactStore =
+        options.createArtifactStore ?? createFileSystemArtifactStore;
+      let sharedState: ReturnType<typeof createSqliteStateStore> | undefined;
+      let sharedArtifacts:
+        ReturnType<typeof createFileSystemArtifactStore> | undefined;
+      const stateStore = () =>
+        (sharedState ??= makeStateStore({
+          path: path.join(agentDir, "state", "platform.sqlite"),
+        }));
+      const artifactStore = () =>
+        (sharedArtifacts ??= makeArtifactStore({
+          root: platformArtifactRoot(agentDir),
+        }));
       const platformMode = () => {
         const state = runtime?.plan?.mode()?.status().state;
         return state === "planning" || state === "approval-pending"
@@ -528,6 +644,27 @@ export function createPlatformExtension(
       });
       const credentialVault =
         options.credentialVault ?? createLazyCredentialVault();
+      const queuedPlatformEvents: PlatformHookEventEnvelope[] = [];
+      let publishPlatformEvent:
+        ((envelope: PlatformHookEventEnvelope) => Promise<void>) | undefined;
+      if (configuration.flags.hooks) {
+        current.unbindHookEventSink = bindPlatformHookEventSink(pi.events, {
+          publish(envelope) {
+            if (runtime !== current) return;
+            if (publishPlatformEvent) {
+              void publishPlatformEvent(envelope);
+              return;
+            }
+            if (queuedPlatformEvents.length >= 128) {
+              queuedPlatformEvents.shift();
+            }
+            queuedPlatformEvents.push(envelope);
+          },
+        });
+      }
+      const workspaceHookEvents = configuration.flags.hooks
+        ? platformHookEventProducerFor(pi.events, "workspaces")
+        : undefined;
       let workspaces: ReturnType<typeof createWorkspaceManager> | undefined;
       if (
         configuration.flags.workspaces &&
@@ -535,9 +672,7 @@ export function createPlatformExtension(
         project.kind === "git" &&
         !project.bare
       ) {
-        const state = createSqliteStateStore({
-          path: path.join(agentDir, "state", "platform.sqlite"),
-        });
+        const state = stateStore();
         if (state.ok) {
           const workspaceBase =
             process.platform === "win32"
@@ -557,6 +692,7 @@ export function createPlatformExtension(
                 .slice(0, 16),
             ),
             stateStore: state.value,
+            ...(workspaceHookEvents ? { hookEvents: workspaceHookEvents } : {}),
           });
           const recovery = await workspaces.recover();
           if (ctx.hasUI) {
@@ -631,6 +767,7 @@ export function createPlatformExtension(
         current.messaging = messagingCapability;
       }
 
+      let toolFederation: ToolFederation | undefined;
       if (configuration.flags.mcp) {
         const oauthServers = configuration.mcpServers.flatMap((server) =>
           "oauth" in server && server.oauth ? [server.oauth] : [],
@@ -638,9 +775,7 @@ export function createPlatformExtension(
         let authorization:
           import("./mcp/oauth.ts").McpAuthorization | undefined;
         if (oauthServers.length > 0 && credentialVault) {
-          const state = createSqliteStateStore({
-            path: path.join(agentDir, "state", "platform.sqlite"),
-          });
+          const state = stateStore();
           if (state.ok) {
             const [
               { createMcpCredentialReferences },
@@ -770,21 +905,19 @@ export function createPlatformExtension(
           },
         };
         const { createToolFederation } = await import("./mcp/index.ts");
-        mcpCapability.start(
-          createToolFederation({
-            servers: configuration.mcpServers,
-            adapter,
-            controls: externalControls,
-            ...(artifacts ? { artifacts } : {}),
-            projectId: project.projectId,
-            context: { actor: role, mode: platformMode },
-          }),
-          {
-            authorization,
-            oauthServers,
-            ...(ctx.hasUI ? { ui: ctx.ui } : {}),
-          },
-        );
+        toolFederation = createToolFederation({
+          servers: configuration.mcpServers,
+          adapter,
+          controls: externalControls,
+          artifacts: artifactStore(),
+          projectId: project.projectId,
+          context: { actor: role, mode: platformMode },
+        });
+        mcpCapability.start(toolFederation, {
+          authorization,
+          oauthServers,
+          ...(ctx.hasUI ? { ui: ctx.ui } : {}),
+        });
       }
 
       if (configuration.flags.browser) {
@@ -831,7 +964,7 @@ export function createPlatformExtension(
               allowLoopback: configuration.browser.allowLoopback,
               controls: externalControls,
               ...(credentialVault ? { credentials: credentialVault } : {}),
-              artifacts: artifacts!,
+              artifacts: artifactStore(),
               adapter,
               context: { actor: role, mode: platformMode },
             }),
@@ -844,32 +977,49 @@ export function createPlatformExtension(
         }
       }
 
-      if (configuration.flags.profiles || configuration.flags.workspaces) {
-        const profiles = configuration.flags.profiles
-          ? createProfileCatalog({ agentDir })
+      const namedProfileExecution = configuration.flags.hooks
+        ? namedProfileExecutionPortFor(pi.events)
+        : undefined;
+      const scheduledAgentExecutor =
+        configuration.flags.scheduler && projectTrusted
+          ? scheduledAgentExecutorFor(pi.events)
           : undefined;
-        if (profiles) {
-          const projectRoot =
-            project.kind === "git" && !project.bare
-              ? project.repositoryRoot
-              : project.canonicalCwd;
-          const snapshot = await profiles.reload({
-            projectRoot,
-            projectTrusted,
-          });
-          if (ctx.hasUI) {
-            for (const diagnostic of snapshot.diagnostics) {
-              if (diagnostic.severity === "error") {
-                ctx.ui.notify(
-                  `Agent profile ${diagnostic.path}: ${diagnostic.message}`,
-                  "warning",
-                );
-              }
+      const profilesNeeded =
+        configuration.flags.profiles ||
+        (configuration.flags.hooks && namedProfileExecution !== undefined);
+      let profiles: ProfileCatalog | undefined;
+      const loadProfiles = async () => {
+        if (profiles) return profiles;
+        const candidate = (
+          options.createProfileCatalog ?? createProfileCatalog
+        )({
+          agentDir,
+        });
+        const projectRoot =
+          project.kind === "git" && !project.bare
+            ? project.repositoryRoot
+            : project.canonicalCwd;
+        const snapshot = await candidate.reload({
+          projectRoot,
+          projectTrusted,
+        });
+        if (ctx.hasUI) {
+          for (const diagnostic of snapshot.diagnostics) {
+            if (diagnostic.severity === "error") {
+              ctx.ui.notify(
+                `Agent profile ${diagnostic.path}: ${diagnostic.message}`,
+                "warning",
+              );
             }
           }
         }
+        profiles = candidate;
+        return profiles;
+      };
+      if (profilesNeeded) await loadProfiles();
+      if (configuration.flags.profiles || configuration.flags.workspaces) {
         current.unbindAgentServices = bindPlatformAgentServices(pi.events, {
-          ...(profiles ? { profiles } : {}),
+          ...(configuration.flags.profiles && profiles ? { profiles } : {}),
           ...(workspaces ? { workspaces } : {}),
         });
       }
@@ -897,7 +1047,7 @@ export function createPlatformExtension(
                     );
                   },
                 } satisfies LanguageServerAdapter,
-                ...(artifacts ? { artifacts } : {}),
+                artifacts: artifactStore(),
               }),
           ));
         languageIntelligence = {
@@ -943,7 +1093,7 @@ export function createPlatformExtension(
               ([reviewModule, gitModule, languageEvidence, testEvidence]) =>
                 reviewModule.createLocalReview({
                   projectId: project.projectId,
-                  artifacts: artifacts!,
+                  artifacts: artifactStore(),
                   git: gitModule.createReviewGitAdapter({
                     root: project.repositoryRoot,
                     projectId: project.projectId,
@@ -991,21 +1141,94 @@ export function createPlatformExtension(
         current.rules = rulesCapability;
         await current.rules.start({ project, projectTrusted, ctx });
       }
-      if (configuration.flags.hooks) {
-        hooksCapability ??= createHooksCapability({
-          pi,
-          agentDir,
-          actor: role,
-          policy,
-          mode: () => {
-            const state = runtime?.plan?.mode()?.status().state;
-            return state === "planning" || state === "approval-pending"
-              ? "plan"
-              : "normal";
+      const triggerEngine = () => {
+        if (current.triggers) return current.triggers;
+        const state = stateStore();
+        if (!state.ok) {
+          if (ctx.hasUI) ctx.ui.notify(state.error.message, "error");
+          return undefined;
+        }
+        current.triggers = (options.createTriggerEngine ?? createTriggerEngine)(
+          {
+            hostId: `platform-${createHash("sha256")
+              .update(ctx.sessionManager.getSessionId())
+              .digest("hex")
+              .slice(0, 24)}`,
+            persistence: createStateStoreTriggerPersistence(state.value),
           },
-        });
-        current.hooks = hooksCapability;
-        await current.hooks.start({ project, projectTrusted, ctx }, event);
+        );
+        return current.triggers;
+      };
+      if (configuration.flags.hooks) {
+        const triggers = triggerEngine();
+        if (triggers) {
+          hooksCapability ??= createHooksCapability({
+            pi,
+            agentDir,
+            actor: role,
+            policy,
+            mode: platformMode,
+            triggers,
+            adapters: {
+              ...(configuration.hookActions.http.length > 0
+                ? {
+                    http: (
+                      options.createNamedHookHttpAdapter ??
+                      createNamedHookHttpAdapter
+                    )({
+                      definitions: configuration.hookActions.http,
+                      controls: externalControls,
+                      credentials: credentialVault,
+                      actor: () => role,
+                      mode: platformMode,
+                    }),
+                  }
+                : {}),
+              ...(configuration.hookActions.mcp.length > 0 && toolFederation
+                ? {
+                    mcp: (
+                      options.createNamedHookMcpAdapter ??
+                      createNamedHookMcpAdapter
+                    )({
+                      definitions: configuration.hookActions.mcp,
+                      federation: toolFederation,
+                      controls: externalControls,
+                    }),
+                  }
+                : {}),
+              ...(profiles && namedProfileExecution
+                ? {
+                    agent: (
+                      options.createNamedHookAgentAdapter ??
+                      createNamedHookAgentAdapter
+                    )({
+                      profiles,
+                      execution: namedProfileExecution,
+                      controls: externalControls,
+                    }),
+                  }
+                : {}),
+            },
+          });
+          const hooks = hooksCapability;
+          current.hooks = hooks;
+          await hooks.start({ project, projectTrusted, ctx }, event);
+          publishPlatformEvent = (envelope) => {
+            current.hookEventTail = (current.hookEventTail ?? Promise.resolve())
+              .then(async () => {
+                if (runtime !== current || current.hooks !== hooks) return;
+                await hooks.handlePlatformEvent(envelope.event, {
+                  ...envelope.payload,
+                  producerSource: envelope.source,
+                });
+              })
+              .catch(() => undefined);
+            return current.hookEventTail;
+          };
+          for (const envelope of queuedPlatformEvents.splice(0)) {
+            await publishPlatformEvent(envelope);
+          }
+        }
       }
       if (memoryEnabled) {
         if (ctx.hasUI && !(await workspaceProvider?.current())) {
@@ -1024,7 +1247,7 @@ export function createPlatformExtension(
                 path: path.join(agentDir, "state", "memory.sqlite"),
               }),
             ),
-            artifacts: artifacts!,
+            artifacts: artifactStore(),
           }),
           project,
           defaultScope: configuration.memory.defaultScope,
@@ -1032,9 +1255,7 @@ export function createPlatformExtension(
         });
       }
       if (messagingEnabled) {
-        const state = createSqliteStateStore({
-          path: path.join(agentDir, "state", "platform.sqlite"),
-        });
+        const state = stateStore();
         if (!state.ok) {
           if (ctx.hasUI) ctx.ui.notify(state.error.message, "error");
         } else {
@@ -1049,7 +1270,7 @@ export function createPlatformExtension(
                 options.createSessionBrokerModule ?? createSessionBrokerModule
               )({
                 state: state.value,
-                artifacts: artifacts!,
+                artifacts: artifactStore(),
                 lifecycle,
               }),
               binding: {
@@ -1074,6 +1295,489 @@ export function createPlatformExtension(
               );
             }
           }
+        }
+      }
+
+      const broker: SessionBroker | undefined =
+        current.messaging?.sessionBroker();
+      const monitorRequested = configuration.flags.monitors && projectTrusted;
+      const schedulerRequested =
+        configuration.flags.scheduler && projectTrusted;
+      if ((monitorRequested || schedulerRequested) && !broker) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            "Phase 7 automation requires an active Session Broker; Monitor and Scheduler activation was denied.",
+            "error",
+          );
+        }
+      } else if (broker) {
+        let automationCoreStarted = false;
+        const projectScope = createHash("sha256")
+          .update(project.projectId)
+          .digest("hex");
+        const credentialBindings = new Map<
+          string,
+          NonNullable<
+            Awaited<ReturnType<CredentialVault["inspect"]>>["binding"]
+          >
+        >();
+        const credentialFor = async (
+          reference: string,
+          destination: string,
+        ) => {
+          const binding = credentialBindings.get(
+            `${reference}\0${destination}`,
+          );
+          return binding
+            ? credentialVault.resolve(reference, binding)
+            : undefined;
+        };
+        const monitorCredentialAllowed = async (
+          definition: Parameters<
+            MonitorAuthority["authorize"]
+          >[0]["definition"],
+          origin: string,
+        ) => {
+          const reference =
+            "credentialReference" in definition.source
+              ? definition.source.credentialReference
+              : undefined;
+          if (!reference) return true;
+          const inspected = await credentialVault.inspect(reference);
+          const binding = inspected.binding;
+          if (
+            !inspected.exists ||
+            !binding ||
+            binding.integration !== "monitor" ||
+            binding.resourceId !== definition.id ||
+            binding.origin !== origin ||
+            (binding.scope !== undefined && binding.scope !== projectScope)
+          ) {
+            return false;
+          }
+          credentialBindings.set(`${reference}\0${origin}`, binding);
+          return true;
+        };
+        const monitorAuthority: MonitorAuthority = {
+          async authorize(request) {
+            const denied = () => ({
+              ok: false as const,
+              error: {
+                code: "authority_denied" as const,
+                message: "Reactive Monitor authority revalidation failed.",
+                retryable: false,
+              },
+            });
+            if (
+              runtime !== current ||
+              !ctx.isProjectTrusted() ||
+              request.projectId !== project.projectId ||
+              request.cwd !== project.canonicalCwd
+            ) {
+              return denied();
+            }
+            const currentProject = await projectIdentity.resolve(request.cwd);
+            if (
+              !currentProject.ok ||
+              currentProject.value.projectId !== project.projectId ||
+              currentProject.value.canonicalCwd !== project.canonicalCwd
+            ) {
+              return denied();
+            }
+            const source = request.definition.source;
+            if (source.kind === "terminal") {
+              return request.definition.scope === "session"
+                ? { ok: true as const, value: { allowed: true as const } }
+                : denied();
+            }
+            if (source.kind === "file") {
+              const sourceProject = await projectIdentity.resolve(source.root);
+              const projectRoot =
+                project.kind === "git" && !project.bare
+                  ? project.currentWorktree
+                  : project.canonicalCwd;
+              if (!sourceProject.ok) return denied();
+              const relative = path.relative(
+                projectRoot,
+                sourceProject.value.canonicalCwd,
+              );
+              if (
+                sourceProject.value.projectId !== project.projectId ||
+                relative === ".." ||
+                relative.startsWith(`..${path.sep}`) ||
+                path.isAbsolute(relative)
+              ) {
+                return denied();
+              }
+              return { ok: true, value: { allowed: true } };
+            }
+            if (source.kind === "poll") {
+              const target = configuration.monitors.pollTargets.find(
+                ({ id }) => id === source.adapter,
+              );
+              if (
+                !target ||
+                target.credentialReference !== source.credentialReference ||
+                !(await monitorCredentialAllowed(
+                  request.definition,
+                  new URL(target.endpoint).origin,
+                ))
+              ) {
+                return denied();
+              }
+              const decision = await externalControls.assess({
+                integration: "monitor",
+                operation: target.id,
+                effect: "network-read",
+                actor: role,
+                mode: platformMode(),
+                destination: {
+                  url: target.endpoint,
+                  allowedOrigins: target.allowedOrigins,
+                  allowLoopback: target.allowLoopback,
+                },
+              });
+              return decision.kind === "allow"
+                ? { ok: true, value: { allowed: true } }
+                : denied();
+            }
+            const socket = new URL(source.url);
+            if (
+              !configuration.monitors.allowedWebSocketOrigins.includes(
+                socket.origin,
+              ) ||
+              !(await monitorCredentialAllowed(
+                request.definition,
+                socket.origin,
+              ))
+            ) {
+              return denied();
+            }
+            const httpUrl = new URL(socket.href);
+            httpUrl.protocol = socket.protocol === "wss:" ? "https:" : "http:";
+            const allowedOrigins =
+              configuration.monitors.allowedWebSocketOrigins.map((origin) => {
+                const value = new URL(origin);
+                value.protocol = value.protocol === "wss:" ? "https:" : "http:";
+                return value.origin;
+              });
+            const decision = await externalControls.assess({
+              integration: "monitor",
+              operation: request.definition.id,
+              effect: "network-read",
+              actor: role,
+              mode: platformMode(),
+              destination: {
+                url: httpUrl.href,
+                allowedOrigins,
+                allowLoopback: configuration.monitors.allowLoopback,
+              },
+            });
+            return decision.kind === "allow"
+              ? { ok: true, value: { allowed: true } }
+              : denied();
+          },
+        };
+
+        if (monitorRequested && isReleasableLifecycleSupervisor(lifecycle)) {
+          const triggers = triggerEngine();
+          const state = stateStore();
+          if (triggers && state.ok) {
+            try {
+              const pollAdapters = Object.fromEntries(
+                configuration.monitors.pollTargets.map((target) => {
+                  const authorize = async (request: {
+                    readonly url: string;
+                    readonly credentialReference?: string;
+                  }) => {
+                    if (
+                      request.url !== target.endpoint ||
+                      request.credentialReference !== target.credentialReference
+                    ) {
+                      return {
+                        ok: false as const,
+                        error: {
+                          code: "policy_denied" as const,
+                          message: "Named Monitor poll target changed.",
+                          retryable: false,
+                        },
+                      };
+                    }
+                    const decision = await externalControls.assess({
+                      integration: "monitor",
+                      operation: target.id,
+                      effect: "network-read",
+                      actor: role,
+                      mode: platformMode(),
+                      destination: {
+                        url: target.endpoint,
+                        allowedOrigins: target.allowedOrigins,
+                        allowLoopback: target.allowLoopback,
+                      },
+                    });
+                    const addresses = decision.resolvedAddresses
+                      ?.map((address) => ({ address, family: isIP(address) }))
+                      .filter(
+                        (
+                          entry,
+                        ): entry is {
+                          address: string;
+                          family: 4 | 6;
+                        } => entry.family === 4 || entry.family === 6,
+                      );
+                    return decision.kind === "allow" &&
+                      decision.canonicalUrl === target.endpoint &&
+                      addresses?.length
+                      ? {
+                          ok: true as const,
+                          value: {
+                            canonicalUrl: target.endpoint,
+                            addresses,
+                          },
+                        }
+                      : {
+                          ok: false as const,
+                          error: {
+                            code: "policy_denied" as const,
+                            message: "Named Monitor poll target was denied.",
+                            retryable: false,
+                          },
+                        };
+                  };
+                  return [
+                    target.id,
+                    createJsonPollAdapter({
+                      endpoint: target.endpoint,
+                      authorize,
+                      resolveCredential: credentialFor,
+                      maxResponseBytes: target.maxResponseBytes,
+                      pinnedFetch: async (request) => {
+                        const fetch = createPinnedFetch({
+                          authorize: async (url) => ({
+                            allowed: url === request.canonicalUrl,
+                            canonicalUrl: request.canonicalUrl,
+                            resolvedAddresses: request.addresses.map(
+                              ({ address }) => address,
+                            ),
+                          }),
+                        });
+                        return fetch(request.canonicalUrl, {
+                          method: request.method,
+                          redirect: request.redirect,
+                          signal: request.signal,
+                          headers: request.headers,
+                        });
+                      },
+                    }),
+                  ] as const;
+                }),
+              );
+              const webSocketControl = {
+                async authorize(request: {
+                  readonly url: string;
+                  readonly credentialReference?: string;
+                }) {
+                  const socket = new URL(request.url);
+                  const httpUrl = new URL(socket.href);
+                  httpUrl.protocol =
+                    socket.protocol === "wss:" ? "https:" : "http:";
+                  const decision = await externalControls.assess({
+                    integration: "monitor",
+                    operation: "websocket",
+                    effect: "network-read",
+                    actor: role,
+                    mode: platformMode(),
+                    destination: {
+                      url: httpUrl.href,
+                      allowedOrigins:
+                        configuration.monitors.allowedWebSocketOrigins.map(
+                          (origin) => {
+                            const value = new URL(origin);
+                            value.protocol =
+                              value.protocol === "wss:" ? "https:" : "http:";
+                            return value.origin;
+                          },
+                        ),
+                      allowLoopback: configuration.monitors.allowLoopback,
+                    },
+                  });
+                  const addresses = decision.resolvedAddresses
+                    ?.map((address) => ({ address, family: isIP(address) }))
+                    .filter(
+                      (entry): entry is { address: string; family: 4 | 6 } =>
+                        entry.family === 4 || entry.family === 6,
+                    );
+                  return decision.kind === "allow" && addresses?.length
+                    ? {
+                        ok: true as const,
+                        value: { canonicalUrl: request.url, addresses },
+                      }
+                    : {
+                        ok: false as const,
+                        error: {
+                          code: "policy_denied" as const,
+                          message: "Monitor WebSocket target was denied.",
+                          retryable: false,
+                        },
+                      };
+                },
+              };
+              const terminal = terminalObservationSourceFor(pi.events);
+              const sources = (
+                options.createMonitorSourceFactory ??
+                createProductionMonitorSourceFactory
+              )({
+                ...(terminal ? { terminal } : {}),
+                filesystem: {},
+                ...(Object.keys(pollAdapters).length > 0
+                  ? {
+                      poll: {
+                        adapters: pollAdapters,
+                        minimumIntervalMs: configuration.monitors.pollMinimumMs,
+                      },
+                    }
+                  : {}),
+                ...(configuration.monitors.allowedWebSocketOrigins.length > 0
+                  ? {
+                      websocket: {
+                        allowedOrigins:
+                          configuration.monitors.allowedWebSocketOrigins,
+                        control: webSocketControl,
+                        resolveCredential: credentialFor,
+                      },
+                    }
+                  : {}),
+              });
+              const opened = await (
+                options.createMonitorRegistry ?? createMonitorRegistry
+              )({
+                ownerId: `monitors-${projectScope.slice(0, 24)}`,
+                binding: {
+                  projectId: project.projectId,
+                  cwd: project.canonicalCwd,
+                  sessionId: ctx.sessionManager.getSessionId(),
+                },
+                triggers,
+                lifecycle,
+                artifacts: artifactStore(),
+                sources,
+                delivery: createSessionBrokerMonitorDelivery(broker),
+                authority: monitorAuthority,
+                hookEvents: platformHookEventProducerFor(pi.events, "monitors"),
+                state: state.value,
+                configuration: configuration.monitors,
+              });
+              if (opened.ok) {
+                monitorCapability ??= createMonitorCapability({
+                  pi,
+                  actor: role,
+                  policy,
+                  mode: platformMode,
+                  sessionId: () => ctx.sessionManager.getSessionId(),
+                });
+                current.monitors = monitorCapability;
+                await current.monitors.start(opened.value);
+                automationCoreStarted = true;
+              } else if (ctx.hasUI) {
+                ctx.ui.notify(opened.error.message, "error");
+              }
+            } catch (error) {
+              if (ctx.hasUI) {
+                ctx.ui.notify(
+                  error instanceof Error ? error.message : String(error),
+                  "error",
+                );
+              }
+            }
+          }
+        } else if (monitorRequested && ctx.hasUI) {
+          ctx.ui.notify(
+            "Reactive Monitors require a releasable LifecycleSupervisor.",
+            "error",
+          );
+        }
+
+        if (schedulerRequested && scheduledAgentExecutor) {
+          const triggers = triggerEngine();
+          const state = stateStore();
+          const schedulerProfiles = await loadProfiles();
+          if (triggers && state.ok && schedulerProfiles) {
+            try {
+              const opened = await (options.createScheduler ?? createScheduler)(
+                {
+                  state: state.value,
+                  artifacts: artifactStore(),
+                  clock: (
+                    options.createSchedulerClock ?? createSystemSchedulerClock
+                  )(),
+                  authority: createSchedulerHostAuthority({
+                    projects: projectIdentity,
+                    profiles: schedulerProfiles,
+                    projectTrusted: (candidate) =>
+                      runtime === current &&
+                      ctx.isProjectTrusted() &&
+                      candidate.projectId === project.projectId &&
+                      candidate.canonicalCwd === project.canonicalCwd,
+                    credentialsAvailable: async (references) => {
+                      const statuses = await Promise.all(
+                        references.map((reference) =>
+                          credentialVault.inspect(reference),
+                        ),
+                      );
+                      return statuses.every(({ exists }) => exists);
+                    },
+                  }),
+                  executor: scheduledAgentExecutor,
+                  delivery: createSessionBrokerScheduleDelivery(broker),
+                  hookEvents: platformHookEventProducerFor(
+                    pi.events,
+                    "scheduler",
+                  ),
+                  ownerId: `scheduler-${projectScope.slice(0, 24)}`,
+                  binding: {
+                    project,
+                    cwd: project.canonicalCwd,
+                    creatorSessionId: ctx.sessionManager.getSessionId(),
+                    resultRoute: {
+                      kind: "session",
+                      sessionId: ctx.sessionManager.getSessionId(),
+                    },
+                  },
+                  configuration: configuration.scheduler,
+                },
+              );
+              if (opened.ok) {
+                schedulerCapability ??= createSchedulerCapability({
+                  pi,
+                  actor: role,
+                  policy,
+                  mode: platformMode,
+                });
+                current.scheduler = schedulerCapability;
+                await current.scheduler.start(opened.value);
+                automationCoreStarted = true;
+              } else if (ctx.hasUI) {
+                ctx.ui.notify(opened.error.message, "error");
+              }
+            } catch (error) {
+              if (ctx.hasUI) {
+                ctx.ui.notify(
+                  error instanceof Error ? error.message : String(error),
+                  "error",
+                );
+              }
+            }
+          }
+        } else if (schedulerRequested && ctx.hasUI) {
+          ctx.ui.notify(
+            "Scheduler requires the host Scheduled Agent execution service.",
+            "error",
+          );
+        }
+
+        if (!automationCoreStarted && !configuration.flags.hooks) {
+          await current.triggers?.close("inactive");
+          current.triggers = undefined;
         }
       }
     });

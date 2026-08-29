@@ -307,7 +307,7 @@ test("terminal source frames CRLF lines and delivers redacted Artifact evidence"
     terminalId: "terminal-9",
     sequence: 3,
     stream: "stdout",
-    text: "ADY 💥 token=super-secret\r\n",
+    text: "ADY ðŸ’¥ token=super-secret\r\n",
     byteLength: 31,
     startByte: 22,
     endByte: 34,
@@ -322,7 +322,7 @@ test("terminal source frames CRLF lines and delivers redacted Artifact evidence"
   assert.equal(evidence.ok, true);
   if (evidence.ok) {
     const body = Buffer.from(evidence.value.body).toString("utf8");
-    assert.match(body, /READY 💥/u);
+    assert.match(body, /READY ðŸ’¥/u);
     assert.doesNotMatch(body, /super-secret/u);
   }
 
@@ -359,7 +359,7 @@ test(
           process.execPath,
           [
             "-e",
-            "process.stdout.write('alpha\\r');setTimeout(()=>process.stdout.write('\\nREADY 💥\\r\\npartial'),10);setTimeout(()=>process.exit(0),20)",
+            "process.stdout.write('alpha\\r');setTimeout(()=>process.stdout.write('\\nREADY ðŸ’¥\\r\\npartial'),10);setTimeout(()=>process.exit(0),20)",
           ],
           { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
         );
@@ -443,7 +443,7 @@ test(
     if (evidence.ok) {
       assert.match(
         Buffer.from(evidence.value.body).toString("utf8"),
-        /READY 💥/u,
+        /READY ðŸ’¥/u,
       );
     }
 
@@ -875,6 +875,7 @@ test("WebSocket source pins lookup, caps payload, disables compression, and reau
       pollMinimumMs: 5_000,
       allowedWebSocketOrigins: [origin],
       allowLoopback: true,
+      pollTargets: [],
     },
   });
   assert.equal(opened.ok, true);
@@ -990,6 +991,7 @@ test("WebSocket source never follows redirects", async () => {
       pollMinimumMs: 5_000,
       allowedWebSocketOrigins: [origin],
       allowLoopback: true,
+      pollTargets: [],
     },
   });
   assert.equal(opened.ok, true);

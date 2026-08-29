@@ -252,6 +252,8 @@ async function smokeRepositoryExtensions() {
     "session_list",
     "session_send",
     "memory_search",
+    "monitor_inspect",
+    "monitor_change",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -302,6 +304,8 @@ async function smokeRepositoryExtensions() {
     "memories",
     "forget",
     "memory",
+    "monitor",
+    "monitors",
   ]) {
     assert.ok(
       surface.commands.includes(command),
