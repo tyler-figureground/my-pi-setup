@@ -4,11 +4,15 @@ import {
   type ChildProcessByStdio,
 } from "node:child_process";
 import type { Readable } from "node:stream";
+import {
+  snapshotWindowsProcessTree,
+  terminateWindowsProcessTreeByIdentity,
+  type WindowsProcessIdentity,
+} from "../../core/processes/windows-tree.ts";
 
 const GRACEFUL_EXIT_MS = 300;
 const FORCE_EXIT_MS = 1_000;
 const PIPE_CLOSE_MS = 750;
-const TASKKILL_WAIT_MS = 1_000;
 const DEFAULT_SPILL_CAP_BYTES = 16 * 1024 * 1024;
 
 type NativeChild = ChildProcessByStdio<null, Readable, Readable>;
@@ -45,6 +49,7 @@ export interface HookProcessResult {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly killed: boolean;
+  readonly terminationError?: string;
 }
 
 export interface HookProcessRunner {
@@ -67,6 +72,8 @@ interface ActiveProcess {
   killRequested: boolean;
   pumpingStopped: boolean;
   termination?: Promise<void>;
+  windowsRootIdentity?: Promise<WindowsProcessIdentity | undefined>;
+  terminationError?: string;
 }
 
 function deferred() {
@@ -137,40 +144,6 @@ function signalPosixGroup(child: ChildProcess, signal: NodeJS.Signals) {
   signalDirectly(child, signal);
 }
 
-function runTaskkill(pid: number, force: boolean) {
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    let killer: ChildProcess;
-    let timer: NodeJS.Timeout | undefined;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve();
-    };
-    try {
-      killer = spawn(
-        "taskkill.exe",
-        ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])],
-        {
-          shell: false,
-          stdio: "ignore",
-          windowsHide: true,
-        },
-      );
-    } catch {
-      resolve();
-      return;
-    }
-    timer = setTimeout(() => {
-      signalDirectly(killer, "SIGKILL");
-      finish();
-    }, TASKKILL_WAIT_MS);
-    killer.once("error", finish);
-    killer.once("close", finish);
-  });
-}
-
 function terminate(entry: ActiveProcess) {
   if (entry.termination) return entry.termination;
   entry.killRequested ||= !entry.exitedObserved;
@@ -179,14 +152,23 @@ function terminate(entry: ActiveProcess) {
   entry.termination = (async () => {
     if (entry.closedObserved) return;
     const { child } = entry;
-    if (process.platform === "win32" && child.pid) {
-      await runTaskkill(child.pid, false);
-      await waitAtMost(entry.exited, GRACEFUL_EXIT_MS);
-      if (!entry.exitedObserved) {
-        await runTaskkill(child.pid, true);
-        await waitAtMost(entry.exited, FORCE_EXIT_MS);
+    if (process.platform === "win32") {
+      try {
+        const identity = await entry.windowsRootIdentity;
+        if (!identity) {
+          if (!entry.exitedObserved) {
+            throw new Error(
+              "Hook process Windows creation identity was unavailable; refusing PID-only termination.",
+            );
+          }
+        } else if (!entry.exitedObserved) {
+          await terminateWindowsProcessTreeByIdentity(identity);
+          await waitAtMost(entry.exited, FORCE_EXIT_MS);
+        }
+      } catch (error) {
+        entry.terminationError =
+          error instanceof Error ? error.message : String(error);
       }
-      if (!entry.exitedObserved) signalDirectly(child, "SIGKILL");
     } else {
       signalPosixGroup(child, "SIGTERM");
       await waitAtMost(entry.exited, GRACEFUL_EXIT_MS);
@@ -230,6 +212,13 @@ export function createHookProcessRunner(): HookProcessRunner {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    const windowsRootIdentity =
+      process.platform === "win32" && child.pid
+        ? snapshotWindowsProcessTree(child.pid).then(
+            (snapshot) => snapshot.root,
+          )
+        : undefined;
+    void windowsRootIdentity?.catch(() => undefined);
     const exited = deferred();
     const closed = deferred();
     const stopPumping = deferred();
@@ -249,6 +238,7 @@ export function createHookProcessRunner(): HookProcessRunner {
       closedObserved: false,
       killRequested: false,
       pumpingStopped: false,
+      ...(windowsRootIdentity ? { windowsRootIdentity } : {}),
     };
     active.add(entry);
 
@@ -361,6 +351,9 @@ export function createHookProcessRunner(): HookProcessRunner {
         code: settled.code,
         signal: settled.signal,
         killed: entry.killRequested,
+        ...(entry.terminationError
+          ? { terminationError: entry.terminationError.slice(0, 2_048) }
+          : {}),
       } satisfies HookProcessResult;
     } finally {
       clearTimeout(timeout);
@@ -389,13 +382,8 @@ export function createHookProcessRunner(): HookProcessRunner {
         Promise.all(entries.map((entry) => entry.done)),
         deadlineMs,
       );
-      for (const entry of active) {
-        if (process.platform === "win32" && entry.child.pid) {
-          void runTaskkill(entry.child.pid, true);
-        } else {
-          signalPosixGroup(entry.child, "SIGKILL");
-        }
-      }
+      // `terminate` is idempotent and continues detached after this caller's
+      // deadline. Never fall back to PID-only Windows signaling here.
     })();
     return shutdownPromise;
   };
