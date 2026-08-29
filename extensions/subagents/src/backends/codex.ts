@@ -24,6 +24,11 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import {
+  snapshotWindowsProcessTree,
+  terminateWindowsProcessTreeByIdentity,
+  type WindowsProcessIdentity,
+} from "../../../platform/src/core/processes/windows-tree.ts";
 import { compileCodexExecutionPolicy } from "../profile-policy.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -33,6 +38,10 @@ const FORCE_KILL_AFTER_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 1_024;
 /** A protocol line larger than this without a newline means a broken peer. */
 const STDOUT_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
+const windowsRootIdentities = new WeakMap<
+  ChildProcessWithoutNullStreams,
+  Promise<WindowsProcessIdentity | undefined>
+>();
 
 type JsonRecord = Record<string, unknown>;
 
@@ -361,6 +370,14 @@ const makeCodexSession = (
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
 
+    if (process.platform === "win32" && child.pid) {
+      const identity = snapshotWindowsProcessTree(child.pid).then(
+        (snapshot) => snapshot.root,
+      );
+      windowsRootIdentities.set(child, identity);
+      void identity.catch(() => undefined);
+    }
+
     const state = {
       closed: false,
       closing: false,
@@ -539,7 +556,9 @@ const makeCodexSession = (
           // trusted with further work — kill it; the exit handler reports
           // the death. Explicit protocol rejections keep the session alive.
           if (errorText.includes("timed out")) {
-            void terminateChild(child, () => state.exited);
+            void terminateChild(child, () => state.exited).catch((error) => {
+              state.runError = boundedError(error);
+            });
           }
         },
       );
@@ -866,7 +885,9 @@ const makeCodexSession = (
         // unbounded buffer is a memory leak. Session-fatal: the exit handler
         // settles any active run.
         stdoutBuffer = "";
-        void terminateChild(child, () => state.exited);
+        void terminateChild(child, () => state.exited).catch((error) => {
+          state.runError = boundedError(error);
+        });
       }
     });
     child.stderr.setEncoding("utf8");
@@ -1003,7 +1024,9 @@ const makeCodexSession = (
             // turn may still be executing tools. A session that ignores
             // interrupts cannot be trusted — kill it rather than let
             // invisible work continue behind a "settled" run.
-            void terminateChild(child, () => state.exited);
+            void terminateChild(child, () => state.exited).catch((error) => {
+              state.runError = boundedError(error);
+            });
           }
         }, INTERRUPT_FALLBACK_MS);
       }),
@@ -1017,36 +1040,7 @@ function killTree(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals,
 ) {
-  if (process.platform === "win32" && child.pid) {
-    try {
-      const killer = spawn(
-        "taskkill",
-        [
-          "/pid",
-          String(child.pid),
-          "/T",
-          ...(signal === "SIGKILL" ? ["/F"] : []),
-        ],
-        { stdio: "ignore", windowsHide: true },
-      );
-      const killDirect = () => {
-        try {
-          child.kill(signal);
-        } catch {
-          // Process may already be gone.
-        }
-      };
-      killer.once("error", killDirect);
-      killer.once("exit", (code) => {
-        if (code !== 0) killDirect();
-      });
-      killer.unref();
-      return;
-    } catch {
-      // Fall through to a direct signal when taskkill cannot be launched.
-    }
-  }
-  if (process.platform !== "win32" && child.pid) {
+  if (child.pid) {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -1062,12 +1056,37 @@ function killTree(
 }
 
 /** SIGTERM is normally enough; the second deadline covers a wedged Rust process. */
-function terminateChild(
+async function terminateChild(
   child: ChildProcessWithoutNullStreams,
   exited: () => boolean,
 ) {
-  if (exited()) return Promise.resolve();
-  return new Promise<void>((resolve) => {
+  if (exited()) return;
+  if (process.platform === "win32") {
+    const identity = await windowsRootIdentities.get(child);
+    if (!identity) {
+      if (exited()) return;
+      throw new Error(
+        "Codex Windows creation identity was unavailable; refusing PID-only termination.",
+      );
+    }
+    if (exited()) return;
+    await terminateWindowsProcessTreeByIdentity(identity);
+    await new Promise<void>((resolve) => {
+      if (exited()) return resolve();
+      const timer = setTimeout(resolve, FORCE_KILL_AFTER_MS + 500);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    if (!exited()) {
+      throw new Error(
+        `Codex process ${identity.pid} remained open after identity-validated tree termination.`,
+      );
+    }
+    return;
+  }
+  await new Promise<void>((resolve) => {
     let done = false;
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
     let lastTimer: ReturnType<typeof setTimeout> | undefined;
