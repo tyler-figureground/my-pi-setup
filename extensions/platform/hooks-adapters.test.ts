@@ -241,16 +241,71 @@ test("named HTTP POST authority is exact and one-shot under default policy", asy
       adapter.invoke({ ...request, authority }),
       /authority|approval|side effect/i,
     );
-    const changedAuthority = adapter.authorize!(request);
-    await assert.rejects(
-      adapter.invoke({
-        ...request,
-        input: { build: 43 },
-        authority: changedAuthority,
-      }),
-      /authority/i,
+    const assertExactBinding = async (
+      authorizedRequest: typeof request,
+      changedRequest: typeof request,
+      target = adapter,
+    ) => {
+      const exactAuthority = adapter.authorize!(authorizedRequest);
+      await assert.rejects(
+        target.invoke({ ...changedRequest, authority: exactAuthority }),
+        /authority/i,
+      );
+      await adapter.invoke({
+        ...authorizedRequest,
+        authority: exactAuthority,
+      });
+    };
+    await assertExactBinding(request, { ...request, input: { build: 43 } });
+    await assertExactBinding(request, { ...request, generation: 8 });
+    await assertExactBinding(request, {
+      ...request,
+      deadlineMs: request.deadlineMs + 1,
+    });
+
+    const requestWithoutInput = {
+      ...hookRequest("publish"),
+      generation: 7,
+    };
+    const getAdapter = createNamedHookHttpAdapter({
+      definitions: [
+        {
+          id: "publish",
+          url: `${origin}/status`,
+          method: "GET",
+          effect: "network-read",
+          allowedOrigins: [origin],
+          allowLoopback: true,
+        },
+      ],
+      controls,
+      actor: () => "parent",
+      mode: () => "normal",
+    });
+    await assertExactBinding(
+      requestWithoutInput,
+      requestWithoutInput,
+      getAdapter,
     );
-    assert.equal(requests, 1);
+
+    const otherOrigin = `http://authority.example.test:${port + 1}`;
+    const otherOriginAdapter = createNamedHookHttpAdapter({
+      definitions: [
+        {
+          id: "publish",
+          url: `${otherOrigin}/status`,
+          method: "POST",
+          effect: "remote-write",
+          allowedOrigins: [otherOrigin],
+          allowLoopback: true,
+        },
+      ],
+      controls,
+      actor: () => "parent",
+      mode: () => "normal",
+    });
+    await assertExactBinding(request, request, otherOriginAdapter);
+    assert.equal(requests, 6);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -579,7 +634,7 @@ test("named agent actions reject disallowed roles and changed profile trust or d
   assert.equal(runs, 0);
 });
 
-test("named agent cancellation rejects promptly and ignores late execution results", async () => {
+test("named agent cancellation retains underlying settlement and ignores late results", async () => {
   let finish!: (value: { output: string }) => void;
   let childAborted = false;
   const execution: NamedProfileExecutionPort = {
@@ -611,11 +666,21 @@ test("named agent cancellation rejects promptly and ignores late execution resul
     signal: controller.signal,
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
   controller.abort(new Error("cancel requested"));
-  await assert.rejects(pending, /cancel requested/i);
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(childAborted, true);
+  assert.equal(settled, false);
 
   finish({ output: "late result" });
-  await new Promise<void>((resolve) => setImmediate(resolve));
   await assert.rejects(pending, /cancel requested/i);
+  assert.equal(settled, true);
 });

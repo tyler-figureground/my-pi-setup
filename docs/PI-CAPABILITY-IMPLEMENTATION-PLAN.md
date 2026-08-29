@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 7 in progress**
+Status: **Phase 7 complete; Phase 8 pending explicit approval**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -63,14 +63,14 @@ The reviewed file contains 15 `[X]` selections.
 | F05 | Read-only plan mode | 2 | [x] |
 | F06 | First-class local code review | 4 | [x] |
 | F07 | MCP client and OAuth | 5 | [x] |
-| F08 | Declarative lifecycle hooks | 2, 7 | [ ] |
+| F08 | Declarative lifecycle hooks | 2, 7 | [x] |
 | F09 | Persistent named custom-agent profiles | 3 | [x] |
 | F10 | Cross-session messaging and queue | 6 | [x] |
 | F11 | Persistent memory | 6 | [x] |
 | F13 | Persistent task graph and goal mode | 8 | [ ] |
 | F14 | Path-scoped lazy project rules | 2 | [x] |
-| F15 | Reactive monitor | 7 | [ ] |
-| F16 | Scheduled and recurring prompts | 7 | [ ] |
+| F15 | Reactive monitor | 7 | [x] |
+| F16 | Scheduled and recurring prompts | 7 | [x] |
 | F23 | Shareable interactive artifacts | 9 | [ ] |
 
 ## Explicitly excluded
@@ -898,89 +898,89 @@ Features: F10, F11.
 
 ---
 
-# Phase 7 - Reactive monitors, completed hooks, and scheduling **IN PROGRESS**
+# Phase 7 - Reactive monitors, completed hooks, and scheduling **COMPLETE**
 
 Features: F08 completion, F15, F16.
 
 ## `TriggerEngine`
 
-- [ ] Unify hook events, file/process events, cron timers, and missed-event delivery
-- [ ] Define event envelope and source provenance
-- [ ] Add bounded queue, debounce, coalescing, and backpressure
-- [ ] Add recursion/self-trigger suppression
-- [ ] Add per-trigger concurrency and timeout
-- [ ] Persist only events that require restart/offline delivery
-- [ ] Register every watcher/timer with `LifecycleSupervisor`
-- [ ] Use fake clock and fake watcher adapters in tests
+- [x] Unify hook events, file/process events, cron timers, and missed-event delivery
+- [x] Define event envelope and source provenance
+- [x] Add bounded queue, debounce, coalescing, and backpressure
+- [x] Add recursion/self-trigger suppression
+- [x] Add per-trigger concurrency and timeout
+- [x] Persist only events that require restart/offline delivery
+- [x] Register every watcher/timer with `LifecycleSupervisor`
+- [x] Use fake clock and fake watcher adapters in tests
 
 ## F15 reactive monitor
 
-- [ ] Extend background terminal interface with monitor subscriptions rather than a second process manager
-- [ ] Support log line matcher
-- [ ] Support file/directory watcher
-- [ ] Support bounded polling adapter for CI/PR status
-- [ ] Support WebSocket only after URL policy validation
-- [ ] Batch event bursts into bounded model messages
-- [ ] Let user/model pause, resume, inspect, and stop monitor
-- [ ] Persist monitor definition if explicitly requested
-- [ ] Prevent monitor output from recursively triggering itself
-- [ ] Replace duplicate Git polling only after equivalent behavior is proven
+- [x] Extend background terminal interface with monitor subscriptions rather than a second process manager
+- [x] Support log line matcher
+- [x] Support file/directory watcher
+- [x] Support bounded polling adapter for CI/PR status
+- [x] Support WebSocket only after URL policy validation
+- [x] Batch event bursts into bounded model messages
+- [x] Let user/model pause, resume, inspect, and stop monitor
+- [x] Persist monitor definition if explicitly requested
+- [x] Prevent monitor output from recursively triggering itself
+- [x] Replace duplicate Git polling only after equivalent behavior is proven
 
 ### F15 acceptance
 
-- [ ] Log, file, poll, and WebSocket fixture tests pass
-- [ ] Burst coalescing/backpressure pass
-- [ ] Ignore filters and self-trigger suppression pass
-- [ ] Cancellation and reload cleanup pass
-- [ ] No event arrives after shutdown
+- [x] Log, file, poll, and WebSocket fixture tests pass
+- [x] Burst coalescing/backpressure pass
+- [x] Ignore filters and self-trigger suppression pass
+- [x] Cancellation and reload cleanup pass
+- [x] No event arrives after shutdown
 
 ## F08 declarative hooks, completion
 
-- [ ] Add remaining session/tool/compaction/worktree/subagent/task events supported by platform
-- [ ] Add HTTP/MCP/agent actions only where `CapabilityPolicy` permits
-- [ ] Surface hook execution history and errors
-- [ ] Make changed config require revalidation/trust
-- [ ] Add migration guide from TypeScript one-off hooks
-- [ ] Verify hooks cannot create recursive schedules/monitors without explicit limits
+- [x] Add remaining session/tool/compaction/worktree/subagent/task events supported by platform
+- [x] Add HTTP/MCP/agent actions only where `CapabilityPolicy` permits
+- [x] Surface hook execution history and errors
+- [x] Make changed config require revalidation/trust
+- [x] Add migration guide from TypeScript one-off hooks
+- [x] Verify hooks cannot create recursive schedules/monitors without explicit limits
 
 ### F08 acceptance
 
-- [ ] Ordering, matcher, timeout, failure policy, output cap, and recursion tests pass
-- [ ] Untrusted project config ignored
-- [ ] Hook changes visible before execution
-- [ ] Plan and child-role policy remain authoritative
+- [x] Ordering, matcher, timeout, failure policy, output cap, and recursion tests pass
+- [x] Untrusted project config ignored
+- [x] Hook changes visible before execution
+- [x] Plan and child-role policy remain authoritative
 
 ## F16 scheduled prompts
 
 ### Scheduler
 
-- [ ] Define one-shot, interval, and cron schedules
-- [ ] Store timezone, next run, missed-run policy, role, profile, cwd/project identity, and enabled state
-- [ ] Use transactional lease so only one Pi process executes each occurrence
-- [ ] Support session-scoped and durable schedules
-- [ ] Deliver result through mailbox/artifact store
-- [ ] Add `/schedule`, `/schedules`, pause, resume, run-now, delete
-- [ ] Validate project/profile still exists before run
-- [ ] Fail closed when credentials/trust unavailable
-- [ ] Bound runtime, retries, and output
-- [ ] Document Windows Task Scheduler adapter only if no Pi process is expected to remain active
+- [x] Define one-shot, interval, and cron schedules
+- [x] Store timezone, next run, missed-run policy, role, profile, cwd/project identity, and enabled state
+- [x] Use transactional lease so only one Pi process executes each occurrence
+- [x] Support session-scoped and durable schedules
+- [x] Deliver result through mailbox/artifact store
+- [x] Add `/schedule`, `/schedules`, pause, resume, run-now, delete
+- [x] Validate project/profile still exists before run
+- [x] Fail closed when credentials/trust unavailable
+- [x] Bound runtime, retries, and output
+- [x] Document Windows Task Scheduler adapter only if no Pi process is expected to remain active
 
 ### F16 acceptance
 
-- [ ] Fake-clock one-shot/interval/cron pass
-- [ ] DST and timezone cases pass
-- [ ] Missed-run skip/run-once policy passes
-- [ ] Two processes produce one claimant
-- [ ] Offline result delivered once
-- [ ] Deleted/paused schedule never runs
-- [ ] Scheduled child uses correct role and tool policy
+- [x] Fake-clock one-shot/interval/cron pass
+- [x] DST and timezone cases pass
+- [x] Missed-run skip/run-once policy passes
+- [x] Two processes produce one claimant
+- [x] Offline result delivered once
+- [x] Deleted/paused schedule never runs
+- [x] Scheduled child uses correct role and tool policy
 
 ## Phase 7 exit gate
 
-- [ ] F15 acceptance complete
-- [ ] F08 full acceptance complete
-- [ ] F16 acceptance complete
-- [ ] Long-duration soak test has no leaked handles or duplicate events
+- [x] F15 acceptance complete
+- [x] F08 full acceptance complete
+- [x] F16 acceptance complete
+- [x] Long-duration soak test has no leaked handles or duplicate events
 
 ---
 
@@ -1197,6 +1197,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-26 | Phase 5 live integration | `55e9b34`, `64af98d`, `f1603a9` | fast-forward live main; platform clean install/audit; live check/format; 61 focused Phase 5 tests; repository smoke | 61/61 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; live config enables inert unconfigured MCP/browser surfaces; Phase 6 not started |
 | 2026-08-27 | Phase 6 messaging and explicit Memory | `ec8fe0c` through `9a4434a` | exact package audit; interface comparison; repeated adversarial review/fix cycles; native Windows process/SQLite/JSONL/junction/sidecar/secret/deletion/retention probes; real two-Pi process exchange; retrieval evaluation; paired startup benchmark; post-sign-off `npm run verify` | 299 unit; 283 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; Claude 2/2; Codex 2/2; Pi 1/1 | Pass isolated | F10 and explicit F11 complete; automatic extraction fails recall gate and remains absent/off; final critical/high review `sa-101` found no blockers |
 | 2026-08-27 | Phase 6 live integration | `89747c7` through `33fed5e` plus live evidence commit | fast-forward live main; platform clean install/audit; live check/format; 198 focused Phase 6/StateStore tests; repository smoke | 198/198 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; no new dependency manifest; automatic extraction remains off; Phase 7 not started |
+| 2026-08-29 | Phase 7 hooks, monitors, and scheduling | `4ee0cb6` through current Phase 7 branch | repeated adversarial review/fix cycles; native process/SQLite/watcher/WebSocket/keyring probes; fake-time and real-resource soak; paired startup benchmark; immutable-tree verification | 469 unit; 413 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; final live rerun Claude 2/2, Codex 2/2, Pi 1/1 | Pass isolated | F08, F15, F16 complete; final scheduler admission review `sa-10` found no blockers; `docs/verification/phase-7-acceptance.md` |
 
 # Decision log
 
@@ -1226,6 +1227,9 @@ Record durable decisions here, then link a full ADR when needed.
 | D020 | 2026-08-26 | Build BrowserControl as a thin internal module over exact `playwright-core` instead of adopting broader wrappers | Accepted | Dedicated profile ownership, address policy, direct authority, artifacts, and lifecycle remain host-controlled; ADR `docs/adr/0007-build-browser-control-on-playwright-core.md` |
 | D021 | 2026-08-27 | Use host-bound flexible `SessionBroker` and `MemoryStore` interfaces; keep delivery, claims, SQLite, FTS, and transcript reconciliation internal | Accepted | Interface comparison selected flexibility while preserving identity and authority locality; callers/tests cross the same seams |
 | D022 | 2026-08-27 | Reject `pi-memory@0.4.2` adopt/wrap; build explicit scoped Memory on dedicated `node:sqlite` FTS5 | Accepted | Package defaults conflict with scope, deletion, redaction, trust, generation, and multi-process requirements; ADR `docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md` |
+| D023 | 2026-08-29 | Build one repository-owned TriggerEngine; wrap exact cron, watcher, and WebSocket adapters | Accepted | Host retains provenance, queueing, authority, persistence, recursion, lifecycle, and delivery; ADRs 0009-0011 |
+| D024 | 2026-08-29 | Authenticate restart-only Trigger records with an agent-scoped OS-keyring HMAC envelope | Accepted | Filesystem write access alone must not fabricate automation events; missing keys fail closed and verification never rotates |
+| D025 | 2026-08-29 | Scheduler request identity is project-global and admission/eviction/mutation/receipt commit share one optimistic transactional gate | Accepted | Native multi-process cap and same/cross-scope conflict probes require bounded storage and one intent per request ID |
 
 # Risk register
 
@@ -1241,9 +1245,9 @@ Record durable decisions here, then link a full ADR when needed.
 | OAuth/browser secrets leak | Medium | Critical | Dedicated stores/profiles; structural and exact redaction canaries; binary evidence lockout after credential use | Mitigated in Phase 5 |
 | Browser mutates remote system in plan mode | Medium | High | Side-effect policy, one-shot page-bound network authority, and explicit approval | Mitigated in Phase 5 |
 | Memory poisoning/stale facts | High | Medium | Scoped citations, untrusted rendering, contradiction links, review-only proposals, automatic extraction off | Mitigated for explicit Phase 6 Memory; future extraction remains closed |
-| Multi-process duplicate schedules/messages | Medium | High | Fenced claims, idempotent receipts, Pi JSONL readback/dedupe, native crash races | Messaging mitigated in Phase 6; scheduling remains open |
+| Multi-process duplicate schedules/messages | Medium | High | Fenced claims, atomic admission/cancellation receipts, Pi JSONL readback/dedupe, native crash races | Mitigated through Phase 7 |
 | Tool schema/context explosion | High | Medium | Deferred registration/activation and bounded result rendering | Mitigated through Phase 6 rules, language, review, MCP, browser, messaging, and Memory tools |
-| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 6 |
+| Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 7 |
 | Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 

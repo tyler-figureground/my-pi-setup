@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..");
 const unit = [
@@ -101,6 +102,7 @@ const integration = [
   "extensions/platform/phase4-composition.test.ts",
   "extensions/platform/phase6-composition.test.ts",
   "extensions/platform/phase7-composition.test.ts",
+  "extensions/platform/phase7-headless.integration.test.ts",
   "extensions/platform/phase7-soak.integration.test.ts",
   "extensions/platform/pinned-fetch.integration.test.ts",
   "extensions/platform/plan-mode.integration.test.ts",
@@ -152,45 +154,121 @@ assert.deepEqual(
   "Every extension test must be classified as unit, integration, live, or delegated",
 );
 
-function run(command, args, cwd = root) {
-  const result = spawnSync(command, args, {
-    cwd,
-    env: process.env,
-    stdio: "inherit",
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+function terminateProcessTree(child) {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    const killed = spawnSync(
+      "taskkill.exe",
+      ["/PID", String(child.pid), "/T", "/F"],
+      {
+        stdio: "ignore",
+        windowsHide: true,
+        timeout: 5_000,
+        killSignal: "SIGKILL",
+      },
+    );
+    if (killed.error || killed.status !== 0) child.kill("SIGKILL");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Process already settled.
+    }
+  }
 }
 
-const suite = process.argv[2];
-if (suite === "unit") {
-  run(process.execPath, [
-    "--test",
-    "--test-timeout=60000",
-    "--test-concurrency=4",
-    "--experimental-strip-types",
-    ...unit,
-  ]);
-} else if (suite === "integration") {
-  run(process.execPath, [
-    "--test",
-    "--test-timeout=60000",
-    "--test-concurrency=1",
-    "--experimental-strip-types",
-    ...integration,
-  ]);
-  const npmCli = process.env.npm_execpath;
-  assert.ok(
-    npmCli,
-    "npm_execpath is required to run the delegated Vitest suite",
-  );
-  run(
-    process.execPath,
-    [npmCli, "test"],
-    path.join(root, "extensions", "file-search"),
-  );
-} else {
-  throw new Error(
-    `Unknown suite ${JSON.stringify(suite)}. Use unit or integration.`,
-  );
+export function runChild(command, args, cwd = root, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 15 * 60 * 1_000;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: "inherit",
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    let timedOut = false;
+    let settled = false;
+    let cleanupTimer;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child);
+      cleanupTimer = setTimeout(
+        () => finish({ exitCode: 124, timedOut: true }),
+        5_000,
+      );
+      cleanupTimer.unref();
+    }, timeoutMs);
+    timer.unref();
+    child.once("error", (error) => {
+      if (timedOut) finish({ exitCode: 124, timedOut: true });
+      else if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+    child.once("close", (code) => {
+      finish({ exitCode: timedOut ? 124 : (code ?? 1), timedOut });
+    });
+  });
+}
+
+async function run(command, args, cwd = root) {
+  const result = await runChild(command, args, cwd);
+  if (result.exitCode !== 0) process.exit(result.exitCode);
+}
+
+async function main() {
+  const suite = process.argv[2];
+  if (suite === "unit") {
+    await run(process.execPath, [
+      "--test",
+      "--test-timeout=60000",
+      "--test-concurrency=4",
+      "--experimental-strip-types",
+      ...unit,
+      "tests/run-test-suite.test.mjs",
+    ]);
+  } else if (suite === "integration") {
+    await run(process.execPath, [
+      "--test",
+      "--test-timeout=60000",
+      "--test-concurrency=1",
+      "--experimental-strip-types",
+      ...integration,
+    ]);
+    const npmCli = process.env.npm_execpath;
+    assert.ok(
+      npmCli,
+      "npm_execpath is required to run the delegated Vitest suite",
+    );
+    await run(
+      process.execPath,
+      [npmCli, "test"],
+      path.join(root, "extensions", "file-search"),
+    );
+  } else {
+    throw new Error(
+      `Unknown suite ${JSON.stringify(suite)}. Use unit or integration.`,
+    );
+  }
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+) {
+  await main();
 }

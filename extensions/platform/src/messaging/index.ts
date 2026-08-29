@@ -502,7 +502,6 @@ function renderDelivery(
 function requestKey(input: {
   readonly incarnation: string;
   readonly requestId: string;
-  readonly piSessionId: string;
   readonly projectId: string;
   readonly hostAutomation?: HostAutomationIdempotency;
 }) {
@@ -511,8 +510,6 @@ function requestKey(input: {
     hash
       .update("host-automation\0")
       .update(input.projectId)
-      .update("\0")
-      .update(input.piSessionId)
       .update("\0")
       .update(input.hostAutomation.producerId)
       .update("\0")
@@ -2121,7 +2118,6 @@ export function createSessionBrokerModule(
           const persistedKey = requestKey({
             incarnation,
             requestId: request.requestId,
-            piSessionId: binding.piSessionId,
             projectId: binding.project.projectId,
             hostAutomation,
           });

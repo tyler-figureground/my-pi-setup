@@ -56,6 +56,7 @@ import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
 import { createMonitorCapability } from "./wiring/monitors.ts";
 import { createSchedulerCapability } from "./wiring/scheduler.ts";
+import { createKeyringTriggerRecordAuthenticator } from "./automation/triggers/record-authentication.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
 import type {
@@ -389,6 +390,16 @@ export function createPlatformExtension(
           hookActions:
             options.hookActions ?? defaultPlatformHookActionConfiguration,
         };
+  if (
+    suppliedConfiguration &&
+    (suppliedConfiguration.flags.monitors ||
+      suppliedConfiguration.flags.scheduler) &&
+    !suppliedConfiguration.flags.messaging
+  ) {
+    throw new Error(
+      "Phase 7 requires messaging when monitors or scheduler are enabled.",
+    );
+  }
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
   const makeProjectIdentity =
@@ -1166,7 +1177,19 @@ export function createPlatformExtension(
               .update(ctx.sessionManager.getSessionId())
               .digest("hex")
               .slice(0, 24)}`,
-            persistence: createStateStoreTriggerPersistence(state.value),
+            persistence: createStateStoreTriggerPersistence(state.value, {
+              authenticator: createKeyringTriggerRecordAuthenticator({
+                account: `durable-record-${createHash("sha256")
+                  .update(path.resolve(agentDir).toLowerCase())
+                  .digest("hex")
+                  .slice(0, 32)}`,
+                lockDirectory: path.join(
+                  agentDir,
+                  "state",
+                  "trigger-authentication.lock",
+                ),
+              }),
+            }),
           },
         );
         return current.triggers;

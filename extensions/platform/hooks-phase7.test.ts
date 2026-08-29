@@ -19,11 +19,14 @@ import {
 import {
   createHooks,
   createNamedHookHttpAdapter,
+  createNamedHookMcpAdapter,
   createTriggerEngine,
   platformHookEvents,
   type HookProcessResult,
 } from "./src/automation/hooks/index.ts";
+import { createInMemoryCredentialVault } from "./src/external/credentials.ts";
 import { createExternalIntegrationControls } from "./src/external/index.ts";
+import type { ToolFederation } from "./src/mcp/index.ts";
 
 async function fixture(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "pi-hooks-phase7-"));
@@ -812,6 +815,7 @@ test("default-policy confirmation authorizes one named POST end to end", async (
     const server = createServer((request, response) => {
       requests++;
       assert.equal(request.method, "POST");
+      assert.equal(request.headers.authorization, "Bearer publish-secret");
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ accepted: true }));
     });
@@ -838,6 +842,22 @@ hooks:
 `,
       "utf8",
     );
+    const vault = createInMemoryCredentialVault({
+      createReference: () => "credential:publish",
+    });
+    assert.equal(
+      (
+        await vault.store({
+          binding: {
+            integration: "hook",
+            resourceId: "hook-http.publish",
+            origin,
+          },
+          secret: "publish-secret",
+        })
+      ).ok,
+      true,
+    );
     const grants = new Map<string, { scope: string; deadlineMs: number }>();
     const controls = createExternalIntegrationControls({
       resolveHost: async () => ["127.0.0.1"],
@@ -860,13 +880,148 @@ hooks:
           effect: "remote-write",
           allowedOrigins: [origin],
           allowLoopback: true,
+          credentialReference: "credential:publish",
         },
       ],
       controls,
+      credentials: vault,
       actor: () => "parent",
       mode: () => "normal",
       issueAuthority(grant) {
         const value = `confirmed-${grants.size + 1}`;
+        grants.set(value, grant);
+        return {
+          kind: "external-user-authority",
+          value,
+          scope: grant.scope,
+        };
+      },
+    });
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: createCapabilityPolicy(),
+      trust: { isTrusted: () => true },
+      adapters: {
+        http: adapter,
+        ui: {
+          notify() {},
+          setStatus() {},
+          async confirm() {
+            confirmations++;
+            return true;
+          },
+        },
+      },
+    });
+    try {
+      assert.equal(
+        (
+          await hooks.configure({
+            type: "apply",
+            sources: [{ scope: "global", path }],
+          })
+        ).ok,
+        true,
+      );
+      const handled = await hooks.handle({
+        event: "tool_call",
+        payload: {},
+        cwd: directory,
+        unattended: false,
+      });
+      assert.equal(handled.ok, true);
+      if (handled.ok) assert.equal(handled.value.block, undefined);
+      assert.equal(confirmations, 1);
+      assert.equal(requests, 1);
+      assert.equal(grants.size, 0);
+    } finally {
+      await hooks.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test("default-policy confirmation authorizes one named credentialed GET end to end", async () => {
+  await fixture(async (directory) => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests++;
+      assert.equal(request.method, "GET");
+      assert.equal(request.headers.authorization, "Bearer read-secret");
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ status: "ready" }));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    const port = address && typeof address === "object" ? address.port : 0;
+    const origin = `http://confirmed-read.example.test:${port}`;
+    const path = join(directory, "hooks.yaml");
+    await writeFile(
+      path,
+      `version: 2
+hooks:
+  - id: confirmed-named-get
+    event: tool_call
+    priority: 0
+    match: {}
+    actions: [{ type: http, name: read-status }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const vault = createInMemoryCredentialVault({
+      createReference: () => "credential:read-status",
+    });
+    assert.equal(
+      (
+        await vault.store({
+          binding: {
+            integration: "hook",
+            resourceId: "hook-http.read-status",
+            origin,
+          },
+          secret: "read-secret",
+        })
+      ).ok,
+      true,
+    );
+    const grants = new Map<string, { scope: string; deadlineMs: number }>();
+    const controls = createExternalIntegrationControls({
+      resolveHost: async () => ["127.0.0.1"],
+      authority: {
+        verify(token) {
+          const grant = grants.get(token.value);
+          if (!grant) return false;
+          grants.delete(token.value);
+          return token.scope === grant.scope && Date.now() <= grant.deadlineMs;
+        },
+      },
+    });
+    let confirmations = 0;
+    const adapter = createNamedHookHttpAdapter({
+      definitions: [
+        {
+          id: "read-status",
+          url: `${origin}/status`,
+          method: "GET",
+          effect: "network-read",
+          allowedOrigins: [origin],
+          allowLoopback: true,
+          credentialReference: "credential:read-status",
+        },
+      ],
+      controls,
+      credentials: vault,
+      actor: () => "parent",
+      mode: () => "normal",
+      issueAuthority(grant) {
+        const value = `confirmed-get-${grants.size + 1}`;
         grants.set(value, grant);
         return {
           kind: "external-user-authority",
@@ -1425,6 +1580,139 @@ hooks:
       assert.equal(afterSettlement.value.block, undefined);
     assert.equal(starts, 2);
     assert.equal(maxRunning, 1);
+  });
+});
+
+test("production MCP adapter retains abort-ignoring work across reload", async () => {
+  await fixture(async (directory) => {
+    const path = join(directory, "hooks.yaml");
+    const yaml = (version: string) => `version: 2
+hooks:
+  - id: production-settlement-owner
+    event: agent_end
+    priority: 0
+    match: {}
+    actions: [{ type: mcp, name: fixture.read, input: { version: ${version} } }]
+    concurrency: 1
+    deadlineMs: 5000
+    outputCapBytes: 1024
+    failurePolicy: open
+`;
+    await writeFile(path, yaml("old"), "utf8");
+    const oldSettlement = deferred<void>();
+    let starts = 0;
+    let running = 0;
+    let maxRunning = 0;
+    const federation: ToolFederation = {
+      status: () => ({ servers: [] }),
+      async search() {
+        throw new Error("search must not be used");
+      },
+      async activate() {
+        return {
+          ok: true,
+          value: {
+            tools: [
+              {
+                id: "fixture__read",
+                serverId: "fixture",
+                name: "read",
+                description: "Fixture read",
+                readOnly: true,
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        };
+      },
+      async invoke() {
+        starts++;
+        running++;
+        maxRunning = Math.max(maxRunning, running);
+        if (starts === 1) await oldSettlement.promise;
+        running--;
+        return {
+          ok: true,
+          value: {
+            content: [{ type: "text", text: "done" }],
+            isError: false,
+            redactions: 0,
+            truncations: 0,
+          },
+        };
+      },
+      async close() {},
+    };
+    const hooks = createHooks({
+      actor: () => "parent",
+      mode: () => "normal",
+      policy: allowEverything,
+      trust: { isTrusted: () => true },
+      adapters: {
+        mcp: createNamedHookMcpAdapter({
+          definitions: [
+            {
+              id: "fixture.read",
+              serverId: "fixture",
+              toolName: "read",
+              federatedToolId: "fixture__read",
+            },
+          ],
+          federation,
+          controls: createExternalIntegrationControls(),
+        }),
+      },
+    });
+    const source = { scope: "global" as const, path };
+    assert.equal(
+      (await hooks.configure({ type: "apply", sources: [source] })).ok,
+      true,
+    );
+    const oldHandle = hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    while (starts === 0)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await writeFile(path, yaml("new"), "utf8");
+    const reloaded = await hooks.configure({
+      type: "apply",
+      expectedRevision: 1,
+      sources: [source],
+    });
+    assert.equal(reloaded.ok, true);
+    assert.ok(
+      hooks
+        .inspect()
+        .history.some(({ outcome }) => outcome === "drain-unresolved"),
+    );
+
+    const overlapping = await hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(overlapping.ok, true);
+    assert.equal(starts, 1);
+    assert.equal(maxRunning, 1);
+
+    oldSettlement.resolve();
+    await oldHandle;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const afterSettlement = await hooks.handle({
+      event: "agent_end",
+      payload: {},
+      cwd: directory,
+      unattended: false,
+    });
+    assert.equal(afterSettlement.ok, true);
+    assert.equal(starts, 2);
+    assert.equal(maxRunning, 1);
+    await hooks.close();
   });
 });
 

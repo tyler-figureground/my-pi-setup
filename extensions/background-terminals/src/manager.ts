@@ -41,6 +41,7 @@ import {
   terminateWindowsProcessTreeByIdentity,
   type WindowsProcessIdentity,
 } from "../../platform/src/core/processes/windows-tree.ts";
+import { createCleanupBudget, type CleanupBudget } from "./cleanup-budget.ts";
 import { OutputBuffer } from "./output.ts";
 
 export const MAX_RUNNING = 8;
@@ -50,9 +51,9 @@ const MAX_SETTLED_HISTORY = MAX_TRACKED * 4;
 export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
 /** Private full-log spills are bounded so a firehose cannot fill the temp disk. */
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
-// Windows identity capture plus validated tree termination may spend up to
-// 15 seconds in PowerShell. The outer scope must never interrupt first.
-const STOP_TIMEOUT_MS = 20_000;
+// One deadline covers Windows identity capture, validated tree termination,
+// and close grace. Every stage receives only the time still available.
+const WINDOWS_CLEANUP_BUDGET_MS = 20_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
 /** After termination, how long to wait for the natural close→flush→settle
@@ -230,6 +231,26 @@ function signalPosixTree(child: ChildProcess, signal: NodeJS.Signals) {
   }
 }
 
+function waitForPromiseWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Await stdio closure without retaining a listener after interruption. */
 function awaitChildClose(child: ChildProcess, closed: () => boolean) {
   return Effect.callback<void>((resume) => {
@@ -252,13 +273,22 @@ function terminateChild(
   onSignal: () => void,
   windowsRootIdentity: Promise<WindowsProcessIdentity | undefined> | undefined,
   onFailure: (error: unknown) => void,
+  windowsBudget?: CleanupBudget,
 ) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;
     if (process.platform === "win32") {
       return Effect.promise(async () => {
         try {
-          const identity = await windowsRootIdentity;
+          if (!windowsRootIdentity || !windowsBudget)
+            throw new Error(
+              "Background terminal Windows creation identity capture was not initialized; refusing PID-only termination.",
+            );
+          const identity = await waitForPromiseWithin(
+            windowsRootIdentity,
+            windowsBudget.remaining("Windows creation identity snapshot"),
+            "Background terminal Windows creation identity snapshot exceeded the cleanup deadline.",
+          );
           if (!identity) {
             if (closed()) return;
             throw new Error(
@@ -267,14 +297,21 @@ function terminateChild(
           }
           if (closed()) return;
           onSignal();
-          await terminateWindowsProcessTreeByIdentity(identity);
+          await terminateWindowsProcessTreeByIdentity(
+            identity,
+            windowsBudget.remaining("identity-validated Windows termination"),
+          );
           await new Promise<void>((resolve) => {
             if (closed()) return resolve();
-            const timer = setTimeout(resolve, FORCE_KILL_AFTER_MS + 500);
-            child.once("close", () => {
+            const onClose = () => {
               clearTimeout(timer);
               resolve();
-            });
+            };
+            const timer = setTimeout(() => {
+              child.off("close", onClose);
+              resolve();
+            }, windowsBudget.remaining("Windows process close grace"));
+            child.once("close", onClose);
           });
           if (!closed()) {
             throw new Error(
@@ -487,10 +524,10 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
-    s.status = entry.killSignaled
-      ? "killed"
-      : entry.processErrored
-        ? "failed"
+    s.status = entry.processErrored
+      ? "failed"
+      : entry.killSignaled
+        ? "killed"
         : s.exitCode === 0
           ? "done"
           : "failed";
@@ -550,10 +587,7 @@ const makeManager = Effect.gen(function* () {
         Effect.andThen(
           Effect.suspend(() =>
             entry.snapshot.status === "running" && !entry.stdioClosed
-              ? closeEntryScope(entry).pipe(
-                  Effect.timeout(STOP_TIMEOUT_MS),
-                  Effect.ignore,
-                )
+              ? closeEntryScope(entry).pipe(Effect.ignore)
               : Effect.void,
           ),
         ),
@@ -803,6 +837,10 @@ const makeManager = Effect.gen(function* () {
               // Only claim "killed" when we are actually about to signal a
               // live process; a natural exit that already happened (still
               // waiting on 'close') keeps its truthful done/failed status.
+              const windowsBudget =
+                process.platform === "win32"
+                  ? createCleanupBudget(WINDOWS_CLEANUP_BUDGET_MS)
+                  : undefined;
               yield* terminateChild(
                 child,
                 () => entry.stdioClosed,
@@ -817,16 +855,30 @@ const makeManager = Effect.gen(function* () {
                     `Identity-safe process-tree termination failed: ${boundedError(error)}`,
                   );
                 },
+                windowsBudget,
               );
               // Give the natural close→flush→settle path a bounded grace,
               // then force the settle: a grandchild holding the pipe open
               // (detached into a new group) must not leave the entry
               // "running" forever.
               if (entry.snapshot.status === "running") {
-                yield* Deferred.await(entry.settled).pipe(
-                  Effect.timeout(SETTLE_GRACE_MS),
-                  Effect.ignore,
-                );
+                let settleGraceMs = SETTLE_GRACE_MS;
+                if (windowsBudget) {
+                  try {
+                    settleGraceMs = windowsBudget.remaining(
+                      "terminal settlement grace",
+                      SETTLE_GRACE_MS,
+                    );
+                  } catch {
+                    settleGraceMs = 0;
+                  }
+                }
+                if (settleGraceMs > 0) {
+                  yield* Deferred.await(entry.settled).pipe(
+                    Effect.timeout(settleGraceMs),
+                    Effect.ignore,
+                  );
+                }
               }
               if (entry.snapshot.status === "running" && !entry.settling) {
                 // Force the settle ourselves. When `settling` is set, the
@@ -896,12 +948,7 @@ const makeManager = Effect.gen(function* () {
   const killEntry = (entry: Entry) =>
     Effect.sync(() => {
       if (entry.snapshot.status !== "running") return;
-      runCleanup(
-        closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
-          Effect.ignore,
-        ),
-      );
+      runCleanup(closeEntryScope(entry).pipe(Effect.ignore));
     });
 
   const kill = (ids: ReadonlyArray<string>) =>
@@ -969,20 +1016,13 @@ const makeManager = Effect.gen(function* () {
     entries.clear();
     yield* Effect.forEach(
       all,
-      (entry) =>
-        closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
-          Effect.ignore,
-        ),
+      (entry) => closeEntryScope(entry).pipe(Effect.ignore),
       { concurrency: "unbounded" },
     );
     // Detached kill/prune/flush work is scoped to the manager. Wait for it
     // within the shutdown bound; the FiberSet finalizer interrupts anything
     // still live when the manager scope closes, so cleanup cannot leak.
-    yield* FiberSet.awaitEmpty(cleanupFibers).pipe(
-      Effect.timeout(STOP_TIMEOUT_MS),
-      Effect.ignore,
-    );
+    yield* FiberSet.awaitEmpty(cleanupFibers).pipe(Effect.ignore);
     yield* Effect.sync(() => {
       const dir = spillDir;
       spillDir = null;

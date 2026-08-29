@@ -9,12 +9,31 @@ import {
   createSqliteStateStore,
 } from "./src/core/persistence/index.ts";
 import type { StateStore } from "./src/core/persistence/state-store.ts";
-import { createStateStoreTriggerPersistence } from "./src/automation/triggers/state-store-persistence.ts";
+import {
+  createStateStoreTriggerPersistence as createAuthenticatedStateStoreTriggerPersistence,
+  type StateStoreTriggerPersistenceOptions,
+} from "./src/automation/triggers/state-store-persistence.ts";
+import { createHmacTriggerRecordAuthenticator } from "./src/automation/triggers/record-authentication.ts";
 import {
   triggerPayloadDigest,
   type TriggerDurableRecord,
 } from "./src/automation/triggers/persistence.ts";
 import { createTriggerEngine } from "./src/automation/triggers/index.ts";
+
+const authenticationKey = "11".repeat(32);
+const authenticator = createHmacTriggerRecordAuthenticator(async () =>
+  Buffer.from(authenticationKey, "hex"),
+);
+
+function createStateStoreTriggerPersistence(
+  state: StateStore,
+  options: Omit<StateStoreTriggerPersistenceOptions, "authenticator"> = {},
+) {
+  return createAuthenticatedStateStoreTriggerPersistence(state, {
+    ...options,
+    authenticator,
+  });
+}
 
 const durablePayload = { body: "restart-safe" };
 const durableRecord = {
@@ -28,6 +47,34 @@ const durableRecord = {
   cause: { rootEventId: "event-1", ancestry: [] },
 } satisfies TriggerDurableRecord;
 
+test("Trigger authentication verification never creates or rotates its key", async () => {
+  let signingLoads = 0;
+  let verificationLoads = 0;
+  const isolated = createHmacTriggerRecordAuthenticator(
+    async () => {
+      signingLoads += 1;
+      return Buffer.from(authenticationKey, "hex");
+    },
+    async () => {
+      verificationLoads += 1;
+      if (verificationLoads === 1)
+        throw new Error("verification key unavailable");
+      return Buffer.from(authenticationKey, "hex");
+    },
+  );
+  const signature = await isolated.authenticate(durableRecord);
+  assert.equal(signingLoads, 1);
+  assert.equal(verificationLoads, 0);
+  await assert.rejects(
+    isolated.verify(durableRecord, signature),
+    /verification key unavailable/,
+  );
+  assert.equal(signingLoads, 1);
+  assert.equal(verificationLoads, 1);
+  assert.equal(await isolated.verify(durableRecord, signature), true);
+  assert.equal(verificationLoads, 2);
+});
+
 function claimInProcess(path: string, claimantId: string, now: number) {
   const child = spawn(
     process.execPath,
@@ -38,6 +85,7 @@ function claimInProcess(path: string, claimantId: string, now: number) {
       claimantId,
       String(now),
       String(now + 1_000),
+      authenticationKey,
     ],
     { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -84,9 +132,105 @@ test("StateStore trigger persistence atomically stores bounded metadata and clai
   assert.equal(snapshot.ok, true);
   if (!snapshot.ok) return;
   assert.equal(snapshot.value.snapshot.records.length, 1);
-  assert.deepEqual(snapshot.value.snapshot.records[0]?.metadata, durableRecord);
+  assert.deepEqual(snapshot.value.snapshot.records[0]?.metadata, {
+    schemaVersion: 1,
+    record: durableRecord,
+    authentication: snapshot.value.snapshot.records[0]?.metadata.authentication,
+  });
+  assert.match(
+    String(snapshot.value.snapshot.records[0]?.metadata.authentication),
+    /^[a-f0-9]{64}$/u,
+  );
   assert.equal(snapshot.value.snapshot.events.length, 1);
   assert.equal(snapshot.value.snapshot.leases[0]?.owner, "runtime-1");
+});
+
+test("forged durable metadata with reproducible digests is quarantined before replay", async () => {
+  const now = 1_000;
+  const state = createMemoryStateStore({ now: () => now });
+  const persistence = createStateStoreTriggerPersistence(state, {
+    now: () => now,
+  });
+  const stored = await persistence.store({
+    record: durableRecord,
+    claimantId: "writer",
+    now,
+    leaseUntil: now + 10,
+  });
+  assert.equal(stored.ok, true);
+  if (!stored.ok) return;
+  assert.equal(
+    (
+      await persistence.releaseClaim({
+        claimId: stored.value.claimId,
+        claimantId: "writer",
+        fence: stored.value.fence,
+      })
+    ).ok,
+    true,
+  );
+
+  const forgedPayload = { body: "forged-managed-event" };
+  const replaced = await state.transact({
+    transactionId: "fixture.forge-authenticated-trigger",
+    operations: [
+      {
+        type: "put-record",
+        collection: "automation.triggers.events",
+        key: durableRecord.eventId,
+        expectedVersion: 1,
+        metadata: {
+          ...durableRecord,
+          payload: forgedPayload,
+          payloadDigest: triggerPayloadDigest(forgedPayload),
+        },
+      },
+    ],
+  });
+  assert.equal(replaced.ok, true);
+
+  let deliveries = 0;
+  const runtime = createTriggerEngine({
+    hostId: "host-authenticated-replay",
+    clock: { now: () => now + 11 },
+    persistence,
+  });
+  const source = runtime.bindSource({
+    kind: "fixture",
+    id: "source",
+    projectId: "project",
+    trust: "managed",
+  });
+  assert.equal(source.ok, true);
+  const reconciled = await runtime.engine.reconcile({
+    ownerId: "owner",
+    generation: 1,
+    bindings: [
+      {
+        id: "binding",
+        eventTypes: ["fixture.event"],
+        deliver: () => void deliveries++,
+      },
+    ],
+  });
+  assert.equal(reconciled.ok, true);
+  if (reconciled.ok) {
+    assert.equal(reconciled.value.replay.quarantined, 1);
+    assert.equal(reconciled.value.replay.state, "degraded");
+  }
+  assert.equal(deliveries, 0);
+  const quarantined = await state.query({
+    type: "record",
+    collection: "automation.triggers.quarantine",
+    key: durableRecord.eventId,
+  });
+  assert.equal(
+    quarantined.ok &&
+      quarantined.value.type === "record" &&
+      quarantined.value.record?.metadata.reason,
+    "record-invalid",
+  );
+  await runtime.close();
 });
 
 test("claim pages are strict, stable, fenced, and surface corrupt records", async () => {
@@ -158,10 +302,10 @@ test("claim pages are strict, stable, fenced, and surface corrupt records", asyn
     second.value.claims.map((claim) => (claim as { claimId: string }).claimId),
     ["event-c", "event-d"],
   );
-  assert.deepEqual((second.value.claims[1] as { record: unknown }).record, {
-    schemaVersion: 999,
-    marker: "corrupt",
-  });
+  assert.equal(
+    (second.value.claims[1] as { record: unknown }).record,
+    undefined,
+  );
   assert.equal(second.value.nextCursor, undefined);
   assert.deepEqual(
     second.value.claims.map((claim) => (claim as { fence: number }).fence),

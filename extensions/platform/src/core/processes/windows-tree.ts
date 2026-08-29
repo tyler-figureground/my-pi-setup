@@ -138,6 +138,7 @@ export async function findWindowsProcessIdentityByCommandLine(
 
 export async function snapshotWindowsProcessTree(
   rootPid: number,
+  timeoutMs = 15_000,
 ): Promise<WindowsProcessTreeSnapshot> {
   if (!Number.isSafeInteger(rootPid) || rootPid <= 0)
     throw new TypeError("Windows process root PID is invalid.");
@@ -153,7 +154,7 @@ export async function snapshotWindowsProcessTree(
     "$root|ForEach-Object {'R|'+[string]$_.ProcessId+'|'+[string][int64]([math]::Floor($_.CreationDate.ToFileTimeUtc()/10000))}",
     "$targets|ForEach-Object {'D|'+[string]$_.ProcessId+'|'+[string][int64]([math]::Floor($_.CreationDate.ToFileTimeUtc()/10000))}",
   ].join(";");
-  const output = await runPowerShell(script, true);
+  const output = await runPowerShell(script, true, timeoutMs);
   const parsed = output
     .trim()
     .split(/\r?\n/)
@@ -206,6 +207,7 @@ export async function isWindowsProcessIdentityAlive(
 
 export async function terminateWindowsProcessTreeByIdentity(
   identity: WindowsProcessIdentity,
+  timeoutMs = 15_000,
 ) {
   if (process.platform !== "win32") return;
   const script = [
@@ -218,7 +220,7 @@ export async function terminateWindowsProcessTreeByIdentity(
     `& taskkill.exe /PID ${identity.pid} /T /F | Out-Null`,
     "if($LASTEXITCODE -ne 0){exit 1}else{exit 0}",
   ].join(";");
-  await runPowerShell(script, false, 15_000);
+  await runPowerShell(script, false, timeoutMs);
 }
 
 export async function terminateWindowsProcessIdentity(

@@ -3,6 +3,7 @@ import type { JsonObject } from "../../core/result.ts";
 import type {
   StateRecord,
   StateStore,
+  StateStoreError,
 } from "../../core/persistence/state-store.ts";
 import type { ScheduleScope, ScheduleSnapshot } from "./model.ts";
 
@@ -11,6 +12,7 @@ const REQUEST_COLLECTION_PREFIX = "scheduler.requests";
 const CANCELLATION_COLLECTION_PREFIX = "scheduler.cancellations";
 
 export interface PersistedSchedule extends ScheduleSnapshot {
+  readonly definitionGeneration: string;
   readonly credentialReferences: readonly string[];
   readonly pendingRunNow?: {
     readonly id: string;
@@ -21,12 +23,13 @@ export interface PersistedSchedule extends ScheduleSnapshot {
 export interface PersistedScheduleRequest {
   readonly digest: string;
   readonly schedule: ScheduleSnapshot;
+  readonly cancellation?: PersistedCancellationRequest;
 }
 
 export interface PersistedCancellationRequest {
   readonly scheduleId: string;
   readonly occurrenceId: string;
-  readonly generation: number;
+  readonly generation: string;
   readonly action: "pause" | "delete";
   readonly claimantOwner: string;
   readonly fence: number;
@@ -193,7 +196,9 @@ function validSnapshot(value: unknown, projectId: string, persisted: boolean) {
     ],
     [
       "blockedReason",
-      ...(persisted ? ["credentialReferences", "pendingRunNow"] : []),
+      ...(persisted
+        ? ["definitionGeneration", "credentialReferences", "pendingRunNow"]
+        : []),
     ],
   );
   if (!record) return false;
@@ -271,6 +276,10 @@ function validSnapshot(value: unknown, projectId: string, persisted: boolean) {
     record.recentOccurrences.length <= 1_000 &&
     record.recentOccurrences.every(validOccurrence) &&
     credentials !== null &&
+    (!persisted ||
+      record.definitionGeneration === undefined ||
+      (typeof record.definitionGeneration === "string" &&
+        /^[a-f0-9]{64}$/.test(record.definitionGeneration))) &&
     (!persisted || credentials.length === record.credentialReferenceCount) &&
     credentials.every(
       (reference) =>
@@ -290,23 +299,72 @@ function validSnapshot(value: unknown, projectId: string, persisted: boolean) {
 function decodeDefinition(record: StateRecord | null, projectId: string) {
   if (!record) return { ok: true as const, value: null };
   if (!validSnapshot(record.metadata, projectId, true)) return storageFailure();
+  const stored = record.metadata as unknown as PersistedSchedule;
+  const value = stored.definitionGeneration
+    ? stored
+    : {
+        ...stored,
+        definitionGeneration: createHash("sha256")
+          .update(
+            `scheduler-legacy-definition-v1\0${projectId}\0${stored.id}\0${stored.revision}\0${stored.binding.creatorSessionId}\0${stored.promptArtifact.sha256}`,
+          )
+          .digest("hex"),
+      };
   return {
     ok: true as const,
     value: {
-      value: record.metadata as unknown as PersistedSchedule,
+      value,
       version: record.version,
     },
   };
 }
 
+function validCancellation(value: unknown, occurrenceId?: string) {
+  const record = exact(
+    value,
+    [
+      "scheduleId",
+      "occurrenceId",
+      "generation",
+      "action",
+      "claimantOwner",
+      "fence",
+      "requestedAt",
+    ],
+    ["acknowledgedAt"],
+  );
+  return (
+    !!record &&
+    typeof record.scheduleId === "string" &&
+    /^[a-z][a-z0-9-]{0,127}$/.test(record.scheduleId) &&
+    typeof record.occurrenceId === "string" &&
+    /^[a-f0-9]{64}$/.test(record.occurrenceId) &&
+    (occurrenceId === undefined || record.occurrenceId === occurrenceId) &&
+    typeof record.generation === "string" &&
+    /^[a-f0-9]{64}$/.test(record.generation) &&
+    (record.action === "pause" || record.action === "delete") &&
+    boundedString(record.claimantOwner, 512) &&
+    Number.isSafeInteger(record.fence) &&
+    (record.fence as number) >= 1 &&
+    instant(record.requestedAt) &&
+    (record.acknowledgedAt === undefined || instant(record.acknowledgedAt))
+  );
+}
+
 function decodeRequest(record: StateRecord | null, projectId: string) {
   if (!record) return { ok: true as const, value: null };
-  const request = exact(record.metadata, ["digest", "schedule"]);
+  const request = exact(
+    record.metadata,
+    ["digest", "schedule"],
+    ["cancellation"],
+  );
   if (
     !request ||
     typeof request.digest !== "string" ||
     !/^[a-f0-9]{64}$/.test(request.digest) ||
-    !validSnapshot(request.schedule, projectId, false)
+    !validSnapshot(request.schedule, projectId, false) ||
+    (request.cancellation !== undefined &&
+      !validCancellation(request.cancellation))
   )
     return storageFailure();
   return {
@@ -346,8 +404,11 @@ export function createSchedulerPersistence(
     .digest("hex");
   const DURABLE_DEFINITION_COLLECTION = `${DEFINITION_COLLECTION_PREFIX}.${namespace}`;
   const SESSION_DEFINITION_COLLECTION = `${DEFINITION_COLLECTION_PREFIX}.${namespace}.session.${creatorNamespace}`;
-  const REQUEST_COLLECTION = `${REQUEST_COLLECTION_PREFIX}.${namespace}.${creatorNamespace}`;
+  const REQUEST_COLLECTION = `${REQUEST_COLLECTION_PREFIX}.${namespace}`;
   const CANCELLATION_COLLECTION = `${CANCELLATION_COLLECTION_PREFIX}.${namespace}`;
+  const REQUEST_CAPACITY_COLLECTION = `scheduler.request-capacity.${namespace}`;
+  const REQUEST_CAPACITY_KEY = "gate";
+  const requestKey = (_scope: ScheduleScope, requestId: string) => requestId;
   const definitionCollection = (scope: ScheduleScope) =>
     scope === "session"
       ? SESSION_DEFINITION_COLLECTION
@@ -361,6 +422,176 @@ export function createSchedulerPersistence(
     });
   const occurrenceResource = (occurrenceId: string) =>
     `scheduler.occurrence:${namespace}:${occurrenceId}`;
+
+  const prepareRequestAdmission = async (
+    limit: number,
+    protectedKey?: string,
+    attempt = 0,
+  ): Promise<
+    | { ok: false; error: StateStoreError }
+    | {
+        ok: true;
+        value: {
+          full: boolean;
+          gateVersion: number | null;
+          gateGeneration: number;
+          evictable:
+            | { record: StateRecord; cancellationRecord?: StateRecord }
+            | undefined;
+        };
+      }
+  > => {
+    const gateBefore = await state.query({
+      type: "record",
+      collection: REQUEST_CAPACITY_COLLECTION,
+      key: REQUEST_CAPACITY_KEY,
+    });
+    if (!gateBefore.ok) return gateBefore;
+    const requests = await state.query({
+      type: "records",
+      collection: REQUEST_COLLECTION,
+      limit,
+    });
+    if (!requests.ok) return requests;
+    const gateAfter = await state.query({
+      type: "record",
+      collection: REQUEST_CAPACITY_COLLECTION,
+      key: REQUEST_CAPACITY_KEY,
+    });
+    if (!gateAfter.ok) return gateAfter;
+    if (
+      requests.value.type !== "records" ||
+      gateBefore.value.type !== "record" ||
+      gateAfter.value.type !== "record"
+    )
+      return storageFailure();
+    if (gateBefore.value.record?.version !== gateAfter.value.record?.version) {
+      if (attempt >= 31) return storageFailure();
+      return prepareRequestAdmission(limit, protectedKey, attempt + 1);
+    }
+    const gateRecord = gateAfter.value.record;
+    const gateGeneration = gateRecord?.metadata.generation ?? 0;
+    if (!Number.isSafeInteger(gateGeneration) || Number(gateGeneration) < 0)
+      return storageFailure();
+    const decoded = [];
+    for (const record of requests.value.records) {
+      const request = decodeRequest(record, projectId);
+      if (!request.ok) return request;
+      decoded.push({ record, request: request.value?.value });
+    }
+    if (decoded.length < limit) {
+      return {
+        ok: true as const,
+        value: {
+          full: false as const,
+          gateVersion: gateRecord?.version ?? null,
+          gateGeneration: Number(gateGeneration),
+          evictable: undefined,
+        },
+      };
+    }
+    decoded.sort(
+      (left, right) =>
+        left.record.updatedAt - right.record.updatedAt ||
+        left.record.key.localeCompare(right.record.key),
+    );
+    let evictable:
+      { record: StateRecord; cancellationRecord?: StateRecord } | undefined;
+    for (const candidate of decoded) {
+      if (!candidate.request || candidate.record.key === protectedKey) continue;
+      if (!candidate.request.cancellation) {
+        evictable = { record: candidate.record };
+        break;
+      }
+      const cancellation = await state.query({
+        type: "record",
+        collection: CANCELLATION_COLLECTION,
+        key: candidate.request.cancellation.occurrenceId,
+      });
+      if (!cancellation.ok) return cancellation;
+      if (cancellation.value.type !== "record") return storageFailure();
+      const cancellationRecord = cancellation.value.record;
+      if (
+        cancellationRecord &&
+        validCancellation(
+          cancellationRecord.metadata,
+          candidate.request.cancellation.occurrenceId,
+        ) &&
+        cancellationRecord.metadata.generation ===
+          candidate.request.cancellation.generation &&
+        cancellationRecord.metadata.fence ===
+          candidate.request.cancellation.fence &&
+        typeof cancellationRecord.metadata.acknowledgedAt === "string"
+      ) {
+        evictable = { record: candidate.record, cancellationRecord };
+        break;
+      }
+    }
+    return {
+      ok: true as const,
+      value: {
+        full: !evictable,
+        gateVersion: gateRecord?.version ?? null,
+        gateGeneration: Number(gateGeneration),
+        evictable,
+      },
+    };
+  };
+
+  const commitWithRequestAdmission = async (
+    limit: number,
+    transactionId: string,
+    protectedKey: string,
+    operations: readonly Parameters<
+      StateStore["transact"]
+    >[0]["operations"][number][],
+  ) => {
+    let lastConflict: Awaited<ReturnType<typeof transact>> | undefined;
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const prepared = await prepareRequestAdmission(limit, protectedKey);
+      if (!prepared.ok) return prepared;
+      if (prepared.value.full) return storageFailure();
+      const evictable = prepared.value.evictable;
+      const committed = await transact({
+        transactionId: `${transactionId}:admission-${prepared.value.gateGeneration}`,
+        operations: [
+          {
+            type: "put-record",
+            collection: REQUEST_CAPACITY_COLLECTION,
+            key: REQUEST_CAPACITY_KEY,
+            metadata: { generation: prepared.value.gateGeneration + 1 },
+            expectedVersion: prepared.value.gateVersion,
+          },
+          ...(evictable
+            ? [
+                {
+                  type: "delete-record" as const,
+                  collection: REQUEST_COLLECTION,
+                  key: evictable.record.key,
+                  expectedVersion: evictable.record.version,
+                },
+                ...(evictable.cancellationRecord
+                  ? [
+                      {
+                        type: "delete-record" as const,
+                        collection: CANCELLATION_COLLECTION,
+                        key: evictable.cancellationRecord.key,
+                        expectedVersion: evictable.cancellationRecord.version,
+                      },
+                    ]
+                  : []),
+              ]
+            : []),
+          ...operations,
+        ],
+      });
+      if (committed.ok || committed.error.code !== "VERSION_CONFLICT")
+        return committed;
+      lastConflict = committed;
+    }
+    return lastConflict ?? storageFailure();
+  };
+
   return {
     occurrenceResource,
     definitionVersion(
@@ -432,20 +663,11 @@ export function createSchedulerPersistence(
     },
 
     async requestCapacity(limit: number) {
-      const queried = await state.query({
-        type: "records",
-        collection: REQUEST_COLLECTION,
-        limit,
-      });
-      if (!queried.ok) return queried;
-      if (queried.value.type !== "records") return storageFailure();
-      for (const record of queried.value.records) {
-        const decoded = decodeRequest(record, projectId);
-        if (!decoded.ok) return decoded;
-      }
+      const prepared = await prepareRequestAdmission(limit);
+      if (!prepared.ok) return prepared;
       return {
         ok: true as const,
-        value: { full: queried.value.records.length >= limit },
+        value: { full: prepared.value.full },
       };
     },
 
@@ -454,12 +676,12 @@ export function createSchedulerPersistence(
       const definitions = await state.query({
         type: "records",
         collection: SESSION_DEFINITION_COLLECTION,
-        limit,
+        limit: 1_000,
       });
       const requests = await state.query({
         type: "records",
         collection: REQUEST_COLLECTION,
-        limit,
+        limit: 1_000,
       });
       if (
         !definitions.ok ||
@@ -495,12 +717,32 @@ export function createSchedulerPersistence(
             (decoded.value.value.schedule.scope === "session" &&
               decoded.value.value.schedule.binding.creatorSessionId ===
                 sessionId))
-        )
+        ) {
           targets.push({
             collection: REQUEST_COLLECTION,
             key: record.key,
             version: record.version,
           });
+          const cancellation = decoded.value.value.cancellation;
+          if (cancellation) {
+            const queried = await state.query({
+              type: "record",
+              collection: CANCELLATION_COLLECTION,
+              key: cancellation.occurrenceId,
+            });
+            if (!queried.ok) return queried;
+            if (queried.value.type !== "record") return storageFailure();
+            if (
+              queried.value.record &&
+              typeof queried.value.record.metadata.acknowledgedAt === "string"
+            )
+              targets.push({
+                collection: CANCELLATION_COLLECTION,
+                key: queried.value.record.key,
+                version: queried.value.record.version,
+              });
+          }
+        }
       }
       for (let offset = 0; offset < targets.length; offset += 200) {
         const chunk = targets.slice(offset, offset + 200);
@@ -563,35 +805,8 @@ export function createSchedulerPersistence(
       if (!queried.ok) return queried;
       if (queried.value.type !== "record") return storageFailure();
       if (!queried.value.record) return { ok: true as const, value: null };
-      const value = exact(
-        queried.value.record.metadata,
-        [
-          "scheduleId",
-          "occurrenceId",
-          "generation",
-          "action",
-          "claimantOwner",
-          "fence",
-          "requestedAt",
-        ],
-        ["acknowledgedAt"],
-      );
-      if (
-        !value ||
-        typeof value.scheduleId !== "string" ||
-        !/^[a-z][a-z0-9-]{0,127}$/.test(value.scheduleId) ||
-        value.occurrenceId !== occurrenceId ||
-        !/^[a-f0-9]{64}$/.test(occurrenceId) ||
-        !Number.isSafeInteger(value.generation) ||
-        (value.generation as number) < 1 ||
-        (value.action !== "pause" && value.action !== "delete") ||
-        !boundedString(value.claimantOwner, 512) ||
-        !Number.isSafeInteger(value.fence) ||
-        (value.fence as number) < 1 ||
-        !instant(value.requestedAt) ||
-        (value.acknowledgedAt !== undefined && !instant(value.acknowledgedAt))
-      )
-        return storageFailure();
+      const value = queried.value.record.metadata;
+      if (!validCancellation(value, occurrenceId)) return storageFailure();
       return {
         ok: true as const,
         value: {
@@ -638,6 +853,33 @@ export function createSchedulerPersistence(
       });
     },
 
+    acknowledgeCancellationAndRelease(input: {
+      readonly occurrenceId: string;
+      readonly cancellation: PersistedCancellationRequest;
+      readonly expectedVersion: number;
+      readonly owner: string;
+      readonly fence: number;
+    }) {
+      return transact({
+        transactionId: `scheduler.cancel-settle:${input.occurrenceId}:${input.cancellation.generation}:${input.fence}`,
+        operations: [
+          {
+            type: "put-record",
+            collection: CANCELLATION_COLLECTION,
+            key: input.occurrenceId,
+            metadata: json(input.cancellation),
+            expectedVersion: input.expectedVersion,
+          },
+          {
+            type: "release-lease",
+            resource: occurrenceResource(input.occurrenceId),
+            owner: input.owner,
+            fence: input.fence,
+          },
+        ],
+      });
+    },
+
     async request(requestId: string) {
       const queried = await state.query({
         type: "record",
@@ -655,8 +897,12 @@ export function createSchedulerPersistence(
       readonly schedule: PersistedSchedule;
       readonly expectedVersion: number | null;
       readonly previousScope?: ScheduleScope;
+      readonly cancellation?: PersistedCancellationRequest;
+      readonly expectedCancellationVersion?: number | null;
+      readonly maxRequestReceipts: number;
     }) {
       const {
+        definitionGeneration: _definitionGeneration,
         credentialReferences: _credentialReferences,
         pendingRunNow: _pendingRunNow,
         ...receiptSchedule
@@ -664,9 +910,11 @@ export function createSchedulerPersistence(
       const moved =
         input.previousScope !== undefined &&
         input.previousScope !== input.schedule.scope;
-      return transact({
-        transactionId: `scheduler.change:${input.requestId}`,
-        operations: [
+      return commitWithRequestAdmission(
+        input.maxRequestReceipts,
+        `scheduler.change:${input.requestId}`,
+        requestKey(input.schedule.scope, input.requestId),
+        [
           ...(moved
             ? [
                 {
@@ -684,15 +932,32 @@ export function createSchedulerPersistence(
             metadata: json(input.schedule),
             expectedVersion: moved ? null : input.expectedVersion,
           },
+          ...(input.cancellation
+            ? [
+                {
+                  type: "put-record" as const,
+                  collection: CANCELLATION_COLLECTION,
+                  key: input.cancellation.occurrenceId,
+                  metadata: json(input.cancellation),
+                  expectedVersion: input.expectedCancellationVersion ?? null,
+                },
+              ]
+            : []),
           {
             type: "put-record",
             collection: REQUEST_COLLECTION,
-            key: input.requestId,
-            metadata: json({ digest: input.digest, schedule: receiptSchedule }),
+            key: requestKey(input.schedule.scope, input.requestId),
+            metadata: json({
+              digest: input.digest,
+              schedule: receiptSchedule,
+              ...(input.cancellation
+                ? { cancellation: input.cancellation }
+                : {}),
+            }),
             expectedVersion: null,
           },
         ],
-      });
+      );
     },
 
     claimOccurrence(input: {
@@ -829,25 +1094,47 @@ export function createSchedulerPersistence(
       readonly digest: string;
       readonly schedule: ScheduleSnapshot;
       readonly expectedVersion: number;
+      readonly cancellation?: PersistedCancellationRequest;
+      readonly expectedCancellationVersion?: number | null;
+      readonly maxRequestReceipts: number;
     }) {
-      return transact({
-        transactionId: `scheduler.change:${input.requestId}`,
-        operations: [
+      return commitWithRequestAdmission(
+        input.maxRequestReceipts,
+        `scheduler.change:${input.requestId}`,
+        requestKey(input.schedule.scope, input.requestId),
+        [
           {
             type: "delete-record",
             collection: definitionCollection(input.schedule.scope),
             key: input.schedule.id,
             expectedVersion: input.expectedVersion,
           },
+          ...(input.cancellation
+            ? [
+                {
+                  type: "put-record" as const,
+                  collection: CANCELLATION_COLLECTION,
+                  key: input.cancellation.occurrenceId,
+                  metadata: json(input.cancellation),
+                  expectedVersion: input.expectedCancellationVersion ?? null,
+                },
+              ]
+            : []),
           {
             type: "put-record",
             collection: REQUEST_COLLECTION,
-            key: input.requestId,
-            metadata: json({ digest: input.digest, schedule: input.schedule }),
+            key: requestKey(input.schedule.scope, input.requestId),
+            metadata: json({
+              digest: input.digest,
+              schedule: input.schedule,
+              ...(input.cancellation
+                ? { cancellation: input.cancellation }
+                : {}),
+            }),
             expectedVersion: null,
           },
         ],
-      });
+      );
     },
   };
 }

@@ -37,7 +37,7 @@ test("Schedule delivery uses one stable mailbox receipt without prompt or author
   const result = await delivery.deliver(
     {
       deliveryId: "a".repeat(64),
-      generation: 3,
+      generation: "3".repeat(64),
       route: { kind: "session", sessionId: "parent-session" },
       scheduleId: "daily-check",
       occurrenceId: "a".repeat(64),
@@ -85,7 +85,7 @@ test("Schedule delivery returns bounded generic broker failure", async () => {
   const result = await delivery.deliver(
     {
       deliveryId: "d".repeat(64),
-      generation: 8,
+      generation: "8".repeat(64),
       route: { kind: "session", sessionId: "parent-session" },
       scheduleId: "daily-check",
       occurrenceId: "d".repeat(64),

@@ -20,8 +20,25 @@ import {
   type TerminalManagerShape,
 } from "./src/manager.ts";
 import { createTerminalRuntime, runTool } from "./src/runtime.ts";
+import { createCleanupBudget } from "./src/cleanup-budget.ts";
 
 const cwd = process.cwd();
+
+test("Windows cleanup stages consume one deterministic deadline budget", () => {
+  let now = 1_000;
+  const budget = createCleanupBudget(20_000, () => now);
+
+  assert.equal(budget.remaining("identity snapshot"), 20_000);
+  now += 15_000;
+  assert.equal(budget.remaining("identity-validated termination"), 5_000);
+  now += 4_500;
+  assert.equal(budget.remaining("close grace"), 500);
+  now += 500;
+  assert.throws(
+    () => budget.remaining("settlement"),
+    /cleanup deadline exhausted before settlement/i,
+  );
+});
 
 /** Build a `node -e` command accepted by both cmd.exe and POSIX shells. */
 function nodeCmd(script: string) {

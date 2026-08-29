@@ -231,7 +231,7 @@ export interface HostAuthority {
 
 export interface ResultDeliveryRequest {
   readonly deliveryId: string;
-  readonly generation: number;
+  readonly generation: string;
   readonly route: ScheduleResultRoute;
   readonly scheduleId: string;
   readonly occurrenceId: string;

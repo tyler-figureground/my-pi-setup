@@ -268,23 +268,23 @@ async function cancellable<T>(
   const pending = Promise.resolve().then(() =>
     operation(linked.controller.signal),
   );
-  const cancelled = new Promise<never>((_resolve, reject) => {
-    const rejectCancelled = () =>
-      reject(
-        linked.controller.signal.reason ??
-          new DOMException("Aborted", "AbortError"),
-      );
-    if (linked.controller.signal.aborted) rejectCancelled();
-    else
-      linked.controller.signal.addEventListener("abort", rejectCancelled, {
-        once: true,
-      });
-  });
   try {
-    return await Promise.race([pending, cancelled]);
+    const result = await pending;
+    if (linked.controller.signal.aborted)
+      throw (
+        linked.controller.signal.reason ??
+        new DOMException("Aborted", "AbortError")
+      );
+    return result;
+  } catch (error) {
+    if (linked.controller.signal.aborted)
+      throw (
+        linked.controller.signal.reason ??
+        new DOMException("Aborted", "AbortError")
+      );
+    throw error;
   } finally {
     linked.dispose();
-    void pending.catch(() => undefined);
   }
 }
 
@@ -489,7 +489,11 @@ export function createNamedHookHttpAdapter(
   const issueAuthority = options.issueAuthority;
   return {
     classify(name) {
-      return definitions.get(name)?.effect;
+      const definition = definitions.get(name);
+      if (!definition) return undefined;
+      return definition.method === "GET" && definition.credentialReference
+        ? "credential-use"
+        : definition.effect;
     },
     ...(issueAuthority
       ? {
@@ -560,19 +564,54 @@ export function createNamedHookHttpAdapter(
               allowedOrigins: definition.allowedOrigins,
               allowLoopback: definition.allowLoopback,
             };
-            if (definition.credentialReference) {
-              if (!options.credentials)
-                throw new Error("Credential vault is unavailable.");
-              const credentialDecision = await options.controls.assess({
+            const effects = [
+              ...(definition.credentialReference
+                ? (["credential-use"] as const)
+                : []),
+              definition.effect,
+            ];
+            const confirmationRequired: (typeof effects)[number][] = [];
+            let destinationDecision:
+              | Awaited<ReturnType<ExternalIntegrationControls["assess"]>>
+              | undefined;
+            for (const effect of effects) {
+              const decision = await options.controls.assess({
                 integration: "hook",
                 operation: definition.id,
-                effect: "credential-use",
-                actor: options.actor(),
+                effect,
+                actor,
                 mode: options.mode(),
                 destination,
               });
-              if (credentialDecision.kind !== "allow")
-                throw new Error(credentialDecision.reason);
+              if (decision.kind === "deny") throw new Error(decision.reason);
+              if (decision.kind === "require-user-confirmation")
+                confirmationRequired.push(effect);
+              else destinationDecision = decision;
+            }
+            if (confirmationRequired.length > 0) {
+              if (!request.authority)
+                throw new Error(
+                  "Named HTTP action requires direct user authority.",
+                );
+              const confirmed = await options.controls.assess(
+                {
+                  integration: "hook",
+                  operation: definition.id,
+                  effect: confirmationRequired[0]!,
+                  actor,
+                  mode: options.mode(),
+                  destination,
+                },
+                request.authority,
+              );
+              if (confirmed.kind !== "allow") throw new Error(confirmed.reason);
+              destinationDecision = confirmed;
+            }
+            if (!destinationDecision)
+              throw new Error("Named HTTP destination was not authorized.");
+            if (definition.credentialReference) {
+              if (!options.credentials)
+                throw new Error("Credential vault is unavailable.");
               credential = await options.credentials.resolve(
                 definition.credentialReference,
                 {
@@ -586,27 +625,14 @@ export function createNamedHookHttpAdapter(
             }
             const fetch = createPinnedFetch({
               maxRequestBytes: definition.maxRequestBytes,
-              authorize: async (url) => {
-                if (url !== definition.url) return { allowed: false };
-                const current = await options.controls.assess(
-                  {
-                    integration: "hook",
-                    operation: definition.id,
-                    effect: definition.effect,
-                    actor,
-                    mode: options.mode(),
-                    destination: { ...destination, url },
-                  },
-                  request.authority,
-                );
-                return current.kind === "allow"
+              authorize: async (url) =>
+                url === definition.url
                   ? {
                       allowed: true,
-                      canonicalUrl: current.canonicalUrl,
-                      resolvedAddresses: current.resolvedAddresses,
+                      canonicalUrl: destinationDecision.canonicalUrl,
+                      resolvedAddresses: destinationDecision.resolvedAddresses,
                     }
-                  : { allowed: false };
-              },
+                  : { allowed: false },
             });
             const response = await fetch(definition.url, {
               method: definition.method,

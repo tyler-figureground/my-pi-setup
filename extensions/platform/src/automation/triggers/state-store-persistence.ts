@@ -10,9 +10,11 @@ import type {
 } from "../../core/persistence/state-store.ts";
 import {
   snapshotTriggerDurableRecord,
+  type TriggerDurableRecord,
   type TriggerPersistenceErrorCode,
   type TriggerPersistencePort,
 } from "./persistence.ts";
+import type { TriggerRecordAuthenticator } from "./record-authentication.ts";
 import { hasExactKeys, isPlainData } from "./validation.ts";
 
 const EVENT_COLLECTION = "automation.triggers.events";
@@ -27,9 +29,16 @@ const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1_000;
 const MAINTENANCE_LIMIT = 128;
 
 export interface StateStoreTriggerPersistenceOptions {
+  readonly authenticator: TriggerRecordAuthenticator;
   readonly now?: () => number;
   readonly busyTimeoutMs?: number;
   readonly maxRetries?: number;
+}
+
+interface AuthenticatedTriggerRecord {
+  readonly schemaVersion: 1;
+  readonly record: TriggerDurableRecord;
+  readonly authentication: string;
 }
 
 function persistenceFailure(
@@ -164,7 +173,7 @@ function mapStateError(
 
 export function createStateStoreTriggerPersistence(
   state: StateStore,
-  options: StateStoreTriggerPersistenceOptions = {},
+  options: StateStoreTriggerPersistenceOptions,
 ) {
   const busyTimeoutMs = options.busyTimeoutMs ?? 50;
   const maxRetries = options.maxRetries ?? 3;
@@ -178,7 +187,78 @@ export function createStateStoreTriggerPersistence(
   ) {
     throw new TypeError("Trigger persistence retry options are invalid.");
   }
+  if (
+    !options.authenticator ||
+    typeof options.authenticator.authenticate !== "function" ||
+    typeof options.authenticator.verify !== "function"
+  ) {
+    throw new TypeError("Trigger persistence authenticator is required.");
+  }
   const writeState = state.withBusyTimeout?.(busyTimeoutMs) ?? state;
+  const authenticatedMetadata = async (record: TriggerDurableRecord) => {
+    try {
+      const authentication = await options.authenticator.authenticate(record);
+      if (!/^[a-f0-9]{64}$/.test(authentication)) return undefined;
+      return {
+        schemaVersion: 1,
+        record: {
+          schemaVersion: record.schemaVersion,
+          eventId: record.eventId,
+          type: record.type,
+          occurredAt: record.occurredAt,
+          sourceKey: record.sourceKey,
+          payload: record.payload,
+          payloadDigest: record.payloadDigest,
+          cause: {
+            rootEventId: record.cause.rootEventId,
+            ...(record.cause.parentEventId
+              ? { parentEventId: record.cause.parentEventId }
+              : {}),
+            ancestry: record.cause.ancestry,
+          },
+        } satisfies TriggerDurableRecord & JsonObject,
+        authentication,
+      } satisfies JsonObject;
+    } catch {
+      return undefined;
+    }
+  };
+  const decodeAuthenticatedMetadata = async (value: unknown) => {
+    if (
+      !isPlainData(value, { maxDepth: 22, maxNodes: 10_016 }) ||
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      !hasExactKeys(value as Record<string, unknown>, [
+        "schemaVersion",
+        "record",
+        "authentication",
+      ]) ||
+      Object.keys(value).length !== 3
+    ) {
+      return { kind: "invalid" as const };
+    }
+    const envelope = value as unknown as AuthenticatedTriggerRecord;
+    const record = snapshotTriggerDurableRecord(envelope.record);
+    if (
+      envelope.schemaVersion !== 1 ||
+      !record ||
+      typeof envelope.authentication !== "string" ||
+      !/^[a-f0-9]{64}$/.test(envelope.authentication)
+    ) {
+      return { kind: "invalid" as const };
+    }
+    try {
+      return (await options.authenticator.verify(
+        record,
+        envelope.authentication,
+      ))
+        ? { kind: "valid" as const, record }
+        : { kind: "invalid" as const };
+    } catch {
+      return { kind: "unavailable" as const };
+    }
+  };
   let lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   let maintenanceTail = Promise.resolve();
   const maintenanceAfterKey = new Map<string, string>();
@@ -501,17 +581,24 @@ export function createStateStoreTriggerPersistence(
         );
       }
       await maintain(request.now);
-      const metadata = { ...record } satisfies JsonObject;
+      const metadata = await authenticatedMetadata(record);
+      if (!metadata) {
+        return persistenceFailure(
+          "WRITE_FAILED",
+          "Durable trigger record could not be host-authenticated.",
+          true,
+        );
+      }
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const existing = await readEvent(record.eventId);
         if (!existing.ok) return mapStateError(existing.error, "WRITE_FAILED");
         if (existing.value) {
-          const existingRecord = snapshotTriggerDurableRecord(
+          const authenticated = await decodeAuthenticatedMetadata(
             existing.value.metadata,
           );
           if (
-            !existingRecord ||
-            JSON.stringify(existingRecord) !== JSON.stringify(record)
+            authenticated.kind !== "valid" ||
+            JSON.stringify(authenticated.record) !== JSON.stringify(record)
           ) {
             return persistenceFailure(
               "WRITE_FAILED",
@@ -634,10 +721,21 @@ export function createStateStoreTriggerPersistence(
         const claimed = await claimExisting(candidate, request);
         if (!claimed.ok) return mapStateError(claimed.error, "CLAIM_FAILED");
         if (claimed.value) {
+          const authenticated = await decodeAuthenticatedMetadata(
+            claimed.value.record.metadata,
+          );
+          if (authenticated.kind === "unavailable") {
+            return persistenceFailure(
+              "READ_FAILED",
+              "Durable trigger authentication key is unavailable.",
+              true,
+            );
+          }
           claims.push({
             claimId: claimed.value.record.key,
             fence: claimed.value.lease.fence,
-            record: structuredClone(claimed.value.record.metadata),
+            record:
+              authenticated.kind === "valid" ? authenticated.record : undefined,
           });
         }
         if (claims.length === request.limit) break;

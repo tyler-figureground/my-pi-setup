@@ -600,8 +600,8 @@ test("failed persistence preparation rolls reconcile back atomically", async () 
 
   failRead = true;
   const replacement = await runtime.engine.reconcile({
-    ownerId: "owner",
-    generation: 2,
+    ownerId: "replacement-owner",
+    generation: 1,
     bindings: [
       {
         id: "replacement",
@@ -655,7 +655,7 @@ test("concurrent owner generations reconcile serially", async () => {
   releaseFirst.resolve();
   assert.equal((await first).ok, true);
   assert.equal((await second).ok, true);
-  assert.equal(claimCalls, 2);
+  assert.equal(claimCalls, 1);
   assert.deepEqual(runtime.engine.inspect().bindings, [
     { ownerId: "owner", generation: 2, bindingId: "worker-2" },
   ]);
@@ -1406,6 +1406,61 @@ test("failed durable deliveries remain replayable until one succeeds", async () 
   assert.equal(calls, 2);
   assert.equal((await replay("host-third")).ok, true);
   assert.equal(calls, 2);
+});
+
+test("failed durable recovery runs only on first activation for each owner", async () => {
+  const persistence = createMemoryTriggerPersistence();
+  let calls = 0;
+  const runtime = createTriggerEngine({
+    hostId: "host-recovery-boundary",
+    persistence,
+    createEventId: () => "durable-owner-recovery",
+    clock: { now: () => 100 },
+  });
+  const publisher = bindFixture(runtime);
+  const binding = (ownerId: string, generation: number, fail = false) =>
+    runtime.engine.reconcile({
+      ownerId,
+      generation,
+      bindings: [
+        {
+          id: "worker",
+          eventTypes: ["fixture.event"],
+          deliver: async () => {
+            calls += 1;
+            if (fail) throw new Error("fixture failure");
+          },
+        },
+      ],
+    });
+
+  assert.equal((await binding("owner-a", 1, true)).ok, true);
+  const failed = await publisher.publish({
+    type: "fixture.event",
+    payload: {},
+    durability: "restart-only",
+  });
+  assert.equal(failed.ok, true);
+  assert.equal(calls, 1);
+
+  const ordinaryReload = await binding("owner-a", 2);
+  assert.equal(ordinaryReload.ok, true);
+  if (ordinaryReload.ok) assert.equal(ordinaryReload.value.replay.claimed, 0);
+  assert.equal(calls, 1);
+
+  const secondOwnerActivation = await binding("owner-b", 1);
+  assert.equal(secondOwnerActivation.ok, true);
+  if (secondOwnerActivation.ok)
+    assert.equal(secondOwnerActivation.value.replay.claimed, 1);
+  assert.equal(calls, 2);
+
+  const secondOwnerReload = await binding("owner-b", 2);
+  assert.equal(secondOwnerReload.ok, true);
+  if (secondOwnerReload.ok)
+    assert.equal(secondOwnerReload.value.replay.claimed, 0);
+  assert.equal(calls, 2);
+
+  await runtime.close();
 });
 
 test("timed-out durable deliveries remain replayable", async () => {

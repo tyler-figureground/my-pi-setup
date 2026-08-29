@@ -423,6 +423,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
   );
   const runtimeId = randomUUID();
   const owners = new Map<string, OwnerState>();
+  const activatedOwners = new Set<string>();
   const rootBudgets = new Map<string, RootBudget>();
   const eventSourceKeys = new WeakMap<TriggerEvent, string>();
   const sourceAuthorities = new WeakMap<
@@ -588,7 +589,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
           ReturnType<typeof decodeDurableClaim>
         >[] = [];
         let replayQuarantined = 0;
-        if (persistence) {
+        if (persistence && !activatedOwners.has(snapshot.ownerId)) {
           const releasePreparedClaims = async () => {
             await Promise.allSettled(
               replayClaims.map(({ claim }) =>
@@ -688,6 +689,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
           })),
         };
         owners.set(snapshot.ownerId, prepared);
+        activatedOwners.add(snapshot.ownerId);
         if (previous) {
           for (const state of previous.bindings) retire(state, "fenced");
         }
@@ -746,6 +748,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
               !closed &&
               sourcesByKey.get(record.sourceKey) === authority &&
               activeSources.get(authority.identityKey) === authority,
+            snapshot.ownerId,
           );
           if (!replayed.ok) {
             replayDegraded = true;
@@ -788,6 +791,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
     restoredEvent?: TriggerEvent,
     restoredClaim?: TriggerPersistenceClaim,
     fence?: () => boolean,
+    ownerFilter?: string,
   ): Promise<TriggerOutcome<TriggerPublishResult>> => {
     if (closed) {
       return {
@@ -1165,9 +1169,13 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
         }
       });
 
-    const routes = [...owners].flatMap(([ownerId, owner]) =>
-      owner.bindings.map((state) => ({ ownerId, owner, state })),
-    );
+    const routes = [...owners]
+      .filter(
+        ([ownerId]) => ownerFilter === undefined || ownerId === ownerFilter,
+      )
+      .flatMap(([ownerId, owner]) =>
+        owner.bindings.map((state) => ({ ownerId, owner, state })),
+      );
     routes.sort(
       (left, right) =>
         (left.state.binding.priority ?? 0) -
@@ -1712,6 +1720,7 @@ export function createTriggerEngine(options: TriggerEngineOptions) {
           for (const state of owner.bindings) retire(state, "closed");
         }
         owners.clear();
+        activatedOwners.clear();
         sourcesByKey.clear();
         activeSources.clear();
         sourceGenerations.clear();

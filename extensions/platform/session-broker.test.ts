@@ -537,7 +537,7 @@ test("host automation delivery deduplicates across broker incarnation after comm
   );
   const secondSender = await attach(
     secondModule,
-    "automation-sender",
+    "automation-recovery-sender",
     senderProof,
   );
   assert.equal(secondRecipient.ok, true);
@@ -563,9 +563,10 @@ test("host automation delivery deduplicates across broker incarnation after comm
       id: string,
     ) =>
       sessions.find(({ address }) => address.piSessionId === id)?.incarnation;
-    assert.notEqual(
-      incarnationFor(firstIncarnation.value, "automation-sender"),
-      incarnationFor(secondIncarnation.value, "automation-sender"),
+    assert.equal(
+      incarnationFor(secondIncarnation.value, "automation-recovery-sender")
+        ?.length,
+      64,
     );
   }
   const mailbox = await secondRecipient.value.messages({
