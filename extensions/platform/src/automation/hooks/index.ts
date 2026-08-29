@@ -1,4 +1,17 @@
 export { createTriggerEngine } from "./engine.ts";
+export {
+  createNamedHookAgentAdapter,
+  createNamedHookHttpAdapter,
+  createNamedHookMcpAdapter,
+} from "./adapters.ts";
+export type {
+  NamedHookAgentAdapterOptions,
+  NamedHookHttpAdapterOptions,
+  NamedHookHttpDefinition,
+  NamedHookMcpAdapterOptions,
+  NamedHookMcpDefinition,
+  NamedProfileExecutionPort,
+} from "./adapters.ts";
 export { createHooks } from "./phase7.ts";
 export {
   declarativeHookEvents,
