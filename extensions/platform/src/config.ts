@@ -16,6 +16,11 @@ import {
   type PlatformBrowserConfiguration,
 } from "./browser/config.ts";
 import { decodeLanguageServerConfiguration } from "./language/config.ts";
+import {
+  decodeHookActionConfiguration,
+  defaultPlatformHookActionConfiguration,
+  type PlatformHookActionConfiguration,
+} from "./automation/hooks/configuration.ts";
 import { decodeMcpServers, type ConfiguredMcpServer } from "./mcp/config.ts";
 import {
   decodeMemoryConfiguration,
@@ -231,6 +236,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly memory: PlatformMemoryConfiguration;
   readonly monitors: PlatformMonitorConfiguration;
   readonly scheduler: PlatformSchedulerConfiguration;
+  readonly hookActions: PlatformHookActionConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
   const agentDir = resolve(location.agentDir ?? getAgentDir());
@@ -259,6 +265,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   let memory = defaultPlatformMemoryConfiguration;
   let monitors = defaultPlatformMonitorConfiguration;
   let scheduler = defaultPlatformSchedulerConfiguration;
+  let hookActions = defaultPlatformHookActionConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
     try {
@@ -283,6 +290,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
                     "memorySettings",
                     "monitorSettings",
                     "schedulerSettings",
+                    "hookActions",
                   ].includes(key),
               ),
             )
@@ -322,6 +330,11 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         scheduler,
         source.scope,
       );
+      const decodedHookActions = decodeHookActionConfiguration(
+        object?.hookActions,
+        hookActions,
+        source.scope,
+      );
       flags = decoded.flags;
       plan = decodedPlan.plan;
       languageServers = decodedLanguage.servers;
@@ -331,6 +344,10 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       memory = decodedMemory.memory;
       monitors = decodedMonitors.monitors;
       scheduler = decodedScheduler.scheduler;
+      hookActions = {
+        http: decodedHookActions.http,
+        mcp: decodedHookActions.mcp,
+      };
       diagnostics.push(
         ...[
           ...decoded.diagnostics,
@@ -342,6 +359,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
           ...decodedMemory.diagnostics,
           ...decodedMonitors.diagnostics,
           ...decodedScheduler.diagnostics,
+          ...decodedHookActions.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
           message: diagnostic.message,
@@ -364,6 +382,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
     memory,
     monitors,
     scheduler,
+    hookActions,
     diagnostics,
   };
 }

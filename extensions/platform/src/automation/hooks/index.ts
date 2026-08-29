@@ -1,5 +1,10 @@
 export { createTriggerEngine } from "./engine.ts";
 export {
+  decodeHookActionConfiguration,
+  defaultPlatformHookActionConfiguration,
+} from "./configuration.ts";
+export type { PlatformHookActionConfiguration } from "./configuration.ts";
+export {
   createNamedHookAgentAdapter,
   createNamedHookHttpAdapter,
   createNamedHookMcpAdapter,
