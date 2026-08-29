@@ -55,6 +55,8 @@ export interface MessagingCapability {
     readonly delivery: PiSessionDeliveryAdapter;
   }): Promise<void>;
   stop(reason: ShutdownReason): Promise<void>;
+  /** @internal Host automation delivery uses the attached broker directly. */
+  sessionBroker(): SessionBroker | undefined;
 }
 
 export interface MessagingCapabilityOptions {
@@ -627,6 +629,7 @@ export function createMessagingCapability(
   removeActiveTools();
 
   return {
+    sessionBroker: () => current?.broker,
     async start({ brokerModule, binding, delivery }) {
       if (binding.executionRole !== "parent") {
         throw new Error("Session messaging requires Parent execution role.");

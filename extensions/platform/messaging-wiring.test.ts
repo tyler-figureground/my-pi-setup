@@ -932,9 +932,11 @@ test("stop removes only active Messaging tools and restart restores them", async
     "session_list",
     "session_send",
   ]);
+  assert.equal(wired.capability.sessionBroker(), broker);
 
   await wired.capability.stop("reload");
   assert.deepEqual(wired.activeTools(), ["peer_tool"]);
+  assert.equal(wired.capability.sessionBroker(), undefined);
 
   await wired.capability.start({
     brokerModule: brokerModule(broker),
