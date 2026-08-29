@@ -37,6 +37,7 @@ const unit = [
   "extensions/platform/memory-store.test.ts",
   "extensions/platform/memory-wiring.test.ts",
   "extensions/platform/messaging-wiring.test.ts",
+  "extensions/platform/monitor-wiring.test.ts",
   "extensions/platform/named-profile-execution-service.test.ts",
   "extensions/platform/phase5-config.test.ts",
   "extensions/platform/phase6-config.test.ts",
