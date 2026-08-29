@@ -79,6 +79,7 @@ import { createManagedLocalReviewer } from "./src/local-review.ts";
 import { resolveStandaloneChildProjectContext } from "../shared/child-session.ts";
 import type { ProfileCatalog } from "../platform/src/profiles/index.ts";
 import { platformAgentServices } from "../platform/src/agents/services.ts";
+import { bindNamedProfileExecutionPort } from "../platform/src/agents/named-profile-execution-service.ts";
 import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
 import { bindLocalReviewer } from "../platform/src/review/reviewer-service.ts";
 import { bindScheduledAgentExecutor } from "../shared/scheduled-agent.ts";
@@ -87,6 +88,10 @@ import {
   createScheduledAgentExecutor,
   type ScheduledSubagentManager,
 } from "./src/scheduled-agent.ts";
+import {
+  createNamedProfileExecutionPort,
+  type NamedProfileSubagentManager,
+} from "./src/named-profile-execution.ts";
 import type {
   WorkspaceInventory,
   WorkspaceLease,
@@ -159,6 +164,7 @@ function truncatedOutput(
 export interface SubagentsExtensionOptions {
   profileCatalog?: ProfileCatalog;
   scheduledAgentManager?: () => Promise<ScheduledSubagentManager>;
+  namedProfileManager?: () => Promise<NamedProfileSubagentManager>;
   spawn?: (
     harness: BackendName,
     task: SpawnTask,
@@ -177,13 +183,20 @@ export default function subagentsExtension(
   let unsubStatus: (() => void) | undefined;
   let unbindLocalReviewer: (() => void) | undefined;
   let unbindScheduledAgentExecutor: (() => void) | undefined;
+  let unbindNamedProfileExecutionPort: (() => void) | undefined;
   let unbindHookEvents: (() => void) | undefined;
   let scheduledManagerPromise: Promise<ScheduledSubagentManager> | undefined;
+  let namedProfileManagerPromise:
+    Promise<NamedProfileSubagentManager> | undefined;
   let scheduledGeneration = 0;
+  let namedProfileGeneration = 0;
   let acceptingHookEvents = true;
   const scheduledLifecycle = new AbortController();
+  const namedProfileLifecycle = new AbortController();
   const scheduledTitles = new Set<string>();
   const scheduledChildTitles = new Map<string, string>();
+  const namedProfileTitles = new Set<string>();
+  const namedProfileChildTitles = new Map<string, string>();
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -271,7 +284,12 @@ export default function subagentsExtension(
     // A shutdown can settle children while disposing their scopes. Never
     // append into a session whose extension runtime is already closing.
     if (!sessionContext) return;
-    if (scheduledTitles.has(snap.title) || scheduledChildTitles.has(snap.id)) {
+    if (
+      scheduledTitles.has(snap.title) ||
+      scheduledChildTitles.has(snap.id) ||
+      namedProfileTitles.has(snap.title) ||
+      namedProfileChildTitles.has(snap.id)
+    ) {
       resultDelivery.consume([snap.id]);
       return;
     }
@@ -347,6 +365,63 @@ export default function subagentsExtension(
     return scheduledManagerPromise;
   };
 
+  const getNamedProfileManager = () => {
+    namedProfileManagerPromise ??= (async () => {
+      const base = options.namedProfileManager
+        ? await options.namedProfileManager()
+        : await (async () => {
+            const activeRuntime = getRuntime();
+            const manager = await getManager();
+            return {
+              spawn: (backend, task, signal) =>
+                runTool(activeRuntime, manager.spawn(backend, task), {
+                  signal,
+                  interruptMessage: "Named Profile Agent spawn cancelled.",
+                }),
+              waitFor: (ids) =>
+                runTool(activeRuntime, manager.waitFor([...ids])),
+              get: (id) => runTool(activeRuntime, manager.get(id)),
+              cancel: (ids) => runTool(activeRuntime, manager.cancel([...ids])),
+            } satisfies NamedProfileSubagentManager;
+          })();
+      const untrack = (id: string) => {
+        const title = namedProfileChildTitles.get(id);
+        if (title) namedProfileTitles.delete(title);
+        namedProfileChildTitles.delete(id);
+      };
+      return {
+        async spawn(backend, task, signal) {
+          namedProfileTitles.add(task.title);
+          try {
+            const started = await base.spawn(backend, task, signal);
+            namedProfileChildTitles.set(started.id, task.title);
+            resultDelivery.consume([started.id]);
+            return started;
+          } catch (error) {
+            namedProfileTitles.delete(task.title);
+            throw error;
+          }
+        },
+        waitFor: (ids) => base.waitFor(ids),
+        async get(id) {
+          try {
+            return await base.get(id);
+          } finally {
+            untrack(id);
+          }
+        },
+        async cancel(ids) {
+          try {
+            return await base.cancel(ids);
+          } finally {
+            for (const id of ids) untrack(id);
+          }
+        },
+      } satisfies NamedProfileSubagentManager;
+    })();
+    return namedProfileManagerPromise;
+  };
+
   const scheduledExecutor = createScheduledAgentExecutor({
     manager: getScheduledManager,
     parent: () => {
@@ -372,6 +447,53 @@ export default function subagentsExtension(
   unbindScheduledAgentExecutor = bindScheduledAgentExecutor(
     pi.events,
     scheduledExecutor,
+  );
+
+  const projectIdentity = createProjectIdentity();
+  const namedProfileExecution = createNamedProfileExecutionPort({
+    profiles: () =>
+      options.profileCatalog ?? platformAgentServices(pi.events)?.profiles,
+    manager: getNamedProfileManager,
+    async context(cwd) {
+      const current = sessionContext;
+      if (!current) {
+        throw new Error(
+          "Named Profile execution is unavailable outside an active session.",
+        );
+      }
+      const child = resolveStandaloneChildProjectContext({
+        parentCwd: current.cwd,
+        childCwd: cwd,
+        parentTrusted: current.isProjectTrusted(),
+      });
+      const [catalogProject, requestedProject] = await Promise.all([
+        projectIdentity.resolve(current.cwd),
+        projectIdentity.resolve(child.cwd),
+      ]);
+      return {
+        cwd: child.cwd,
+        catalogProjectMatches:
+          catalogProject.ok &&
+          requestedProject.ok &&
+          catalogProject.value.projectId === requestedProject.value.projectId,
+        projectTrusted: child.projectTrusted,
+        parent: {
+          parentCwd: current.cwd,
+          projectTrusted: child.projectTrusted,
+          inheritedModel: current.model
+            ? { provider: current.model.provider, id: current.model.id }
+            : undefined,
+          inheritedThinkingLevel: pi.getThinkingLevel(),
+          modelRegistry: current.modelRegistry,
+        },
+      };
+    },
+    generation: () => namedProfileGeneration,
+    lifecycleSignal: () => namedProfileLifecycle.signal,
+  });
+  unbindNamedProfileExecutionPort = bindNamedProfileExecutionPort(
+    pi.events,
+    namedProfileExecution,
   );
 
   pi.on("session_start", async (_event, ctx) => {
@@ -464,6 +586,10 @@ export default function subagentsExtension(
 
   pi.on("session_shutdown", async () => {
     acceptingHookEvents = false;
+    unbindNamedProfileExecutionPort?.();
+    unbindNamedProfileExecutionPort = undefined;
+    namedProfileGeneration++;
+    namedProfileLifecycle.abort();
     unbindHookEvents?.();
     unbindHookEvents = undefined;
     unbindScheduledAgentExecutor?.();
@@ -482,8 +608,11 @@ export default function subagentsExtension(
     runtime = undefined;
     managerPromise = undefined;
     scheduledManagerPromise = undefined;
+    namedProfileManagerPromise = undefined;
     scheduledTitles.clear();
     scheduledChildTitles.clear();
+    namedProfileTitles.clear();
+    namedProfileChildTitles.clear();
     // Disposing the runtime runs the manager finalizer, which tears down all
     // subagent scopes (and, later, their real child processes).
     await closing?.dispose();
