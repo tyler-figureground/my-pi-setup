@@ -106,6 +106,7 @@ const integration = [
   "extensions/platform/private-protocol-loader.integration.test.ts",
   "extensions/platform/profiles.test.ts",
   "extensions/platform/project-identity.test.ts",
+  "extensions/platform/private-protocol-loader.integration.test.ts",
   "extensions/platform/review-test-evidence.test.ts",
   "extensions/platform/review.test.ts",
   "extensions/platform/rules.integration.test.ts",
