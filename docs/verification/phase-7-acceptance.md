@@ -82,6 +82,16 @@ Native/soak evidence:
 - Native scheduler admission: 12 concurrent processes at cap 3 retained exactly 3 receipts; failed command preserved receipts; same/cross-scope conflicts admitted one intent; crash replay returned one stable receipt.
 - Platform production dependency audit: zero vulnerabilities.
 
+## Live integration
+
+Live `main` fast-forwarded through `8f88ece` and was pushed to `fork/main` while preserving deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+
+- Platform install/audit: 180 packages, zero vulnerabilities
+- TypeScript and formatting: pass
+- Focused Phase 7 acceptance: 214 passed, 4 platform skips
+- Smoke: pass
+- Live backends: Claude 2/2, Codex 2/2, Pi 1/1
+
 ## Result
 
-F08 full acceptance, F15, and F16 pass isolated acceptance. Phase 7 implementation is complete pending publication/live fast-forward. Phase 8 remains unapproved and must not start.
+F08 full acceptance, F15, and F16 pass isolated and live acceptance. Phase 7 is complete and live-integrated. Phase 8 remains unapproved and must not start.

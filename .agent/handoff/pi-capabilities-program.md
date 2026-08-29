@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 7 implementation and isolated acceptance complete. F08 declarative hooks, F15 Reactive Monitor, and F16 Scheduled Prompts accepted. Publication/live integration remains. Phase 8 must not start without explicit approval.
+Phase 7 complete and live-integrated. F08 declarative hooks, F15 Reactive Monitor, and F16 Scheduled Prompts accepted. Phase 8 must not start without explicit approval.
 
 ## Completed this phase
 
@@ -51,6 +51,14 @@ Authoritative details: `docs/verification/phase-7-acceptance.md`.
 - Base: accepted Phase 6 live head `4ee0cb6`
 - Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL safety backup.
 
+## Live integration
+
+- Live `main` fast-forwarded through `8f88ece` and pushed to `fork/main`.
+- Platform install/audit: 180 packages, zero vulnerabilities.
+- Live TypeScript/formatting pass; 214 focused Phase 7 tests pass with 4 platform skips.
+- Live smoke passes; Claude/Codex/Pi live backends pass 5/5.
+- Deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups preserved.
+
 ## Next exact action
 
-Fetch, run publication preflight, commit final hardening/evidence, publish Phase 7, fast-forward and verify live `main` while preserving live state. Then stop. Phase 8 requires explicit approval.
+Stop. Phase 8 requires explicit approval.

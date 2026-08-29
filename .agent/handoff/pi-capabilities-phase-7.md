@@ -27,7 +27,7 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 - [x] Run repeated independent adversarial review and close every critical/high finding.
 - [x] Run isolated full verification, paired startup benchmark, native multi-process probes, and long-duration no-leak/no-duplicate soak.
 - [x] Record acceptance, performance, tracker, and continuity evidence.
-- [ ] Publication preflight; commit final hardening/evidence; publish branch; fast-forward and verify live `main` while preserving user state.
+- [x] Publication preflight; commit final hardening/evidence; publish branch; fast-forward and verify live `main` while preserving user state.
 - [ ] Stop before Phase 8 pending explicit approval.
 
 ## Final acceptance
@@ -67,6 +67,16 @@ Never recursively remove a worktree containing a live `node_modules` junction. P
 - `C:/Users/Tyler/AppData/Local/Temp/pi-phase7-soak-150972-fake-time.json`
 - `C:/Users/Tyler/AppData/Local/Temp/pi-phase7-soak-150972-windows-real-time.json`
 
+## Live integration
+
+- `main` fast-forwarded through `8f88ece` and pushed to `fork/main`.
+- Live platform install audited 180 packages with zero vulnerabilities.
+- Live TypeScript and formatting pass.
+- Live focused Phase 7 suite: 214 passed, 4 platform skips.
+- Live smoke passes print/JSON/RPC/reload/shutdown/no-leak gates.
+- Live backends: Claude 2/2, Codex 2/2, Pi 1/1.
+- Preserved live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+
 ## Next exact action
 
-Run publication preflight from a fresh fetch. Commit final blocker fixes and evidence, publish `pi-capabilities-phase-7`, then fast-forward and verify live `main` while preserving live deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL safety backup. Do not begin Phase 8 without explicit approval.
+Stop. Do not begin Phase 8 without explicit approval.
