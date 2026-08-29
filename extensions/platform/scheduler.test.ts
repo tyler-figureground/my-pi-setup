@@ -308,7 +308,7 @@ test("multibyte executor output and failure Artifact remain within byte bound", 
       async run() {
         return {
           ok: true,
-          value: { status: "completed", output: "💥", outputBytes: 4 },
+          value: { status: "completed", output: "ðŸ’¥", outputBytes: 4 },
         };
       },
     },
@@ -925,7 +925,7 @@ test("due occurrence revalidates authority, runs exact profile, stores result Ar
     missedRunPolicy: "run-once",
     profileName: "nightly",
     prompt: "Run this exact Artifact prompt.",
-    credentialReferences: ["ci-read"],
+    credentialReferences: ["credential:ci-read"],
     policy: { timeoutMs: 5_000, maxRetries: 1, maxOutputBytes: 1_024 },
   });
   assert.equal(created.ok, true);
@@ -1290,7 +1290,7 @@ test("host authority re-resolves project, trust, profile, and credentials", asyn
       return trusted;
     },
     credentialsAvailable(references) {
-      assert.deepEqual(references, ["ci-read"]);
+      assert.deepEqual(references, ["credential:ci-read"]);
       return credentialsAvailable;
     },
   });
@@ -1298,7 +1298,7 @@ test("host authority re-resolves project, trust, profile, and credentials", asyn
     projectId: project.projectId,
     cwd: project.canonicalCwd,
     profileName: "nightly",
-    credentialReferences: ["ci-read"],
+    credentialReferences: ["credential:ci-read"],
   };
   const allowed = await authority.authorize(request);
   assert.equal(allowed.ok, true);
@@ -1992,7 +1992,7 @@ test("durable create binds host authority and stores prompt as pinned Artifact m
     missedRunPolicy: "skip" as const,
     profileName: "nightly",
     prompt: "Review the repository without exposing this body in state.",
-    credentialReferences: ["github-readonly"],
+    credentialReferences: ["credential:github-readonly"],
     policy: { timeoutMs: 30_000, maxRetries: 1, maxOutputBytes: 8_192 },
   };
 

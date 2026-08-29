@@ -65,7 +65,7 @@ export { createSessionBrokerScheduleDelivery } from "./delivery.ts";
 
 const ID = /^[a-z][a-z0-9-]{0,127}$/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-const CREDENTIAL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const CREDENTIAL_REFERENCE = /^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$/;
 const PROMPT_MAX_BYTES = 256 * 1024;
 const COMMAND_TYPES = new Set([
   "create",

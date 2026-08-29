@@ -49,6 +49,7 @@ const unit = [
   "extensions/platform/rules.test.ts",
   "extensions/platform/scheduler-calendar.test.ts",
   "extensions/platform/scheduler-delivery.test.ts",
+  "extensions/platform/scheduler-wiring.test.ts",
   "extensions/platform/state-store.test.ts",
   "extensions/platform/tool-federation.test.ts",
   "extensions/platform/trigger-engine-phase7.test.ts",

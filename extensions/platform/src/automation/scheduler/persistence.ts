@@ -260,7 +260,11 @@ function validSnapshot(value: unknown, projectId: string, persisted: boolean) {
     record.recentOccurrences.every(validOccurrence) &&
     credentials !== null &&
     (!persisted || credentials.length === record.credentialReferenceCount) &&
-    credentials.every((reference) => boundedString(reference, 256)) &&
+    credentials.every(
+      (reference) =>
+        typeof reference === "string" &&
+        /^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$/.test(reference),
+    ) &&
     (record.blockedReason === undefined ||
       boundedString(record.blockedReason, 1_000)) &&
     (record.pendingRunNow === undefined ||
