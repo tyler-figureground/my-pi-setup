@@ -1,4 +1,5 @@
 import type { PlatformDiagnostic } from "../../flags.ts";
+import { isPlainData } from "../triggers/validation.ts";
 
 export interface PlatformMonitorConfiguration {
   readonly maxActive: number;
@@ -48,7 +49,12 @@ export function decodeMonitorConfiguration(
   diagnostics: PlatformDiagnostic[];
 } {
   if (input === undefined) return { monitors: base, diagnostics: [] };
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    !isPlainData(input, { maxDepth: 4, maxNodes: 128 })
+  ) {
     return {
       monitors: base,
       diagnostics: [
@@ -59,7 +65,7 @@ export function decodeMonitorConfiguration(
       ],
     };
   }
-  const value = input as Record<string, unknown>;
+  const value = structuredClone(input) as Record<string, unknown>;
   const diagnostics: PlatformDiagnostic[] = [];
   const allowed = new Set([
     "maxActive",

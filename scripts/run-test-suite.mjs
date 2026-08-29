@@ -92,6 +92,7 @@ const integration = [
   "extensions/platform/memory-quality.test.ts",
   "extensions/platform/memory-sqlite.integration.test.ts",
   "extensions/platform/messaging-pi-delivery.test.ts",
+  "extensions/platform/monitor-registry.test.ts",
   "extensions/platform/phase2-composition.test.ts",
   "extensions/platform/phase5-composition.test.ts",
   "extensions/platform/phase4-composition.test.ts",
