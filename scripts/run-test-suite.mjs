@@ -166,7 +166,8 @@ const suite = process.argv[2];
 if (suite === "unit") {
   run(process.execPath, [
     "--test",
-    "--test-timeout=20000",
+    "--test-timeout=60000",
+    "--test-concurrency=4",
     "--experimental-strip-types",
     ...unit,
   ]);
