@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 8 complete; publication pending**
+Status: **Phase 8 complete and live-integrated; Phase 9 pending explicit approval**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -1199,7 +1199,8 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-27 | Phase 6 live integration | `89747c7` through `33fed5e` plus live evidence commit | fast-forward live main; platform clean install/audit; live check/format; 198 focused Phase 6/StateStore tests; repository smoke | 198/198 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; no new dependency manifest; automatic extraction remains off; Phase 7 not started |
 | 2026-08-29 | Phase 7 hooks, monitors, and scheduling | `4ee0cb6` through `8f88ece` | repeated adversarial review/fix cycles; native process/SQLite/watcher/WebSocket/keyring probes; fake-time and real-resource soak; paired startup benchmark; immutable-tree verification | 469 unit; 413 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; final live rerun Claude 2/2, Codex 2/2, Pi 1/1 | Pass isolated | F08, F15, F16 complete; final scheduler admission review `sa-10` found no blockers; `docs/verification/phase-7-acceptance.md` |
 | 2026-08-29 | Phase 7 live integration | `8f88ece` plus live evidence commit | fast-forward and push live main; platform install/audit; live check/format; focused Phase 7 suite; smoke; live backends | 214 focused pass + 4 platform skips; audit zero vulnerabilities; smoke pass; Claude/Codex/Pi 5/5 | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 8 not started |
-| 2026-08-30 | Phase 8 persistent task graph and Goal Mode | publication commit pending | repeated adversarial review/fix cycles; native SQLite races; real Windows killed-parent drill; 72-hour fake-time soak; cumulative token metering; check/format/unit/integration/smoke/live | 712 unit; 433 integration + 22 delegated; 5 platform skips; smoke pass; earlier live 5/5; final strict Codex/Pi pass with Claude quota-blocked | Pass isolated with external Claude limit | F13 complete; no Workflow changes; `docs/verification/phase-8-acceptance.md` |
+| 2026-08-30 | Phase 8 persistent task graph and Goal Mode | `c0edbd5`, `77f2464` | repeated adversarial review/fix cycles; native SQLite races; real Windows killed-parent drill; 72-hour fake-time soak; cumulative token metering; check/format/unit/integration/smoke/live | 712 unit; 433 integration + 22 delegated; 5 platform skips; smoke pass; earlier live 5/5; final strict Codex/Pi pass with Claude quota-blocked | Pass isolated with external Claude limit | F13 complete; no Workflow changes; `docs/verification/phase-8-acceptance.md` |
+| 2026-08-30 | Phase 8 live integration | `c0edbd5`, `77f2464` plus live evidence commit | fast-forward and push live main; live check/format; focused Goal/Goal Worker/metering suites; smoke | 198 Goal + 57 Goal Worker/metering pass; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 9 not started |
 
 # Decision log
 

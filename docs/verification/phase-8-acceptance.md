@@ -1,6 +1,6 @@
 # Phase 8 acceptance evidence
 
-Status: accepted in isolated worktree; publication/live integration pending
+Status: accepted, published, and live-integrated
 Date: 2026-08-30
 Branch: `pi-capabilities-phase-8`
 Base: `282cec3`
@@ -82,6 +82,14 @@ Live two-turn tests verified positive finite monotonic values on all three. Canc
 - Killed-parent drill: 2 pass; stale writes refused; no duplicate workspace/evidence/outbox
 
 One full integration run exposed an unrelated `extensions/git-info/process.test.ts` Windows load flake (`-1` versus exit `7`); isolated rerun passed 3/3. A second run exposed the known Playwright cookie test crossing its former 60-second per-test bound under load; the integration bound is now 90 seconds with a 20-minute suite watchdog. Final complete integration rerun is recorded before publication.
+
+## Live integration
+
+- Live `main` fast-forwarded through `c0edbd5` and `77f2464`, then pushed to `fork/main`.
+- Live check and formatting pass.
+- Live focused suites: 198 Goal tests plus 57 Goal Worker/metering tests pass.
+- Live smoke passes repository schemas, print, JSON, RPC, reload, shutdown, and no-leak gates.
+- Preserved live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
 
 ## Rollback
 

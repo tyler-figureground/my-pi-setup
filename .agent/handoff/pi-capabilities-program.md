@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 8 F13 Persistent Task Graph and Goal Mode accepted in isolated worktree. Publication and live integration are the only remaining Phase 8 actions. Phase 9 has not started and must not start without explicit approval.
+Phase 8 F13 Persistent Task Graph and Goal Mode complete, published, and live-integrated. Phase 9 has not started and must not start without explicit approval.
 
 ## Phase 8 delivered
 
@@ -52,8 +52,18 @@ Authoritative details: `docs/verification/phase-8-acceptance.md`.
 - Branch: `pi-capabilities-phase-8`
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-8`
 - Base: accepted Phase 7 live head `282cec3`
+- Accepted Phase 8 implementation: `c0edbd5`, `77f2464`
+- Live `main` and `fork/main` fast-forwarded through `77f2464`
 - Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+
+## Live integration
+
+- Live check/format pass.
+- Focused Goal suite: 198 pass.
+- Goal Worker/metering suite: 57 pass.
+- Smoke passes schemas, print, JSON, RPC, reload, shutdown, and no-leak gates.
+- Deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups preserved.
 
 ## Next exact action
 
-Fetch publication preflight, commit/push Phase 8, fast-forward live `main`, verify live while preserving dirty state, then stop before Phase 9.
+Stop. Phase 9 requires explicit approval.

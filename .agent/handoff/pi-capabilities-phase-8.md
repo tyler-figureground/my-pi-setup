@@ -38,9 +38,22 @@ Never recursively remove a worktree containing a live `node_modules` junction.
 - [x] Run dependency, transition, bounded parallelism, retry/failure, crash recovery, workspace, audit, Workflow compatibility, and evidence tests.
 - [x] Run multi-hour simulated soak and killed-parent recovery drill.
 - [x] Record architecture, threat model, acceptance, performance, dashboard/TUI, tracker, and program handoff evidence.
-- [ ] Run publication preflight and live integration while preserving live state.
+- [x] Run publication preflight and live integration while preserving live state.
 - [ ] Stop before Phase 9.
 
 ## Current status
 
-Phase 8 implementation and isolated acceptance complete. GoalEngine, Goal Worker, production composition, audited controls, model tools, cumulative token metering, lifecycle retention, 72-hour soak, killed-parent drill, live backend metering, threat review, and release hardening are complete. Unit 712; integration 433 plus 5 platform skips and 22 delegated; smoke passes. Publication preflight, push, and live fast-forward remain.
+Phase 8 complete, published, and live-integrated. GoalEngine, Goal Worker, production composition, audited controls, model tools, cumulative token metering, lifecycle retention, 72-hour soak, killed-parent drill, threat review, and release hardening are accepted. Unit 712; integration 433 plus 5 platform skips and 22 delegated; live focused 255 pass; smoke passes.
+
+## Live integration
+
+- `main` fast-forwarded through `c0edbd5` and `77f2464` and pushed to `fork/main`.
+- Live check/format pass.
+- Live focused Goal suite: 198 pass.
+- Live Goal Worker/metering suite: 57 pass.
+- Live smoke passes print/JSON/RPC/reload/shutdown/no-leak gates.
+- Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+
+## Next exact action
+
+Stop. Do not begin Phase 9 without explicit approval.
