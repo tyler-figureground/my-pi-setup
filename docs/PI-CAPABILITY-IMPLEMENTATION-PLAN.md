@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 7 complete; Phase 8 pending explicit approval**
+Status: **Phase 8 complete; publication pending**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -67,7 +67,7 @@ The reviewed file contains 15 `[X]` selections.
 | F09 | Persistent named custom-agent profiles | 3 | [x] |
 | F10 | Cross-session messaging and queue | 6 | [x] |
 | F11 | Persistent memory | 6 | [x] |
-| F13 | Persistent task graph and goal mode | 8 | [ ] |
+| F13 | Persistent task graph and goal mode | 8 | [x] |
 | F14 | Path-scoped lazy project rules | 2 | [x] |
 | F15 | Reactive monitor | 7 | [x] |
 | F16 | Scheduled and recurring prompts | 7 | [x] |
@@ -984,59 +984,59 @@ Features: F08 completion, F15, F16.
 
 ---
 
-# Phase 8 - Persistent task graph and goal mode
+# Phase 8 - Persistent task graph and goal mode **COMPLETE**
 
 Feature: F13.
 
 ## Domain model
 
-- [ ] Define goal, node, dependency, attempt, evidence, status, retry policy, failure policy, and budget
-- [ ] Define states: draft, ready, running, paused, blocked, failed, done, cancelled
-- [ ] Reject cycles and missing dependencies
-- [ ] Make state transitions explicit and validated
-- [ ] Keep workflow JavaScript separate from goal graph semantics
+- [x] Define goal, node, dependency, attempt, evidence, status, retry policy, failure policy, and budget
+- [x] Define states: draft, ready, running, paused, blocked, failed, done, cancelled
+- [x] Reject cycles and missing dependencies
+- [x] Make state transitions explicit and validated
+- [x] Keep workflow JavaScript separate from goal graph semantics
 
 ## `GoalEngine`
 
-- [ ] Implement `submit`, `resume`, `pause`, `cancel`, `observe`
-- [ ] Persist graph and every transition transactionally
-- [ ] Claim runnable nodes with leases
-- [ ] Enforce bounded concurrency, calls, time, and token/cost budget
-- [ ] Resolve named profile and workspace policy per node
-- [ ] Reuse `AgentSupervisor`, `WorkspaceManager`, `ArtifactStore`, review, and mailbox
-- [ ] Require evidence references for completion
-- [ ] Support retry with bounded attempts and backoff
-- [ ] Resume after crash without duplicate node execution
-- [ ] Preserve blocked workspaces/artifacts for inspection
-- [ ] Add `/goal` and `/goals` dashboard
-- [ ] Add model tools with small interface
+- [x] Implement `submit`, `resume`, `pause`, `cancel`, `observe`
+- [x] Persist graph and every transition transactionally
+- [x] Claim runnable nodes with leases
+- [x] Enforce bounded concurrency, calls, time, and token/cost budget
+- [x] Resolve named profile and workspace policy per node
+- [x] Reuse `AgentSupervisor`, `WorkspaceManager`, `ArtifactStore`, review, and mailbox
+- [x] Require evidence references for completion
+- [x] Support retry with bounded attempts and backoff
+- [x] Resume after crash without duplicate node execution
+- [x] Preserve blocked workspaces/artifacts for inspection
+- [x] Add `/goal` and `/goals` dashboard
+- [x] Add model tools with small interface
 
 ## User control
 
-- [ ] User can edit goal/task text and dependencies while paused
-- [ ] User can mark skip/block/done with reason
-- [ ] User can inspect attempts and evidence
-- [ ] User can resume from selected node
-- [ ] Agent cannot silently change success criteria
-- [ ] Completion summary links verification evidence
+- [x] User can edit goal/task text and dependencies while paused
+- [x] User can mark skip/block/done with reason
+- [x] User can inspect attempts and evidence
+- [x] User can resume from selected node
+- [x] Agent cannot silently change success criteria
+- [x] Completion summary links verification evidence
 
 ## Acceptance
 
-- [ ] Cycle and invalid transition tests pass
-- [ ] Dependency scheduling and bounded parallelism pass
-- [ ] Crash/restart resumes without duplicate work
-- [ ] Retry/failure policies pass
-- [ ] Workspace leases released or preserved correctly
-- [ ] User edits audited
-- [ ] Existing workflow tool remains compatible
-- [ ] Goal completion cannot occur without required evidence
+- [x] Cycle and invalid transition tests pass
+- [x] Dependency scheduling and bounded parallelism pass
+- [x] Crash/restart resumes without duplicate work
+- [x] Retry/failure policies pass
+- [x] Workspace leases released or preserved correctly
+- [x] User edits audited
+- [x] Existing workflow tool remains compatible
+- [x] Goal completion cannot occur without required evidence
 
 ## Phase 8 exit gate
 
-- [ ] F13 acceptance complete
-- [ ] Multi-hour simulated run passes
-- [ ] Recovery drill from killed parent process passes
-- [ ] Goal dashboard and handoff are understandable without transcript context
+- [x] F13 acceptance complete
+- [x] Multi-hour simulated run passes
+- [x] Recovery drill from killed parent process passes
+- [x] Goal dashboard and handoff are understandable without transcript context
 
 ---
 
@@ -1199,6 +1199,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-27 | Phase 6 live integration | `89747c7` through `33fed5e` plus live evidence commit | fast-forward live main; platform clean install/audit; live check/format; 198 focused Phase 6/StateStore tests; repository smoke | 198/198 focused; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md` and untracked `skills/impeccable/`; no new dependency manifest; automatic extraction remains off; Phase 7 not started |
 | 2026-08-29 | Phase 7 hooks, monitors, and scheduling | `4ee0cb6` through `8f88ece` | repeated adversarial review/fix cycles; native process/SQLite/watcher/WebSocket/keyring probes; fake-time and real-resource soak; paired startup benchmark; immutable-tree verification | 469 unit; 413 integration + 22 delegated; 5 platform skips; smoke print/JSON/RPC/reload/shutdown/leaks; final live rerun Claude 2/2, Codex 2/2, Pi 1/1 | Pass isolated | F08, F15, F16 complete; final scheduler admission review `sa-10` found no blockers; `docs/verification/phase-7-acceptance.md` |
 | 2026-08-29 | Phase 7 live integration | `8f88ece` plus live evidence commit | fast-forward and push live main; platform install/audit; live check/format; focused Phase 7 suite; smoke; live backends | 214 focused pass + 4 platform skips; audit zero vulnerabilities; smoke pass; Claude/Codex/Pi 5/5 | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 8 not started |
+| 2026-08-30 | Phase 8 persistent task graph and Goal Mode | publication commit pending | repeated adversarial review/fix cycles; native SQLite races; real Windows killed-parent drill; 72-hour fake-time soak; cumulative token metering; check/format/unit/integration/smoke/live | 712 unit; 433 integration + 22 delegated; 5 platform skips; smoke pass; earlier live 5/5; final strict Codex/Pi pass with Claude quota-blocked | Pass isolated with external Claude limit | F13 complete; no Workflow changes; `docs/verification/phase-8-acceptance.md` |
 
 # Decision log
 
@@ -1210,7 +1211,7 @@ Record durable decisions here, then link a full ADR when needed.
 | D002 | 2026-08-24 | Feature 20 `[s]` treated as skipped | Accepted | Not an `[X]` selection |
 | D003 | 2026-08-24 | One platform composition root with deep internal modules | Accepted | Deterministic policy/lifecycle ordering; ADR `docs/adr/0001-platform-composition-root.md` |
 | D004 | 2026-08-24 | Existing public tools remain backward compatible | Accepted | Checked-in name/schema contract plus smoke verification |
-| D005 | 2026-08-24 | Goal graph remains distinct from arbitrary workflow JavaScript | Proposed | Durable declarative recovery vs advanced scripting |
+| D005 | 2026-08-24 | Goal graph remains distinct from arbitrary workflow JavaScript | Accepted | Durable declarative recovery vs advanced scripting; `docs/architecture/phase-8-goal-mode.md` |
 | D006 | 2026-08-24 | Unknown tools count as side-effecting in plan mode | Accepted | Safe dynamic MCP/browser/tool loading; policy contract test |
 | D007 | 2026-08-24 | Preserve independent extension package topology in Phase 0; pin Effect ecosystem to `4.0.0-beta.101` | Accepted | Avoid workspace migration while eliminating version drift |
 | D008 | 2026-08-24 | Repository text uses LF; Windows command files use CRLF | Accepted | Stable Prettier behavior under Git Bash and `core.autocrlf=true` |
@@ -1231,6 +1232,7 @@ Record durable decisions here, then link a full ADR when needed.
 | D023 | 2026-08-29 | Build one repository-owned TriggerEngine; wrap exact cron, watcher, and WebSocket adapters | Accepted | Host retains provenance, queueing, authority, persistence, recursion, lifecycle, and delivery; ADRs 0009-0011 |
 | D024 | 2026-08-29 | Authenticate restart-only Trigger records with an agent-scoped OS-keyring HMAC envelope | Accepted | Filesystem write access alone must not fabricate automation events; missing keys fail closed and verification never rotates |
 | D025 | 2026-08-29 | Scheduler request identity is project-global and admission/eviction/mutation/receipt commit share one optimistic transactional gate | Accepted | Native multi-process cap and same/cross-scope conflict probes require bounded storage and one intent per request ID |
+| D026 | 2026-08-30 | Goal execution uses at-most-once opaque dispatch and blocks ambiguous post-dispatch Attempts as Unknown | Accepted | Exactly-once local transitions are possible; exactly-once external Agent effects are not; `docs/architecture/phase-8-goal-mode.md` |
 
 # Risk register
 

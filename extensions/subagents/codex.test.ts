@@ -2,9 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect } from "effect";
 import { codexBackend } from "./src/backends/codex.ts";
-import type { ParentContext, SpawnTask } from "./src/domain.ts";
+import type { ParentContext, SpawnTask, SubagentEvent } from "./src/domain.ts";
 import { SubagentManager } from "./src/manager.ts";
 import { createSubagentRuntime, runTool } from "./src/runtime.ts";
+import {
+  assertLiveMetered,
+  createObservedSubagentRuntime,
+  disposeLiveRuntime,
+  latestMeteredUsage,
+  waitForRunning,
+} from "./live-test-helpers.ts";
 
 const parent: ParentContext = {
   parentCwd: process.cwd(),
@@ -38,15 +45,16 @@ async function codexAvailable() {
 }
 
 test(
-  "Codex backend completes a live manager run",
-  { timeout: 75_000 },
+  "Codex tokenUsage.total reaches the snapshot across two live turns",
+  { timeout: 135_000 },
   async (t) => {
     if (!(await codexAvailable())) {
       t.skip("codex executable is unavailable");
       return;
     }
 
-    const runtime = createSubagentRuntime();
+    const events: SubagentEvent[] = [];
+    const runtime = createObservedSubagentRuntime(codexBackend, events);
     try {
       const manager = await runtime.runPromise(SubagentManager);
       const spawned = await runTool(
@@ -61,8 +69,35 @@ test(
       assert.equal(done?.meta.backend, "codex");
       assert.ok(done?.meta.nativeSessionId);
       assert.ok(done?.meta.sessionFilePath);
+      const firstMetered = assertLiveMetered(done);
+      const firstTokenUsage = latestMeteredUsage(events);
+      assert.equal(firstTokenUsage?.meteredTokens, firstMetered);
+      assert.equal(firstTokenUsage?.tokens, done?.usage.tokens);
+
+      const running = waitForRunning(
+        manager.view,
+        spawned.id,
+        10_000,
+        "Live Codex second turn start",
+      );
+      await runTool(
+        runtime,
+        manager.send(spawned.id, "Reply with exactly: hello codex again"),
+      );
+      await running;
+      await deadline(runTool(runtime, manager.waitFor([spawned.id])), 60_000);
+
+      const second = manager.view.get(spawned.id);
+      assert.equal(second?.status, "done");
+      assert.match(second?.finalText ?? "", /hello codex again/i);
+      assert.ok((second?.turns ?? 0) >= 2);
+      const secondMetered = assertLiveMetered(second);
+      assert.ok(secondMetered > firstMetered);
+      const secondTokenUsage = latestMeteredUsage(events);
+      assert.equal(secondTokenUsage?.meteredTokens, secondMetered);
+      assert.equal(secondTokenUsage?.tokens, second?.usage.tokens);
     } finally {
-      await runtime.dispose();
+      await disposeLiveRuntime(runtime);
     }
   },
 );
@@ -96,7 +131,7 @@ test(
       assert.equal(manager.view.get(spawned.id)?.status, "error");
       assert.equal(manager.view.get(spawned.id)?.errorText, "Run was aborted");
     } finally {
-      await runtime.dispose();
+      await disposeLiveRuntime(runtime);
     }
   },
 );

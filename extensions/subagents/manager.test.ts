@@ -474,6 +474,7 @@ function completedSnapshot(spawnTask: SpawnTask): SubagentSnapshot {
     settledAt: Date.now(),
     meta: { backend: "pi", modelLabel: "fixture/model" },
     usage: {},
+    metered: {},
     transcript: [],
     liveTools: [],
     queued: [],

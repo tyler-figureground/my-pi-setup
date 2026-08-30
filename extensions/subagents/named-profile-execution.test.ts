@@ -88,6 +88,7 @@ function snapshot(
     ...(status === "done" ? { settledAt: 2 } : {}),
     meta: { backend: "pi", nativeSessionId: "hook-child" },
     usage: {},
+    metered: {},
     transcript: [],
     liveTools: [],
     queued: [],

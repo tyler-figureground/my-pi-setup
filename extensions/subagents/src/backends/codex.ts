@@ -231,19 +231,25 @@ function textInput(text: string) {
 }
 
 /**
- * Parse a `thread/tokenUsage/updated` payload into context occupancy.
- * `tokenUsage.total` accumulates every request in the thread (cached prompt
- * tokens re-counted per request), so it is a cumulative spend counter — not
- * occupancy — and treating it as occupancy pinned the gauge at 100%.
+ * Parse a `thread/tokenUsage/updated` payload into the two independent
+ * quantities it carries.
+ *
  * `tokenUsage.last` is the most recent request, whose totalTokens is what
- * codex-rs itself uses as `tokens_in_context_window()`.
+ * codex-rs itself uses as `tokens_in_context_window()` — the occupancy level.
+ * `tokenUsage.total` accumulates every request in the thread (cached prompt
+ * tokens re-counted per request), so it is a cumulative spend counter. Reading
+ * it as occupancy pinned the gauge at 100%; reading `last` as spend would
+ * undercount a long thread just as badly. They are parsed separately and never
+ * substituted for one another.
  */
 export function parseThreadTokenUsage(params: unknown) {
   const usage = record(record(params)?.tokenUsage);
   const last = record(usage?.last);
+  const total = record(usage?.total);
   return {
     tokens: numberValue(last?.totalTokens),
     contextWindow: numberValue(usage?.modelContextWindow),
+    meteredTokens: numberValue(total?.totalTokens),
   };
 }
 
@@ -755,12 +761,13 @@ const makeCodexSession = (
           break;
         }
         case "thread/tokenUsage/updated": {
-          const { tokens, contextWindow } = parseThreadTokenUsage(params);
+          const { tokens, contextWindow, meteredTokens } =
+            parseThreadTokenUsage(params);
           if (contextWindow !== undefined) {
             state.meta = { ...state.meta, contextWindow };
             emit({ _tag: "MetaChanged", meta: { contextWindow } });
           }
-          emit({ _tag: "UsageChanged", tokens, contextWindow });
+          emit({ _tag: "UsageChanged", tokens, contextWindow, meteredTokens });
           break;
         }
         case "error": {

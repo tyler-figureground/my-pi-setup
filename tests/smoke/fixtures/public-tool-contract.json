@@ -313,6 +313,238 @@
     }
   },
   {
+    "name": "goal_change",
+    "parameters": {
+      "type": "object",
+      "required": ["action", "goalId", "expectedRevision"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["submit", "pause", "resume", "cancel"]
+        },
+        "goalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "prompt", "profileName"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16384
+              },
+              "dependsOn": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "minItems": 0,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "profileName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "reservation": {
+                "type": "object",
+                "properties": {
+                  "runtimeMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 2592000000
+                  },
+                  "tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000
+                  },
+                  "costMicros": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 16
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "description",
+              "acceptedEvidenceKinds",
+              "minimumEvidenceCount",
+              "minimumTrust"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "acceptedEvidenceKinds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "worker-output",
+                    "review-report",
+                    "test-report",
+                    "file-digest",
+                    "user-attestation"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 5,
+                "uniqueItems": true
+              },
+              "minimumEvidenceCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              },
+              "minimumTrust": {
+                "type": "string",
+                "enum": ["worker-reported", "host-verified", "user-accepted"]
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 16
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "maxConcurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            },
+            "maxAgentCalls": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 768
+            },
+            "maxRuntimeMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 2592000000
+            },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000000
+            },
+            "maxCostMicros": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000000000
+            }
+          },
+          "additionalProperties": false
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "goal_inspect",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "goalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "ready",
+            "running",
+            "paused",
+            "blocked",
+            "failed",
+            "done",
+            "cancelled"
+          ]
+        },
+        "includeHistory": {
+          "type": "boolean"
+        },
+        "afterGoalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "language_tools",
     "parameters": {
       "type": "object",

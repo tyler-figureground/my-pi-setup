@@ -21,6 +21,16 @@ const unit = [
   "extensions/platform/credential-vault.test.ts",
   "extensions/platform/current-workspace-lease.test.ts",
   "extensions/platform/external-controls.test.ts",
+  "extensions/platform/goal-budget.test.ts",
+  "extensions/platform/goal-engine.test.ts",
+  "extensions/platform/goal-evidence.test.ts",
+  "extensions/platform/goal-recovery.test.ts",
+  "extensions/platform/goal-scheduling.test.ts",
+  "extensions/platform/goal-transitions.test.ts",
+  "extensions/platform/goal-user-controls.test.ts",
+  "extensions/platform/goal-validation.test.ts",
+  "extensions/platform/goal-wiring.test.ts",
+  "extensions/platform/goal-wiring-ports.test.ts",
   "extensions/platform/hooks.test.ts",
   "extensions/platform/hook-actions-config.test.ts",
   "extensions/platform/hooks-adapters.test.ts",
@@ -64,7 +74,12 @@ const unit = [
   "extensions/subagents/by-the-way.test.ts",
   "extensions/subagents/codex-process.test.ts",
   "extensions/subagents/context-usage.test.ts",
+  "extensions/subagents/goal-worker-certainty.test.ts",
+  "extensions/subagents/goal-worker-port.test.ts",
+  "extensions/subagents/goal-worker-retention.test.ts",
+  "extensions/subagents/goal-worker.test.ts",
   "extensions/subagents/local-review.test.ts",
+  "extensions/subagents/metered-usage.test.ts",
   "extensions/subagents/named-profile-execution.test.ts",
   "extensions/subagents/profile-policy.test.ts",
   "extensions/subagents/result-delivery.test.ts",
@@ -86,6 +101,7 @@ const integration = [
   "extensions/platform/artifact-store.integration.test.ts",
   "extensions/platform/browser-playwright.integration.test.ts",
   "extensions/platform/credential-vault.integration.test.ts",
+  "extensions/platform/goal-killed-parent.integration.test.ts",
   "extensions/platform/hook-process.integration.test.ts",
   "extensions/platform/hooks.integration.test.ts",
   "extensions/platform/hooks-wiring.test.ts",
@@ -102,8 +118,10 @@ const integration = [
   "extensions/platform/phase4-composition.test.ts",
   "extensions/platform/phase6-composition.test.ts",
   "extensions/platform/phase7-composition.test.ts",
+  "extensions/platform/phase8-composition.test.ts",
   "extensions/platform/phase7-headless.integration.test.ts",
   "extensions/platform/phase7-soak.integration.test.ts",
+  "extensions/platform/goal-soak.integration.test.ts",
   "extensions/platform/pinned-fetch.integration.test.ts",
   "extensions/platform/plan-mode.integration.test.ts",
   "extensions/platform/private-protocol-loader.integration.test.ts",
@@ -118,7 +136,9 @@ const integration = [
   "extensions/platform/trigger-persistence.integration.test.ts",
   "extensions/platform/workspaces.test.ts",
   "extensions/shared/child-session.test.ts",
+  "extensions/subagents/goal-worker-global-cap.test.ts",
   "extensions/subagents/manager.test.ts",
+  "extensions/subagents/metered-usage-wiring.test.ts",
   "extensions/subagents/phase3-wiring.test.ts",
   "extensions/workflows/runner.test.ts",
   "extensions/workflows/sandbox.test.ts",
@@ -225,8 +245,8 @@ export function runChild(command, args, cwd = root, options = {}) {
   });
 }
 
-async function run(command, args, cwd = root) {
-  const result = await runChild(command, args, cwd);
+async function run(command, args, cwd = root, options = {}) {
+  const result = await runChild(command, args, cwd, options);
   if (result.exitCode !== 0) process.exit(result.exitCode);
 }
 
@@ -242,13 +262,18 @@ async function main() {
       "tests/run-test-suite.test.mjs",
     ]);
   } else if (suite === "integration") {
-    await run(process.execPath, [
-      "--test",
-      "--test-timeout=60000",
-      "--test-concurrency=1",
-      "--experimental-strip-types",
-      ...integration,
-    ]);
+    await run(
+      process.execPath,
+      [
+        "--test",
+        "--test-timeout=90000",
+        "--test-concurrency=1",
+        "--experimental-strip-types",
+        ...integration,
+      ],
+      root,
+      { timeoutMs: 20 * 60 * 1_000 },
+    );
     const npmCli = process.env.npm_execpath;
     assert.ok(
       npmCli,

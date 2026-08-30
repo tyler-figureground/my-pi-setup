@@ -37,7 +37,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, and Scheduled Prompts:
+`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, Scheduled Prompts, and persistent Goal Mode:
 
 ```json
 {
@@ -54,6 +54,7 @@ When changing Effect, update every extension manifest in the same change, regene
   "memory": true,
   "monitors": true,
   "scheduler": true,
+  "goals": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -85,6 +86,20 @@ When changing Effect, update every extension manifest in the same change, regene
     "defaultTimeoutMs": 900000,
     "leaseTtlMs": 60000
   },
+  "goalSettings": {
+    "maxGoals": 100,
+    "maxNodesPerGoal": 32,
+    "maxConcurrentNodes": 4,
+    "maxAgentCalls": 256,
+    "maxRuntimeMs": 21600000,
+    "defaultConcurrency": 2,
+    "defaultAgentCalls": 8,
+    "defaultTimeoutMs": 900000,
+    "defaultMaxAttempts": 3,
+    "defaultRetryDelayMs": 30000,
+    "defaultOutputBytes": 262144,
+    "leaseTtlMs": 300000
+  },
   "hookActions": {
     "http": [],
     "mcp": []
@@ -107,16 +122,16 @@ Configuration locations:
 - trusted-project plans: `<project>/.pi/plans/`
 - user profiles: `~/.pi/agent/agents/*.yaml`
 - trusted-project profiles: `<project>/.pi/agents/*.yaml`
-- guarded workspace, mailbox, Trigger, Monitor, and Schedule state: `~/.pi/agent/state/platform.sqlite`
+- guarded workspace, mailbox, Trigger, Monitor, Schedule, and Goal state: `~/.pi/agent/state/platform.sqlite`
 - persistent Memory state and FTS index: `~/.pi/agent/state/memory.sqlite`
 - guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
-- language/review/MCP/browser/message/Monitor/Schedule/export artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
+- language/review/MCP/browser/message/Monitor/Schedule/Goal/export artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
 - dedicated browser profiles: platform-managed project/profile-specific directories under `%LOCALAPPDATA%/pi-agent/browser-profiles/` on Windows
 - OAuth and browser credentials: OS credential store, referenced by opaque ids in state/config
 
-Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, and Schedules start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Reactive Monitors and Scheduled Prompts require an active Session Broker. Scheduled Prompts also require a named profile with role `scheduled`.
+Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, Schedules, and Goals start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Reactive Monitors, Scheduled Prompts, and Goal Mode require an active Session Broker. Scheduled Prompts require a named profile with role `scheduled`; Goal nodes require role `goal-worker`.
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), and [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md).
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md), and [`docs/phase-8-configuration.md`](docs/phase-8-configuration.md).
 
 ## Firecrawl
 

@@ -272,6 +272,8 @@ async function smokeRepositoryExtensions() {
     "monitor_change",
     "schedule_inspect",
     "schedule_change",
+    "goal_inspect",
+    "goal_change",
     "bg_start",
     "bg_status",
     "bg_list",
@@ -326,6 +328,8 @@ async function smokeRepositoryExtensions() {
     "monitors",
     "schedule",
     "schedules",
+    "goal",
+    "goals",
   ]) {
     assert.ok(
       surface.commands.includes(command),

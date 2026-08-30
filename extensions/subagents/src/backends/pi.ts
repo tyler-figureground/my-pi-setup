@@ -210,6 +210,23 @@ function userText(msg: Message): string {
 
 // --- The session ------------------------------------------------------------------
 
+/**
+ * Cumulative metered tokens for a whole pi session.
+ *
+ * `getSessionStats().tokens.total` aggregates every session entry, including
+ * history compaction removed from the context window, so it is what was
+ * actually billed rather than what is currently resident. `getContextUsage()`
+ * answers the opposite question and is never a substitute here.
+ */
+export function sessionMeteredTokens(
+  stats: { readonly tokens?: Readonly<Record<string, unknown>> } | undefined,
+) {
+  const total = stats?.tokens?.total;
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+    ? total
+    : undefined;
+}
+
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
@@ -336,12 +353,22 @@ const makePiSession = (
       };
     };
 
+    /** Stats are advisory: a throwing SDK must never break the event pump. */
+    const readSessionStats = () => {
+      try {
+        return session.getSessionStats();
+      } catch {
+        return undefined;
+      }
+    };
+
     const emitUsage = () => {
       const usage = session.getContextUsage();
       emit({
         _tag: "UsageChanged",
         tokens: usage?.tokens ?? undefined,
         contextWindow: activeModel()?.contextWindow ?? usage?.contextWindow,
+        meteredTokens: sessionMeteredTokens(readSessionStats()),
       });
     };
 

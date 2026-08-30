@@ -155,3 +155,23 @@ _Avoid_: Timer, cron job, prompt alarm
 **Schedule Occurrence**:
 One deterministic due instance of a Schedule with a transactional claim, fencing token, execution outcome, and idempotent delivery identity.
 _Avoid_: Run, callback, exactly-once job
+
+**Goal**:
+Durable, revisioned objective and success criteria executed through a bounded declarative task graph under direct user control.
+_Avoid_: Workflow, prompt, autonomous loop
+
+**Goal Node**:
+One declarative unit of Agent work whose dependencies, pinned Agent Profile, policies, budget reservation, and evidence requirements are part of the Goal revision.
+_Avoid_: Workflow step, callback, job
+
+**Goal Attempt**:
+One fenced execution claim for a Goal Node, including its resource reservation, execution certainty, workspace identity, outcome, and evidence.
+_Avoid_: Retry, child session, run
+
+**Goal Evidence**:
+Revision-bound reference showing how a Goal or Goal Node criterion was checked, with explicit kind, trust, provenance, and optional Artifact.
+_Avoid_: Worker output, completion claim, assertion
+
+**Unknown Attempt**:
+Goal Attempt whose external execution may have occurred but whose durable outcome cannot be proven. It blocks automatic replay until direct user resolution.
+_Avoid_: Failed Attempt, stale lease, retryable error

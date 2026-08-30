@@ -12,6 +12,7 @@
   "memory": true,
   "monitors": true,
   "scheduler": true,
+  "goals": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -42,6 +43,20 @@
     "maxConcurrent": 4,
     "defaultTimeoutMs": 900000,
     "leaseTtlMs": 60000
+  },
+  "goalSettings": {
+    "maxGoals": 100,
+    "maxNodesPerGoal": 32,
+    "maxConcurrentNodes": 4,
+    "maxAgentCalls": 256,
+    "maxRuntimeMs": 21600000,
+    "defaultConcurrency": 2,
+    "defaultAgentCalls": 8,
+    "defaultTimeoutMs": 900000,
+    "defaultMaxAttempts": 3,
+    "defaultRetryDelayMs": 30000,
+    "defaultOutputBytes": 262144,
+    "leaseTtlMs": 300000
   },
   "hookActions": {
     "http": [],

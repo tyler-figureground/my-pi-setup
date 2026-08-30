@@ -6,7 +6,14 @@
  * ManagedRuntime.
  */
 
-import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
+import {
+  Cause,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Result,
+  type Effect,
+} from "effect";
 import { BackendRegistry, type SubagentBackend } from "./backend.ts";
 import { claudeBackend } from "./backends/claude.ts";
 import { codexBackend } from "./backends/codex.ts";
@@ -20,7 +27,7 @@ const BackendRegistryLive = Layer.sync(BackendRegistry, () => {
   );
 });
 
-import { SubagentManagerLive } from "./manager.ts";
+import { SubagentManagerLive, SupervisorPreDispatchError } from "./manager.ts";
 
 const AppLayer = SubagentManagerLive.pipe(Layer.provide(BackendRegistryLive));
 
@@ -47,6 +54,31 @@ export async function runTool<A, E>(
   if (Exit.isSuccess(exit)) return exit.value;
   if (Cause.hasInterruptsOnly(exit.cause)) {
     throw new Error(options.interruptMessage ?? "Operation was aborted.");
+  }
+  const [first] = Cause.prettyErrors(exit.cause);
+  throw new Error(first?.message ?? Cause.pretty(exit.cause));
+}
+
+/** Preserve only manager-issued proof that backend spawn was never invoked. */
+export async function runSupervisorSpawn<A, E>(
+  runtime: SubagentRuntime,
+  effect: Effect.Effect<A, E>,
+  options: { signal?: AbortSignal; interruptMessage?: string } = {},
+) {
+  const exit = await runtime.runPromiseExit(
+    effect,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  if (Exit.isSuccess(exit)) return exit.value;
+  if (Cause.hasInterruptsOnly(exit.cause)) {
+    throw new Error(options.interruptMessage ?? "Operation was aborted.");
+  }
+  const failure = Cause.findError(exit.cause);
+  if (
+    Result.isSuccess(failure) &&
+    failure.success instanceof SupervisorPreDispatchError
+  ) {
+    throw failure.success;
   }
   const [first] = Cause.prettyErrors(exit.cause);
   throw new Error(first?.message ?? Cause.pretty(exit.cause));

@@ -54,6 +54,7 @@ function snapshot(task: SpawnTask, status: "running" | "done" = "running") {
       nativeSessionId: "scheduled-child",
     },
     usage: {},
+    metered: {},
     transcript: [],
     liveTools: [],
     queued: [],

@@ -18,6 +18,7 @@ export {
 };
 export type { PlatformExtensionOptions } from "./src/composition.ts";
 export type { PlatformPlanConfiguration } from "./src/config.ts";
+export type { PlatformGoalConfiguration } from "./src/goals/config.ts";
 export type { PlatformFlags } from "./src/flags.ts";
 
 export default function platform(pi: ExtensionAPI) {

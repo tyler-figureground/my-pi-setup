@@ -56,6 +56,7 @@ import { decodePlatformFlags } from "./flags.ts";
 import { createHooksCapability } from "./wiring/hooks.ts";
 import { createMonitorCapability } from "./wiring/monitors.ts";
 import { createSchedulerCapability } from "./wiring/scheduler.ts";
+import { createGoalCapability } from "./wiring/goals.ts";
 import { createKeyringTriggerRecordAuthenticator } from "./automation/triggers/record-authentication.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
@@ -132,6 +133,17 @@ import {
   defaultPlatformSchedulerConfiguration,
   type PlatformSchedulerConfiguration,
 } from "./automation/scheduler/config.ts";
+import {
+  createGoalRuntime,
+  createGoalWorkerExecutorPort,
+  createLocalReviewGoalReview,
+  createProfileCatalogGoalProfiles,
+  createSessionBrokerGoalDelivery,
+  createSystemGoalClock,
+  defaultPlatformGoalConfiguration,
+  type PlatformGoalConfiguration,
+} from "./goals/index.ts";
+import { goalWorkerExecutorFor } from "../../shared/goal-worker.ts";
 import {
   bindPlatformHookEventSink,
   platformHookEventProducerFor,
@@ -342,6 +354,7 @@ export interface PlatformExtensionOptions {
   memory?: PlatformMemoryConfiguration;
   monitors?: PlatformMonitorConfiguration;
   scheduler?: PlatformSchedulerConfiguration;
+  goals?: PlatformGoalConfiguration;
   hookActions?: PlatformHookActionConfiguration;
   mcpAdapter?: McpTransportAdapter;
   browserAdapter?: BrowserAdapter;
@@ -366,6 +379,8 @@ export interface PlatformExtensionOptions {
   createMonitorSourceFactory?: typeof createProductionMonitorSourceFactory;
   createScheduler?: typeof createScheduler;
   createSchedulerClock?: typeof createSystemSchedulerClock;
+  createGoalRuntime?: typeof createGoalRuntime;
+  createGoalClock?: typeof createSystemGoalClock;
 }
 
 export function createPlatformExtension(
@@ -387,18 +402,27 @@ export function createPlatformExtension(
           memory: options.memory ?? defaultPlatformMemoryConfiguration,
           monitors: options.monitors ?? defaultPlatformMonitorConfiguration,
           scheduler: options.scheduler ?? defaultPlatformSchedulerConfiguration,
+          goals: options.goals ?? defaultPlatformGoalConfiguration,
           hookActions:
             options.hookActions ?? defaultPlatformHookActionConfiguration,
         };
   if (
     suppliedConfiguration &&
     (suppliedConfiguration.flags.monitors ||
-      suppliedConfiguration.flags.scheduler) &&
+      suppliedConfiguration.flags.scheduler ||
+      suppliedConfiguration.flags.goals) &&
     !suppliedConfiguration.flags.messaging
   ) {
     throw new Error(
-      "Phase 7 requires messaging when monitors or scheduler are enabled.",
+      "Phase 7 requires messaging when monitors, scheduler, or goals are enabled.",
     );
+  }
+  if (
+    suppliedConfiguration &&
+    suppliedConfiguration.flags.goals &&
+    !suppliedConfiguration.flags.profiles
+  ) {
+    throw new Error("Phase 8 requires profiles when goals are enabled.");
   }
   const makeLifecycleSupervisor =
     options.createLifecycleSupervisor ?? createLifecycleSupervisor;
@@ -427,6 +451,7 @@ export function createPlatformExtension(
       triggers?: TriggerEngineRuntime;
       monitors?: ReturnType<typeof createMonitorCapability>;
       scheduler?: ReturnType<typeof createSchedulerCapability>;
+      goals?: ReturnType<typeof createGoalCapability>;
       hookEventTail?: Promise<void>;
       unbindHookEventSink?: () => void;
       unbindAgentServices?: () => void;
@@ -448,6 +473,7 @@ export function createPlatformExtension(
       ReturnType<typeof createMonitorCapability> | undefined;
     let schedulerCapability:
       ReturnType<typeof createSchedulerCapability> | undefined;
+    let goalCapability: ReturnType<typeof createGoalCapability> | undefined;
     let memoryAuthority:
       | {
           readonly runtime: PlatformRuntime;
@@ -464,6 +490,14 @@ export function createPlatformExtension(
     ) => {
       const failures: unknown[] = [];
       memoryAuthority = undefined;
+      // Goal Mode stops first: it drives Agent execution through the same
+      // subsystems the Scheduler uses, so its in-flight Attempts must settle
+      // before the automation core below it goes away.
+      try {
+        await current.goals?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
       try {
         await current.scheduler?.stop();
       } catch (error) {
@@ -613,7 +647,8 @@ export function createPlatformExtension(
         configuration.flags.messaging ||
         configuration.flags.memory ||
         configuration.flags.monitors ||
-        configuration.flags.scheduler;
+        configuration.flags.scheduler ||
+        configuration.flags.goals;
       if (!platformEnabled || role !== "parent") return;
 
       const projectIdentity = makeProjectIdentity();
@@ -1007,6 +1042,10 @@ export function createPlatformExtension(
         configuration.flags.scheduler && projectTrusted
           ? scheduledAgentExecutorFor(pi.events)
           : undefined;
+      const goalWorkerExecutor =
+        configuration.flags.goals && projectTrusted
+          ? goalWorkerExecutorFor(pi.events)
+          : undefined;
       const profilesNeeded =
         configuration.flags.profiles ||
         (configuration.flags.hooks && namedProfileExecution !== undefined);
@@ -1089,6 +1128,7 @@ export function createPlatformExtension(
         current.language = languageCapability;
       }
 
+      let goalReview: LocalReview | undefined;
       if (configuration.flags.review) {
         reviewCapability ??= createReviewCapability(pi, {});
         current.review = reviewCapability;
@@ -1141,6 +1181,7 @@ export function createPlatformExtension(
           },
         };
         reviewCapability!.start(localReview);
+        goalReview = localReview;
       }
 
       if (configuration.flags.planMode) {
@@ -1355,10 +1396,14 @@ export function createPlatformExtension(
       const monitorRequested = configuration.flags.monitors && projectTrusted;
       const schedulerRequested =
         configuration.flags.scheduler && projectTrusted;
-      if ((monitorRequested || schedulerRequested) && !broker) {
+      const goalsRequested = configuration.flags.goals && projectTrusted;
+      if (
+        (monitorRequested || schedulerRequested || goalsRequested) &&
+        !broker
+      ) {
         if (ctx.hasUI) {
           ctx.ui.notify(
-            "Phase 7 automation requires an active Session Broker; Monitor and Scheduler activation was denied.",
+            "Phase 7 automation requires an active Session Broker; Monitor, Scheduler, and Goal Mode activation was denied.",
             "error",
           );
         }
@@ -1855,6 +1900,88 @@ export function createPlatformExtension(
         } else if (schedulerRequested && ctx.hasUI) {
           ctx.ui.notify(
             "Scheduler requires the host Scheduled Agent execution service.",
+            "error",
+          );
+        }
+
+        if (
+          goalsRequested &&
+          goalWorkerExecutor &&
+          configuration.flags.profiles
+        ) {
+          const state = stateStore();
+          const goalProfiles = await loadProfiles();
+          if (state.ok && goalProfiles) {
+            try {
+              const sessionId = ctx.sessionManager.getSessionId();
+              // The capability owns the approval issuer, so it is built before
+              // the runtime that must check every direct user token against it.
+              goalCapability ??= createGoalCapability({
+                pi,
+                actor: role,
+                policy,
+                mode: platformMode,
+                configuration: configuration.goals,
+              });
+              const goalRuntime = (
+                options.createGoalRuntime ?? createGoalRuntime
+              )({
+                state: state.value,
+                artifacts: artifactStore(),
+                clock: (options.createGoalClock ?? createSystemGoalClock)(),
+                // The Goal Worker owns the Guarded Workspace it leases for an
+                // isolated Attempt, so no host workspace port is supplied and
+                // exactly one component ever creates one.
+                executor: createGoalWorkerExecutorPort(goalWorkerExecutor),
+                profiles: createProfileCatalogGoalProfiles({
+                  catalog: goalProfiles,
+                  projectRoot:
+                    project.kind === "git" && !project.bare
+                      ? project.repositoryRoot
+                      : project.canonicalCwd,
+                  projectTrusted: () =>
+                    runtime === current && ctx.isProjectTrusted(),
+                  workspacesAvailable: () => workspaces !== undefined,
+                }),
+                review: createLocalReviewGoalReview({
+                  review: () => (runtime === current ? goalReview : undefined),
+                }),
+                delivery: createSessionBrokerGoalDelivery(broker, {
+                  sessionId,
+                }),
+                binding: {
+                  projectId: project.projectId,
+                  cwd: project.canonicalCwd,
+                  sessionId,
+                },
+                // One lease owner per Session Incarnation: a restart never
+                // inherits the identity that still holds a live node lease.
+                ownerId: `goals-${projectScope.slice(0, 24)}-${randomUUID()}`,
+                leaseTtlMs: configuration.goals.leaseTtlMs,
+                maxGoals: configuration.goals.maxGoals,
+                terminalRetentionMs: configuration.goals.terminalRetentionMs,
+                authority: goalCapability.authority,
+              });
+              current.goals = goalCapability;
+              await current.goals.start({
+                runtime: goalRuntime,
+                projectId: project.projectId,
+                sessionId,
+              });
+            } catch (error) {
+              if (ctx.hasUI) {
+                ctx.ui.notify(
+                  error instanceof Error ? error.message : String(error),
+                  "error",
+                );
+              }
+            }
+          }
+        } else if (goalsRequested && ctx.hasUI) {
+          ctx.ui.notify(
+            goalWorkerExecutor
+              ? "Goal Mode requires Agent Profiles for pinned goal-worker execution."
+              : "Goal Mode requires the host Goal Worker execution service.",
             "error",
           );
         }

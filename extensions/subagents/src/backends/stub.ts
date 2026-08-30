@@ -88,6 +88,12 @@ const makeStubSession = (
       } satisfies SubagentMeta as SubagentMeta,
       pending: [] as string[],
       turnCount: 0,
+      /**
+       * Cumulative metered spend. Unlike the occupancy ramp it is never
+       * clamped to the context window and never resets between turns, so
+       * tests can tell the two quantities apart.
+       */
+      meteredTokens: 0,
       closed: false,
       /** True between the driver dequeuing a prompt and registering its turn fiber. */
       dispatching: false,
@@ -158,10 +164,12 @@ const makeStubSession = (
           isError: false,
           outputPreview: "src docs package.json",
         });
+        state.meteredTokens += 2_400;
         yield* emit({
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
           contextWindow: profile.contextWindow,
+          meteredTokens: state.meteredTokens,
         });
 
         if (failing) {
@@ -188,10 +196,12 @@ const makeStubSession = (
           _tag: "AssistantMessage",
           parts: [{ type: "text", text: finalText }],
         });
+        state.meteredTokens += 900;
         yield* emit({
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1) + 900),
           contextWindow: profile.contextWindow,
+          meteredTokens: state.meteredTokens,
         });
         yield* emit({
           _tag: "RunSettled",

@@ -71,6 +71,7 @@ import {
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
+  runSupervisorSpawn,
   runTool,
   type SubagentRuntime,
 } from "./src/runtime.ts";
@@ -83,11 +84,17 @@ import { bindNamedProfileExecutionPort } from "../platform/src/agents/named-prof
 import { createProjectIdentity } from "../platform/src/core/projects/index.ts";
 import { bindLocalReviewer } from "../platform/src/review/reviewer-service.ts";
 import { bindScheduledAgentExecutor } from "../shared/scheduled-agent.ts";
+import { bindGoalWorkerExecutor } from "../shared/goal-worker.ts";
 import { platformHookEventProducerFor } from "../platform/src/automation/platform-hook-event-sink.ts";
 import {
   createScheduledAgentExecutor,
   type ScheduledSubagentManager,
 } from "./src/scheduled-agent.ts";
+import {
+  createGoalWorkerExecutor,
+  withSupervisorMetering,
+  type GoalWorkerSubagentManager,
+} from "./src/goal-worker.ts";
 import {
   createNamedProfileExecutionPort,
   type NamedProfileSubagentManager,
@@ -164,6 +171,7 @@ function truncatedOutput(
 export interface SubagentsExtensionOptions {
   profileCatalog?: ProfileCatalog;
   scheduledAgentManager?: () => Promise<ScheduledSubagentManager>;
+  goalWorkerManager?: () => Promise<GoalWorkerSubagentManager>;
   namedProfileManager?: () => Promise<NamedProfileSubagentManager>;
   spawn?: (
     harness: BackendName,
@@ -183,15 +191,19 @@ export default function subagentsExtension(
   let unsubStatus: (() => void) | undefined;
   let unbindLocalReviewer: (() => void) | undefined;
   let unbindScheduledAgentExecutor: (() => void) | undefined;
+  let unbindGoalWorkerExecutor: (() => void) | undefined;
   let unbindNamedProfileExecutionPort: (() => void) | undefined;
   let unbindHookEvents: (() => void) | undefined;
   let scheduledManagerPromise: Promise<ScheduledSubagentManager> | undefined;
+  let goalWorkerManagerPromise: Promise<GoalWorkerSubagentManager> | undefined;
   let namedProfileManagerPromise:
     Promise<NamedProfileSubagentManager> | undefined;
   let scheduledGeneration = 0;
+  let goalWorkerGeneration = 0;
   let namedProfileGeneration = 0;
   let acceptingHookEvents = true;
   const scheduledLifecycle = new AbortController();
+  const goalWorkerLifecycle = new AbortController();
   const namedProfileLifecycle = new AbortController();
   const scheduledTitles = new Set<string>();
   const scheduledChildTitles = new Map<string, string>();
@@ -318,10 +330,14 @@ export default function subagentsExtension(
             const manager = await getManager();
             return {
               spawn: (backend, task, signal) =>
-                runTool(activeRuntime, manager.spawn(backend, task), {
-                  signal,
-                  interruptMessage: "Scheduled Agent spawn cancelled.",
-                }),
+                runSupervisorSpawn(
+                  activeRuntime,
+                  manager.spawn(backend, task),
+                  {
+                    signal,
+                    interruptMessage: "Scheduled Agent spawn cancelled.",
+                  },
+                ),
               waitFor: (ids) => runTool(activeRuntime, manager.waitFor(ids)),
               get: (id) => runTool(activeRuntime, manager.get(id)),
               cancel: (ids) => runTool(activeRuntime, manager.cancel(ids)),
@@ -422,6 +438,23 @@ export default function subagentsExtension(
     return namedProfileManagerPromise;
   };
 
+  /**
+   * The Goal Worker reuses the Scheduled Agent's dispatch bookkeeping and adds
+   * the one capability a Goal Attempt needs beyond it: authoritative
+   * whole-attempt token metering, read from the Supervisor's own snapshot
+   * rather than from anything the child reports about itself. It is read
+   * through the live read model, not through `get`, because polling a cap must
+   * not disturb the dispatch bookkeeping `get` settles.
+   */
+  const getGoalWorkerManager = () =>
+    (goalWorkerManagerPromise ??= options.goalWorkerManager
+      ? options.goalWorkerManager()
+      : (async () => {
+          const base = await getScheduledManager();
+          const manager = await getManager();
+          return withSupervisorMetering(base, (id) => manager.view.get(id));
+        })());
+
   const scheduledExecutor = createScheduledAgentExecutor({
     manager: getScheduledManager,
     parent: () => {
@@ -457,6 +490,55 @@ export default function subagentsExtension(
   unbindScheduledAgentExecutor = bindScheduledAgentExecutor(
     pi.events,
     scheduledExecutor,
+  );
+
+  const goalWorkerExecutor = createGoalWorkerExecutor({
+    profiles: () => {
+      const catalog =
+        options.profileCatalog ?? platformAgentServices(pi.events)?.profiles;
+      if (!catalog) return undefined;
+      return {
+        generation: () => catalog.inspect().generation,
+        resolve(name) {
+          const result = catalog.resolve(name);
+          return result.ok ? result.value : undefined;
+        },
+      };
+    },
+    manager: getGoalWorkerManager,
+    parent: () => {
+      const current = sessionContext;
+      if (!current) {
+        throw new Error(
+          "Goal Worker executor is unavailable outside an active session.",
+        );
+      }
+      return {
+        parentCwd: current.cwd,
+        projectTrusted: false,
+        inheritedModel: current.model
+          ? { provider: current.model.provider, id: current.model.id }
+          : undefined,
+        inheritedThinkingLevel: pi.getThinkingLevel(),
+        modelRegistry: current.modelRegistry,
+      };
+    },
+    workspaces: () => platformAgentServices(pi.events)?.workspaces,
+    sessionId: () => {
+      const current = sessionContext;
+      if (!current) {
+        throw new Error(
+          "Goal Worker executor is unavailable outside an active session.",
+        );
+      }
+      return current.sessionManager.getSessionId();
+    },
+    generation: () => goalWorkerGeneration,
+    lifecycleSignal: () => goalWorkerLifecycle.signal,
+  });
+  unbindGoalWorkerExecutor = bindGoalWorkerExecutor(
+    pi.events,
+    goalWorkerExecutor,
   );
 
   const projectIdentity = createProjectIdentity();
@@ -596,6 +678,13 @@ export default function subagentsExtension(
 
   pi.on("session_shutdown", async () => {
     acceptingHookEvents = false;
+    unbindGoalWorkerExecutor?.();
+    unbindGoalWorkerExecutor = undefined;
+    goalWorkerGeneration++;
+    goalWorkerLifecycle.abort();
+    // The executor outlives the session in this closure, so it must release
+    // its retained attempt payloads instead of holding them for the process.
+    goalWorkerExecutor.shutdown();
     unbindNamedProfileExecutionPort?.();
     unbindNamedProfileExecutionPort = undefined;
     namedProfileGeneration++;
@@ -618,6 +707,7 @@ export default function subagentsExtension(
     runtime = undefined;
     managerPromise = undefined;
     scheduledManagerPromise = undefined;
+    goalWorkerManagerPromise = undefined;
     namedProfileManagerPromise = undefined;
     scheduledTitles.clear();
     scheduledChildTitles.clear();

@@ -1,6 +1,6 @@
 # Pi capabilities program handoff
 
-Updated: 2026-08-29
+Updated: 2026-08-30
 
 ## Objective
 
@@ -8,57 +8,52 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 7 complete and live-integrated. F08 declarative hooks, F15 Reactive Monitor, and F16 Scheduled Prompts accepted. Phase 8 must not start without explicit approval.
+Phase 8 F13 Persistent Task Graph and Goal Mode accepted in isolated worktree. Publication and live integration are the only remaining Phase 8 actions. Phase 9 has not started and must not start without explicit approval.
 
-## Completed this phase
+## Phase 8 delivered
 
-- [x] Shared host-owned TriggerEngine with provenance, bounded queue/backpressure, causal recursion controls, deadlines, authenticated restart persistence, owner-scoped recovery, and lifecycle fencing.
-- [x] F15 MonitorRegistry with terminal/file/poll/WebSocket sources, host-bound delivery, pinned origins, credential-safe expiring evidence, durable restore, and lifecycle cleanup.
-- [x] F08 completion with V1/V2 config, native/platform events, named guarded HTTP/MCP/Agent actions, trust/config revalidation, exact write authority, history, concurrency, and bounded drains.
-- [x] F16 Scheduler with strict calendar/DST semantics, fenced SQLite occurrence claims, crash-atomic cancellation, guarded scheduled workspaces, profile revalidation, bounded output, mailbox delivery, legacy generation compatibility, and atomic request admission.
-- [x] Repeated independent adversarial review. Final critical/high signoff `sa-10`: no blockers.
-- [x] Acceptance, performance, threat, architecture, TUI, and tracker evidence recorded.
+- Five-method deep `GoalEngine`: `submit`, `resume`, `pause`, `cancel`, `observe`.
+- Durable bounded declarative DAG model with explicit Goal/Node/Attempt states, dependency/cycle validation, audited transitions, retry/failure policy, evidence gates, and revision invalidation.
+- Transactional graph/receipt/outbox persistence, optimistic versions, fenced node leases, long-run renewal, multi-runtime concurrency and capacity control, periodic retention, and generation-safe Goal ID reuse.
+- At-most-once opaque Agent dispatch. Pre-dispatch reclaim; certified outcome adoption; ambiguous post-dispatch work becomes Unknown and never auto-replays.
+- Goal Worker on Agent Supervisor with role/profile pinning, guarded isolated workspace ownership, bounded output/runtime, typed pre-dispatch certainty, token-cap cancellation, bounded inspection retention, and lifecycle shutdown.
+- Cumulative token metering separate from context occupancy across Pi, Claude, and Codex. Earlier two-turn live assertions passed all three; final strict Codex/Pi assertions pass while Claude is externally quota-blocked. Common authoritative monetary cost remains unavailable; finite cost budgets fail before confirmation.
+- `/goal`, `/goals`, `goal_inspect`, and `goal_change`. Exact semantic confirmation, host-issued authority, Plan Mode inspect-only, and bounded untrusted dashboard.
+- Direct-user objective/task/criteria/dependency edits, selected-node restart, Unknown resolution, and audited skip/block/done controls.
+- Local Review evidence, ArtifactStore output/evidence, Session Broker delivery, WorkspaceManager preservation, ProfileCatalog revalidation.
+- Existing Workflow JavaScript implementation and schema unchanged.
 
 ## Verification
 
-Authoritative details: `docs/verification/phase-7-acceptance.md`.
+Authoritative details: `docs/verification/phase-8-acceptance.md`.
 
 - TypeScript and formatting pass.
-- 469 unit; 413 integration with 5 platform skips; 22 delegated.
-- Smoke passes schemas, print, JSON, RPC, reload, shutdown, and no-leak gates.
-- Live final rerun: Claude 2/2, Codex 2/2, Pi 1/1.
-- Full log: `C:/Users/Tyler/AppData/Local/Temp/pi-phase7-verify-final.log`.
-- Native 12-process Scheduler request admission retains exact cap and one canonical intent.
-- Fake-time 26-30 hour soak and Windows five-generation real-resource soak pass with no duplicate executions or surviving descendants.
-- Startup median: Phase 7 4,890.1 ms versus Phase 6 control 4,569.1 ms, +7.0%.
-- Platform production audit: zero vulnerabilities.
-- Real terminal-keystroke checklist remains manual; automated TUI/RPC/process paths pass.
+- Unit: 712 pass.
+- Integration: 433 pass, 5 platform skips, plus 22 delegated; 90-second per-test and 20-minute suite watchdog.
+- Delegated file-search: 22 pass.
+- Smoke: schemas, print, JSON, RPC, reload, shutdown, no leaks.
+- Live backends: earlier 5/5 pass; final strict metering rerun passes Codex/Pi 3/3 while Claude is externally quota-blocked until account reset.
+- 72-hour fake-time Goal soak: 68 unique Attempts, peak concurrency 4, one Unknown, zero redispatches, zero timers/leases after close.
+- Real Windows killed-parent drill: pre-dispatch reclaim and post-dispatch Unknown block; stale writes refused; no duplicate workspace/evidence/outbox.
+- Repeated adversarial review closed request atomicity, concurrency, reservation leaks, metadata bounds, cancellation races, lease renewal, authority forgery, confirmation omissions, retention, certainty, and metering blockers.
 
 ## Key references
 
-- `docs/architecture/phase-7-automation.md`
-- `docs/security/phase-7-threat-model.md`
-- `docs/research/phase-7-trigger-packages.md`
-- `docs/verification/phase-7-acceptance.md`
-- `docs/verification/phase-7-performance.md`
-- `docs/verification/phase-7-tui-smoke.md`
-- `.agent/handoff/pi-capabilities-phase-7.md`
+- `docs/architecture/phase-8-goal-mode.md`
+- `docs/security/phase-8-threat-model.md`
+- `docs/phase-8-configuration.md`
+- `docs/verification/phase-8-acceptance.md`
+- `docs/verification/phase-8-performance.md`
+- `docs/verification/phase-8-tui-smoke.md`
+- `.agent/handoff/pi-capabilities-phase-8.md`
 
 ## Repository state
 
-- Branch: `pi-capabilities-phase-7`
-- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-7`
-- Base: accepted Phase 6 live head `4ee0cb6`
-- Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and DLL safety backup.
-
-## Live integration
-
-- Live `main` fast-forwarded through `8f88ece` and pushed to `fork/main`.
-- Platform install/audit: 180 packages, zero vulnerabilities.
-- Live TypeScript/formatting pass; 214 focused Phase 7 tests pass with 4 platform skips.
-- Live smoke passes; Claude/Codex/Pi live backends pass 5/5.
-- Deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups preserved.
+- Branch: `pi-capabilities-phase-8`
+- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-8`
+- Base: accepted Phase 7 live head `282cec3`
+- Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
 
 ## Next exact action
 
-Stop. Phase 8 requires explicit approval.
+Fetch publication preflight, commit/push Phase 8, fast-forward live `main`, verify live while preserving dirty state, then stop before Phase 9.

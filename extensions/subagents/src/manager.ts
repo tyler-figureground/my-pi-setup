@@ -36,12 +36,9 @@ import type {
   TranscriptItem,
 } from "./domain.ts";
 import type { PlatformHookEventProducer } from "../../platform/src/automation/platform-hook-event-sink.ts";
-import {
-  BackendUnavailableError,
-  ConcurrencyLimitError,
-  SendError,
-  SpawnError,
-} from "./domain.ts";
+import { SendError, SpawnError, SupervisorPreDispatchError } from "./domain.ts";
+
+export { SupervisorPreDispatchError } from "./domain.ts";
 
 export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
@@ -88,6 +85,7 @@ interface MutableSnapshot {
   errorText?: string;
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
+  metered: { tokens?: number };
   transcript: TranscriptItem[];
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
@@ -151,10 +149,7 @@ export interface SubagentManagerShape {
   spawn(
     backend: BackendName,
     task: SpawnTask,
-  ): Effect.Effect<
-    SubagentSnapshot,
-    SpawnError | ConcurrencyLimitError | BackendUnavailableError
-  >;
+  ): Effect.Effect<SubagentSnapshot, SpawnError | SupervisorPreDispatchError>;
   /**
    * Wait until all listed subagents are settled. Unknown ids are treated as
    * settled (the tool layer validates ids first). While waiting, settles for
@@ -511,6 +506,13 @@ const makeManager = Effect.gen(function* () {
           tokens: event.tokens ?? s.usage.tokens,
           contextWindow: event.contextWindow ?? s.usage.contextWindow,
         };
+        // Metering is last-writer-wins, not a maximum: a backend that first
+        // accumulates per-request counts and then learns the run's
+        // authoritative aggregate must be able to correct itself downward.
+        // Occupancy and metering never overwrite each other.
+        if (event.meteredTokens !== undefined) {
+          s.metered = { tokens: event.meteredTokens };
+        }
         break;
       case "MetaChanged":
         s.meta = { ...s.meta, ...event.meta };
@@ -567,14 +569,16 @@ const makeManager = Effect.gen(function* () {
       // Reserve synchronously (before the first yield inside doSpawn) so
       // parallel tool calls cannot race past the global cap.
       yield* Effect.suspend(
-        (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
+        (): Effect.Effect<void, SupervisorPreDispatchError> => {
           if (disposed) {
-            return new SpawnError({
+            return new SupervisorPreDispatchError({
+              reason: "shutting-down",
               message: "Subagent manager is shutting down.",
             });
           }
           if (runningCount() + reserved >= MAX_RUNNING) {
-            return new ConcurrencyLimitError({
+            return new SupervisorPreDispatchError({
+              reason: "capacity",
               message: `Max ${MAX_RUNNING} subagents can run concurrently. Wait for one to finish before spawning another.`,
             });
           }
@@ -586,13 +590,15 @@ const makeManager = Effect.gen(function* () {
       const doSpawn = Effect.gen(function* () {
         const backend: SubagentBackend | undefined = registry.get(backendName);
         if (!backend) {
-          return yield* new BackendUnavailableError({
+          return yield* new SupervisorPreDispatchError({
+            reason: "backend-unavailable",
             message: `Unknown backend "${backendName}".`,
           });
         }
         const available = yield* backend.available;
         if (!available) {
-          return yield* new BackendUnavailableError({
+          return yield* new SupervisorPreDispatchError({
+            reason: "backend-unavailable",
             message: `Backend "${backendName}" is not available on this machine (binary/SDK/credentials missing).`,
           });
         }
@@ -632,6 +638,7 @@ const makeManager = Effect.gen(function* () {
             createdAt: Date.now(),
             meta,
             usage: { contextWindow: meta.contextWindow },
+            metered: {},
             transcript: [],
             liveTools: [],
             queued: [],

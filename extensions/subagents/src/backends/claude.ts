@@ -231,26 +231,73 @@ function sessionFilePath(cwd: string, sessionId: string) {
  * re-counts cached context once per request and quickly exceeds the real
  * window; it must never be treated as occupancy.
  */
+interface ClaudeRequestUsage {
+  input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  output_tokens?: number | null;
+}
+
+/**
+ * Tokens billed for the request this usage describes: every input class plus
+ * output. Identical arithmetic to context occupancy, opposite meaning —
+ * occupancy is a level read off the newest request, metering is a running
+ * total over all of them, so the same number may only be added up here.
+ * Unusable input counts as zero so one malformed message cannot poison a
+ * cumulative meter.
+ */
+export function billedTokens(usage: ClaudeRequestUsage | null | undefined) {
+  const count = (value: number | null | undefined) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? value
+      : 0;
+  return (
+    count(usage?.input_tokens) +
+    count(usage?.cache_read_input_tokens) +
+    count(usage?.cache_creation_input_tokens) +
+    count(usage?.output_tokens)
+  );
+}
+
 export function contextOccupancyTokens(
-  usage:
-    | {
-        input_tokens?: number | null;
-        cache_read_input_tokens?: number | null;
-        cache_creation_input_tokens?: number | null;
-        output_tokens?: number | null;
-      }
-    | null
-    | undefined,
+  usage: ClaudeRequestUsage | null | undefined,
 ) {
   if (!usage || typeof usage.input_tokens !== "number") return undefined;
-  const count = (value: number | null | undefined) =>
-    typeof value === "number" && Number.isFinite(value) ? value : 0;
-  return (
-    count(usage.input_tokens) +
-    count(usage.cache_read_input_tokens) +
-    count(usage.cache_creation_input_tokens) +
-    count(usage.output_tokens)
-  );
+  return billedTokens(usage);
+}
+
+/**
+ * Whole-session token meter for one Claude Code session.
+ *
+ * Two sources report the same spend at different times. Assistant messages
+ * arrive live and are the only way to enforce a cap before the run ends, but
+ * they can be dropped, replayed, or split across sidechains. The run's
+ * SDKResultMessage arrives once at the end carrying the SDK's own aggregate,
+ * which is authoritative. So the meter accumulates messages while a run is
+ * live and then overwrites that run's contribution with the aggregate,
+ * keeping the accumulation only when the aggregate is unusable. Totals from
+ * runs already closed are never revisited, so the counter stays cumulative
+ * across every turn of the session.
+ */
+export function createClaudeTokenMeter() {
+  let settled = 0;
+  let live = 0;
+  return {
+    /** Fold one assistant request. Undefined when it billed nothing. */
+    request(usage: ClaudeRequestUsage | null | undefined) {
+      const billed = billedTokens(usage);
+      if (billed <= 0) return undefined;
+      live += billed;
+      return settled + live;
+    },
+    /** Close the run with its aggregate; returns the cumulative session total. */
+    settle(usage: ClaudeRequestUsage | null | undefined) {
+      const aggregate = billedTokens(usage);
+      settled += aggregate > 0 ? aggregate : live;
+      live = 0;
+      return settled;
+    },
+  };
 }
 
 function resultContextWindow(result: SDKResultMessage) {
@@ -313,6 +360,8 @@ const makeClaudeSession = (
         contextWindow: CLAUDE_CONTEXT_WINDOW,
       } satisfies SubagentMeta as SubagentMeta,
     };
+
+    const meter = createClaudeTokenMeter();
 
     const reasoning = claudeReasoningOptions(task.reasoningEffort);
     const execution = task.execution
@@ -504,6 +553,14 @@ const makeClaudeSession = (
       const parts = assistantParts(message);
       if (parts.length > 0) emit({ _tag: "AssistantMessage", parts });
 
+      // Metering counts every request the attempt caused, sidechains included:
+      // a Claude Code subagent's tokens are billed to this same run even though
+      // they never enter this conversation's context window.
+      const metered = meter.request(message.message.usage);
+      if (metered !== undefined) {
+        emit({ _tag: "UsageChanged", meteredTokens: metered });
+      }
+
       // Top-level messages only: subagent (sidechain) requests have their own
       // context and must not overwrite this conversation's occupancy.
       if (message.parent_tool_use_id == null) {
@@ -558,9 +615,15 @@ const makeClaudeSession = (
       // contextOccupancyTokens); only the capacity is trustworthy here. The
       // occupancy itself was already emitted by the last assistant message.
       const contextWindow = resultContextWindow(result);
+      // The same aggregate that is worthless as occupancy is exactly right as
+      // metering: it is the SDK's own whole-run billed total. It replaces this
+      // run's assistant-message accumulation so a message the stream dropped,
+      // repeated, or attributed to a sidechain cannot drift the meter. The
+      // accumulation is kept only when the aggregate is unusable.
       emit({
         _tag: "UsageChanged",
         contextWindow: contextWindow ?? state.meta.contextWindow,
+        meteredTokens: meter.settle(result.usage),
       });
       if (
         contextWindow !== undefined &&

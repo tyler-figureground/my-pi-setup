@@ -196,8 +196,17 @@ export type SubagentEvent =
     }
   | {
       readonly _tag: "UsageChanged";
+      /** Context occupancy: how much of the window the next request carries. */
       readonly tokens?: number;
       readonly contextWindow?: number;
+      /**
+       * Cumulative metered tokens billed by this session so far, across every
+       * request it has caused (including compacted-away history and sidechain
+       * requests). A total, never a level: it only ever grows within a run and
+       * is the sole quantity a whole-attempt token cap may be enforced against.
+       * Occupancy is not a spend meter and must never be substituted for it.
+       */
+      readonly meteredTokens?: number;
     }
   | { readonly _tag: "MetaChanged"; readonly meta: Partial<SubagentMeta> }
   /** Non-fatal diagnostics. Fatal failures arrive as a RunSettled outcome. */
@@ -223,7 +232,14 @@ export interface SubagentSnapshot {
   readonly settledAt?: number;
   readonly errorText?: string;
   readonly meta: SubagentMeta;
+  /** Context occupancy for the utilization gauge. Not a spend meter. */
   readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
+  /**
+   * Cumulative metered spend for the whole session, folded from
+   * `UsageChanged.meteredTokens`. Absent `tokens` means the backend proved
+   * nothing, so no cap may be enforced from this snapshot.
+   */
+  readonly metered: { readonly tokens?: number };
   readonly transcript: ReadonlyArray<TranscriptItem>;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
@@ -255,6 +271,14 @@ export function formatElapsed(snap: SubagentSnapshot) {
 // --- Errors -------------------------------------------------------------------
 
 export class SpawnError extends Data.TaggedError("SpawnError")<{
+  readonly message: string;
+}> {}
+
+/** Manager-only proof that backend spawn was never invoked. */
+export class SupervisorPreDispatchError extends Data.TaggedError(
+  "SupervisorPreDispatchError",
+)<{
+  readonly reason: "capacity" | "shutting-down" | "backend-unavailable";
   readonly message: string;
 }> {}
 

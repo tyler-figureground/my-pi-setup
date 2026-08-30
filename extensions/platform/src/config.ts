@@ -44,6 +44,11 @@ import {
   type PlatformSchedulerConfiguration,
 } from "./automation/scheduler/config.ts";
 import {
+  decodeGoalConfiguration,
+  defaultPlatformGoalConfiguration,
+  type PlatformGoalConfiguration,
+} from "./goals/config.ts";
+import {
   decodePlatformFlags,
   defaultPlatformFlags,
   type PlatformDiagnostic,
@@ -236,6 +241,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly memory: PlatformMemoryConfiguration;
   readonly monitors: PlatformMonitorConfiguration;
   readonly scheduler: PlatformSchedulerConfiguration;
+  readonly goals: PlatformGoalConfiguration;
   readonly hookActions: PlatformHookActionConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
@@ -265,6 +271,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   let memory = defaultPlatformMemoryConfiguration;
   let monitors = defaultPlatformMonitorConfiguration;
   let scheduler = defaultPlatformSchedulerConfiguration;
+  let goals = defaultPlatformGoalConfiguration;
   let hookActions = defaultPlatformHookActionConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
@@ -290,6 +297,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
                     "memorySettings",
                     "monitorSettings",
                     "schedulerSettings",
+                    "goalSettings",
                     "hookActions",
                   ].includes(key),
               ),
@@ -330,6 +338,11 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         scheduler,
         source.scope,
       );
+      const decodedGoals = decodeGoalConfiguration(
+        object?.goalSettings,
+        goals,
+        source.scope,
+      );
       const decodedHookActions = decodeHookActionConfiguration(
         object?.hookActions,
         hookActions,
@@ -344,6 +357,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       memory = decodedMemory.memory;
       monitors = decodedMonitors.monitors;
       scheduler = decodedScheduler.scheduler;
+      goals = decodedGoals.goals;
       hookActions = {
         http: decodedHookActions.http,
         mcp: decodedHookActions.mcp,
@@ -359,6 +373,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
           ...decodedMemory.diagnostics,
           ...decodedMonitors.diagnostics,
           ...decodedScheduler.diagnostics,
+          ...decodedGoals.diagnostics,
           ...decodedHookActions.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
@@ -372,11 +387,18 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       });
     }
   }
-  if ((flags.monitors || flags.scheduler) && !flags.messaging) {
+  if ((flags.monitors || flags.scheduler || flags.goals) && !flags.messaging) {
     diagnostics.push({
       path: "platform.json:messaging",
       message:
-        "Reactive Monitors and Scheduler require messaging for durable result delivery.",
+        "Reactive Monitors, Scheduler, and Goal Mode require messaging for durable result delivery.",
+    });
+  }
+  if (flags.goals && !flags.profiles) {
+    diagnostics.push({
+      path: "platform.json:profiles",
+      message:
+        "Goal Mode requires Agent Profiles for pinned goal-worker execution.",
     });
   }
   return {
@@ -389,6 +411,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
     memory,
     monitors,
     scheduler,
+    goals,
     hookActions,
     diagnostics,
   };

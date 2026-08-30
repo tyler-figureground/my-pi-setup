@@ -27,6 +27,7 @@ function completed(task: SpawnTask): SubagentSnapshot {
     settledAt: 2,
     meta: { backend: "pi" },
     usage: {},
+    metered: {},
     transcript: [],
     liveTools: [],
     queued: [],
