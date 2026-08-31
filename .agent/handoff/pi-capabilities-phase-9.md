@@ -42,12 +42,12 @@ Never recursively remove a worktree containing a live `node_modules` junction.
 - [x] Implement local publisher and approved static Vercel preview adapter with exact direct-user confirmation, sensitivity scan, expiry, intent recovery, and revocation.
 - [x] Integrate review, browser proof, goals, language reports, and workflows through artifact references.
 - [x] Complete final serialized integration, stable-tree unit/smoke/visual reruns, and evidence counts.
-- [ ] Record final publication commit and live integration while preserving live state.
+- [x] Record final publication commit and live integration while preserving live state.
 - [ ] Stop before Phase 10.
 
 ## Current status
 
-Phase 9 F23 accepted in isolated worktree. Critical/high security, correctness, interface, and visual review findings closed. Unit 750; integration 433 plus 5 platform skips and 16/16 isolated cumulative-load reruns; delegated 22; smoke pass; live backends 5/5; real Chromium viewer proof pass. Publication/live integration remain.
+Phase 9 F23 complete, published, and live-integrated. Critical/high security, correctness, interface, and visual review findings closed. Unit 750; integration 433 plus 5 platform skips and 16/16 isolated cumulative-load reruns; delegated 22; smoke pass; live backends 5/5; real Chromium viewer proof pass; live focused 62/62 and smoke pass.
 
 ## Verification
 
@@ -65,4 +65,4 @@ Phase 9 F23 accepted in isolated worktree. Critical/high security, correctness, 
 
 ## Next exact action
 
-Run publication preflight, commit/push Phase 9, fast-forward live main, install platform dependencies, and run live focused/smoke verification without starting Phase 10.
+Stop. Do not begin Phase 10 without explicit approval.

@@ -1,7 +1,7 @@
 # Phase 9 F23 acceptance
 
 Date: 2026-08-31
-Status: accepted in isolated Phase 9 worktree, pending publication/live checkout integration
+Status: accepted, published, and live-integrated
 
 ## Scope
 
@@ -127,6 +127,16 @@ No paid live Vercel mutation was performed because no Phase 9 provider credentia
 - Focused Phase 9: 78+ pass across storage, materialization, scanner, publisher, repository, wiring, viewer, Vercel, configuration, Workflow producer, and composition.
 - Real Chromium visual flow: pass, zero page errors/failed network requests.
 - Adversarial review: repeated security, correctness, interface, and visual review/fix/signoff cycles; final critical/high blockers closed. Final post-dispatch signoff passed 18/18 focused checks.
+
+## Live integration
+
+Live `main` fast-forwarded to Phase 9 implementation while preserving deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+
+- Platform clean install: 205 packages, zero production audit vulnerabilities.
+- Live TypeScript and formatting: pass.
+- Live focused Phase 9: 62/62 pass.
+- Live smoke: schemas, print, JSON, RPC, reload, shutdown, no leaks - pass.
+- Remote Vercel mutation remains unconfigured and was not invoked.
 
 ## Rollback/outage
 

@@ -8,7 +8,7 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 9 F23 Shareable Interactive Artifacts complete and accepted in isolated worktree. Publication/live integration pending. Phase 10 has not started.
+Phase 9 F23 Shareable Interactive Artifacts complete, published, and live-integrated. Phase 10 has not started and requires explicit approval.
 
 ## Phase 9 delivered
 
@@ -74,19 +74,21 @@ Authoritative details: `docs/verification/phase-8-acceptance.md`.
 - Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-9`
 - Base: accepted Phase 8 live head `6e185f3` from fetched `fork/main`
 - Start state: ahead 0 / behind 0; Phase 9 absent upstream
-- Implementation accepted but not yet committed/pushed or live-integrated.
+- Accepted implementation commit: `16bdccd`
+- Live `main` and `fork/main` include `16bdccd`; live evidence commit pending.
 - Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
 - Phase checkpoint: `.agent/handoff/pi-capabilities-phase-9.md`
 - Acceptance: `docs/verification/phase-9-acceptance.md`
 
 ## Live integration
 
+- Live main fast-forwarded through `16bdccd` and pushed to `fork/main`.
+- Platform clean install: 205 packages; production audit zero vulnerabilities.
 - Live check/format pass.
-- Focused Goal suite: 198 pass.
-- Goal Worker/metering suite: 57 pass.
+- Focused Phase 9 suite: 62 pass.
 - Smoke passes schemas, print, JSON, RPC, reload, shutdown, and no-leak gates.
 - Deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups preserved.
 
 ## Next exact action
 
-Run publication preflight, commit/push Phase 9, fast-forward live main, install platform dependencies, and run live focused/smoke verification. Stop before Phase 10.
+Stop. Do not begin Phase 10 without explicit approval.

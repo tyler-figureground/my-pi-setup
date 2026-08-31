@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 9 complete in isolated worktree; live integration pending**
+Status: **Phase 9 complete, published, and live-integrated; Phase 10 not started**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -1201,7 +1201,8 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-29 | Phase 7 live integration | `8f88ece` plus live evidence commit | fast-forward and push live main; platform install/audit; live check/format; focused Phase 7 suite; smoke; live backends | 214 focused pass + 4 platform skips; audit zero vulnerabilities; smoke pass; Claude/Codex/Pi 5/5 | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 8 not started |
 | 2026-08-30 | Phase 8 persistent task graph and Goal Mode | `c0edbd5`, `77f2464` | repeated adversarial review/fix cycles; native SQLite races; real Windows killed-parent drill; 72-hour fake-time soak; cumulative token metering; check/format/unit/integration/smoke/live | 712 unit; 433 integration + 22 delegated; 5 platform skips; smoke pass; earlier live 5/5; final strict Codex/Pi pass with Claude quota-blocked | Pass isolated with external Claude limit | F13 complete; no Workflow changes; `docs/verification/phase-8-acceptance.md` |
 | 2026-08-30 | Phase 8 live integration | `c0edbd5`, `77f2464` plus live evidence commit | fast-forward and push live main; live check/format; focused Goal/Goal Worker/metering suites; smoke | 198 Goal + 57 Goal Worker/metering pass; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 9 not started |
-| 2026-08-31 | Phase 9 shareable interactive Artifacts | pending commit | repeated adversarial security/correctness/interface/visual review; native loopback/Chromium; check/format/unit/integration/smoke/live backends | 750 unit; 433 integration + 5 skips with 16/16 isolated load-failure reruns; 22 delegated; smoke pass; live backends 5/5; viewer visual pass | Pass isolated | F23 complete; static protected Vercel adapter; remote interactive/live refused; `docs/verification/phase-9-acceptance.md` |
+| 2026-08-31 | Phase 9 shareable interactive Artifacts | `16bdccd` | repeated adversarial security/correctness/interface/visual review; native loopback/Chromium; check/format/unit/integration/smoke/live backends | 750 unit; 433 integration + 5 skips with 16/16 isolated load-failure reruns; 22 delegated; smoke pass; live backends 5/5; viewer visual pass | Pass isolated | F23 complete; static protected Vercel adapter; remote interactive/live refused; `docs/verification/phase-9-acceptance.md` |
+| 2026-08-31 | Phase 9 live integration | `16bdccd` plus live evidence commit | fast-forward/push live main; platform clean install/audit; live check/format; focused Phase 9; repository smoke | 62 focused pass; audit zero vulnerabilities; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 10 not started |
 
 # Decision log
 
