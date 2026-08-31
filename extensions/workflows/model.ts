@@ -92,6 +92,7 @@ export interface WorkflowDetails {
   agents: AgentRecord[];
   result?: unknown;
   resultArtifact?: string;
+  platformArtifactId?: string;
   transcriptArtifact?: string;
   error?: string;
 }

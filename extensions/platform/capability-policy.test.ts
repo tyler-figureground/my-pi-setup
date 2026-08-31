@@ -56,6 +56,7 @@ test("current built-in and custom tools classify by both name and source", () =>
     ["custom", "session_list", "read"],
     ["custom", "session_send", "orchestration"],
     ["custom", "memory_search", "read"],
+    ["custom", "artifact_inspect", "read"],
   ] as const;
 
   for (const [source, name, operation] of expected) {

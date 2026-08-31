@@ -1370,6 +1370,11 @@ export function createLanguageIntelligence(
           body: completeBody,
           filename: `language-${request.kind}.json`,
           mediaType: "application/json",
+          title: `Language Intelligence ${request.kind}`,
+          creator: "language-intelligence",
+          projectId: options.project.projectId,
+          kind: "json",
+          sensitivity: "internal",
           metadata: {
             source: "language-intelligence",
             advisory: true,

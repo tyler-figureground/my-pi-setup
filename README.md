@@ -24,6 +24,8 @@ This setup is fairly opinionated, it:
 - batches terminal, file, named poll, and allowlisted WebSocket events through lifecycle-owned Reactive Monitors
 - runs fenced one-shot, interval, and timezone-aware Scheduled Prompts through exact named Agent Profiles
 - routes complete declarative Hooks through one bounded TriggerEngine with visible history and trust revalidation
+- executes persistent evidence-gated Goals through bounded declarative task graphs
+- opens and shares sanitized or sandboxed interactive Artifacts with expiring, revocable access
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

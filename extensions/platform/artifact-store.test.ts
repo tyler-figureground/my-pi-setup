@@ -51,6 +51,11 @@ for (const fixture of fixtures) {
         body: "hello",
         filename: "greeting.txt",
         mediaType: "text/plain",
+        title: "Greeting",
+        creator: "test-suite",
+        projectId: "git:project",
+        kind: "markdown",
+        sensitivity: "internal",
         metadata: { source: "contract" },
       });
 
@@ -60,6 +65,11 @@ for (const fixture of fixtures) {
       assert.equal(put.value.sha256, HELLO_SHA256);
       assert.equal(put.value.size, 5);
       assert.equal(put.value.filename, "greeting.txt");
+      assert.equal(put.value.title, "Greeting");
+      assert.equal(put.value.creator, "test-suite");
+      assert.equal(put.value.projectId, "git:project");
+      assert.equal(put.value.kind, "markdown");
+      assert.equal(put.value.sensitivity, "internal");
 
       const get = await store.get(put.value.id);
       assert.equal(get.ok, true);
@@ -71,7 +81,7 @@ for (const fixture of fixtures) {
     }
   });
 
-  test(`${fixture.name}: duplicate bodies reject conflicting logical metadata`, async () => {
+  test(`${fixture.name}: duplicate bodies reject conflicting security metadata`, async () => {
     const { store, cleanup } = await fixture.create();
     try {
       const first = await store.put({
@@ -252,6 +262,72 @@ for (const fixture of fixtures) {
         });
       }
       assert.equal((await store.put({ body: "next" })).ok, true);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${fixture.name}: catalog listing is bounded and explicit removal deletes body access`, async () => {
+    let now = 10;
+    const { store, cleanup } = await fixture.create({ clock: () => now++ });
+    try {
+      const first = await store.put({ body: "first", filename: "first.txt" });
+      const second = await store.put({
+        body: "second",
+        filename: "second.txt",
+      });
+      assert.equal(first.ok, true);
+      assert.equal(second.ok, true);
+      if (!first.ok || !second.ok) return;
+
+      const page = await store.list({ limit: 1 });
+      assert.equal(page.ok, true);
+      if (!page.ok) return;
+      assert.equal(page.value.artifacts.length, 1);
+      assert.equal(page.value.artifacts[0]?.id, second.value.id);
+      assert.equal(page.value.nextCursor, second.value.id);
+
+      const next = await store.list({
+        limit: 10,
+        cursor: page.value.nextCursor,
+      });
+      assert.equal(next.ok, true);
+      if (!next.ok) return;
+      assert.deepEqual(
+        next.value.artifacts.map(({ id }) => id),
+        [first.value.id],
+      );
+      assert.equal(next.value.nextCursor, undefined);
+
+      const removed = await store.remove(first.value.id);
+      assert.equal(removed.ok, true);
+      if (removed.ok) assert.equal(removed.value.id, first.value.id);
+      const missing = await store.get(first.value.id);
+      assert.equal(missing.ok, false);
+      if (!missing.ok) assert.equal(missing.error.code, "artifact_not_found");
+
+      const invalidLimit = await store.list({ limit: 0 });
+      assert.equal(invalidLimit.ok, false);
+      if (!invalidLimit.ok)
+        assert.equal(invalidLimit.error.code, "invalid_input");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${fixture.name}: failed batch rolls back every body created by that batch`, async () => {
+    const { store, cleanup } = await fixture.create({
+      limits: { maxArtifactBytes: 4, maxTotalBytes: 4 },
+    });
+    try {
+      const result = await store.putBatch([
+        { body: "1234", mediaType: "text/plain" },
+        { body: "5678", mediaType: "text/plain" },
+      ]);
+      assert.equal(result.ok, false);
+      const listed = await store.list();
+      assert.equal(listed.ok, true);
+      if (listed.ok) assert.equal(listed.value.artifacts.length, 0);
     } finally {
       await cleanup();
     }

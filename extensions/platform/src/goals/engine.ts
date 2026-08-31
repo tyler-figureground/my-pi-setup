@@ -2204,6 +2204,18 @@ export function createGoalRuntime(options: GoalRuntimeOptions): GoalRuntime {
         body: candidate.body,
         filename: candidate.filename,
         mediaType: candidate.mediaType,
+        title: "Goal Evidence",
+        creator: "goal-worker",
+        projectId: binding.projectId,
+        kind:
+          candidate.mediaType === "application/json"
+            ? "json"
+            : candidate.mediaType.startsWith("image/")
+              ? "image"
+              : candidate.mediaType === "text/html"
+                ? "html"
+                : "other",
+        sensitivity: "internal",
         metadata: {
           kind: candidate.metadata.kind,
           trust: candidate.metadata.trust,

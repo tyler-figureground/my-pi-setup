@@ -8,7 +8,28 @@ Execute every feature marked `[X]` in `C:/Users/Tyler/pi-competitor-feature-chec
 
 ## Current phase
 
-Phase 8 F13 Persistent Task Graph and Goal Mode complete, published, and live-integrated. Phase 9 has not started and must not start without explicit approval.
+Phase 9 F23 Shareable Interactive Artifacts complete and accepted in isolated worktree. Publication/live integration pending. Phase 10 has not started.
+
+## Phase 9 delivered
+
+- Deep Artifact Publisher with exact publish/refresh/status/revoke authority, optimistic revisions, Unknown recovery, shutdown fencing, and body-free records.
+- Project Identity-namespaced Artifact catalog with first-class metadata, safe list/remove/export, one-lock batch import, and integrity-manifest bundles.
+- Loopback-only local viewer with fragment capability exchange, exact Host/Origin/Fetch Metadata checks, scoped HttpOnly cookie, static sanitization, opaque-origin interactive sandbox, network denial, expiry, revoke, and live revisions.
+- Static Vercel preview adapter with verified project protection, exact project/intent/preview response validation, expiring links, OS-vault secrets, pre-dispatch intent recovery, bounded REST transport, idempotent revoke/delete, and outage runbook. Remote interactive/live HTML intentionally refused.
+- Direct-user `/artifacts` creation/browser/open/refresh/share/status/revoke/export/import/delete/credential surface plus bounded `artifact_inspect` and body-free transcript references.
+- Review, Browser, Goal, Language Intelligence, and Workflow producer integration.
+- Exact `marked@18.0.10` plus `sanitize-html@2.17.7`, audited and dynamically loaded.
+
+## Phase 9 verification
+
+- TypeScript and formatting pass.
+- Unit: 750 pass.
+- Integration: 433 pass, 5 platform skips; two unrelated cumulative-load startup failures passed 16/16 immediately in isolation. Earlier same-tree full run passed 435 plus 5 skips.
+- Delegated file-search: 22 pass.
+- Smoke: schemas, print, JSON, RPC, reload, shutdown, no leaks.
+- Live backends: Claude 2/2, Codex 2/2, Pi 1/1.
+- Real Chromium viewer: opaque parent, network denial, interaction, screenshot, zero errors/failed requests.
+- Repeated adversarial review closed every critical/high finding; final post-dispatch signoff passed.
 
 ## Phase 8 delivered
 
@@ -49,12 +70,14 @@ Authoritative details: `docs/verification/phase-8-acceptance.md`.
 
 ## Repository state
 
-- Branch: `pi-capabilities-phase-8`
-- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-8`
-- Base: accepted Phase 7 live head `282cec3`
-- Accepted Phase 8 implementation: `c0edbd5`, `77f2464`
-- Live `main` and `fork/main` fast-forwarded through `77f2464`
+- Branch: `pi-capabilities-phase-9`
+- Worktree: `C:/Users/Tyler/.worktrees/my-pi-setup/pi-capabilities-phase-9`
+- Base: accepted Phase 8 live head `6e185f3` from fetched `fork/main`
+- Start state: ahead 0 / behind 0; Phase 9 absent upstream
+- Implementation accepted but not yet committed/pushed or live-integrated.
 - Preserve live deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups.
+- Phase checkpoint: `.agent/handoff/pi-capabilities-phase-9.md`
+- Acceptance: `docs/verification/phase-9-acceptance.md`
 
 ## Live integration
 
@@ -66,4 +89,4 @@ Authoritative details: `docs/verification/phase-8-acceptance.md`.
 
 ## Next exact action
 
-Stop. Phase 9 requires explicit approval.
+Run publication preflight, commit/push Phase 9, fast-forward live main, install platform dependencies, and run live focused/smoke verification. Stop before Phase 10.

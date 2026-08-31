@@ -57,6 +57,20 @@ import { createHooksCapability } from "./wiring/hooks.ts";
 import { createMonitorCapability } from "./wiring/monitors.ts";
 import { createSchedulerCapability } from "./wiring/scheduler.ts";
 import { createGoalCapability } from "./wiring/goals.ts";
+import { createArtifactCapability } from "./wiring/artifacts.ts";
+import {
+  defaultPlatformArtifactConfiguration,
+  type PlatformArtifactConfiguration,
+} from "./artifacts/config.ts";
+import {
+  createArtifactPublisher,
+  createLocalArtifactPublicationAdapter,
+  createStateStorePublicationRepository,
+  createVaultPublicationSecretStore,
+  createVercelArtifactPublicationAdapter,
+  createVercelRestTransport,
+} from "./artifacts/index.ts";
+import { bindArtifactProducer } from "./artifacts/producer-service.ts";
 import { createKeyringTriggerRecordAuthenticator } from "./automation/triggers/record-authentication.ts";
 import { createPlanCapability } from "./wiring/plan.ts";
 import { createRulesCapability } from "./wiring/rules.ts";
@@ -355,6 +369,7 @@ export interface PlatformExtensionOptions {
   monitors?: PlatformMonitorConfiguration;
   scheduler?: PlatformSchedulerConfiguration;
   goals?: PlatformGoalConfiguration;
+  artifacts?: PlatformArtifactConfiguration;
   hookActions?: PlatformHookActionConfiguration;
   mcpAdapter?: McpTransportAdapter;
   browserAdapter?: BrowserAdapter;
@@ -403,6 +418,7 @@ export function createPlatformExtension(
           monitors: options.monitors ?? defaultPlatformMonitorConfiguration,
           scheduler: options.scheduler ?? defaultPlatformSchedulerConfiguration,
           goals: options.goals ?? defaultPlatformGoalConfiguration,
+          artifacts: options.artifacts ?? defaultPlatformArtifactConfiguration,
           hookActions:
             options.hookActions ?? defaultPlatformHookActionConfiguration,
         };
@@ -452,6 +468,9 @@ export function createPlatformExtension(
       monitors?: ReturnType<typeof createMonitorCapability>;
       scheduler?: ReturnType<typeof createSchedulerCapability>;
       goals?: ReturnType<typeof createGoalCapability>;
+      artifacts?: ReturnType<typeof createArtifactCapability>;
+      retireArtifacts?: () => Promise<void>;
+      unbindArtifactProducer?: () => void;
       hookEventTail?: Promise<void>;
       unbindHookEventSink?: () => void;
       unbindAgentServices?: () => void;
@@ -474,6 +493,8 @@ export function createPlatformExtension(
     let schedulerCapability:
       ReturnType<typeof createSchedulerCapability> | undefined;
     let goalCapability: ReturnType<typeof createGoalCapability> | undefined;
+    let artifactCapability:
+      ReturnType<typeof createArtifactCapability> | undefined;
     let memoryAuthority:
       | {
           readonly runtime: PlatformRuntime;
@@ -490,6 +511,21 @@ export function createPlatformExtension(
     ) => {
       const failures: unknown[] = [];
       memoryAuthority = undefined;
+      try {
+        await current.artifacts?.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await current.retireArtifacts?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        current.unbindArtifactProducer?.();
+      } catch (error) {
+        failures.push(error);
+      }
       // Goal Mode stops first: it drives Agent execution through the same
       // subsystems the Scheduler uses, so its in-flight Attempts must settle
       // before the automation core below it goes away.
@@ -648,7 +684,8 @@ export function createPlatformExtension(
         configuration.flags.memory ||
         configuration.flags.monitors ||
         configuration.flags.scheduler ||
-        configuration.flags.goals;
+        configuration.flags.goals ||
+        configuration.flags.artifacts;
       if (!platformEnabled || role !== "parent") return;
 
       const projectIdentity = makeProjectIdentity();
@@ -672,9 +709,17 @@ export function createPlatformExtension(
         (sharedState ??= makeStateStore({
           path: path.join(agentDir, "state", "platform.sqlite"),
         }));
+      const artifactNamespace = createHash("sha256")
+        .update(project.projectId)
+        .digest("hex")
+        .slice(0, 32);
       const artifactStore = () =>
         (sharedArtifacts ??= makeArtifactStore({
-          root: platformArtifactRoot(agentDir),
+          root: path.join(
+            platformArtifactRoot(agentDir),
+            "projects",
+            artifactNamespace,
+          ),
         }));
       const platformMode = () => {
         const state = runtime?.plan?.mode()?.status().state;
@@ -702,6 +747,153 @@ export function createPlatformExtension(
       });
       const credentialVault =
         options.credentialVault ?? createLazyCredentialVault();
+
+      if (configuration.flags.artifacts) {
+        if (!projectTrusted) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              "Artifact viewing and sharing require a trusted project.",
+              "warning",
+            );
+        } else {
+          const state = stateStore();
+          if (!state.ok) {
+            if (ctx.hasUI) ctx.ui.notify(state.error.message, "error");
+          } else {
+            artifactCapability ??= createArtifactCapability(pi, {
+              defaultExpiryMs: configuration.artifacts.defaultExpiryMs,
+              maxExpiryMs: configuration.artifacts.maxExpiryMs,
+            });
+            current.artifacts = artifactCapability;
+            const localViewer = await current.acquireDaemon({
+              id: "artifact-local-viewer",
+              async start() {
+                const viewer = createLocalArtifactPublicationAdapter();
+                return {
+                  value: viewer,
+                  close: () => viewer.close(),
+                };
+              },
+            });
+            const publicationAdapters = [localViewer.adapter];
+            const credentialScope = createHash("sha256")
+              .update(project.projectId)
+              .digest("hex");
+            const providerBinding = (projectName: string, teamId?: string) => ({
+              integration: "artifact" as const,
+              resourceId: `vercel-provider.${createHash("sha256")
+                .update(projectName)
+                .update("\0")
+                .update(teamId ?? "")
+                .digest("hex")
+                .slice(0, 32)}`,
+              origin: "https://api.vercel.com",
+              scope: credentialScope,
+            });
+            const vercel = configuration.artifacts.vercel;
+            let providerCanary: (() => Promise<string | undefined>) | undefined;
+            if (vercel) {
+              providerCanary = () =>
+                credentialVault.resolve(
+                  vercel.credentialReference,
+                  providerBinding(vercel.project, vercel.teamId),
+                );
+              publicationAdapters.push(
+                createVercelArtifactPublicationAdapter({
+                  project: vercel.project,
+                  transport: createVercelRestTransport({
+                    project: vercel.project,
+                    ...(vercel.teamId ? { teamId: vercel.teamId } : {}),
+                    token: providerCanary,
+                  }),
+                  secrets: createVaultPublicationSecretStore({
+                    state: state.value,
+                    vault: credentialVault,
+                    projectId: project.projectId,
+                  }),
+                }),
+              );
+            }
+            const sharedArtifactStore = artifactStore();
+            current.unbindArtifactProducer = bindArtifactProducer(pi.events, {
+              async put(input) {
+                const stored = await sharedArtifactStore.put({
+                  ...input,
+                  projectId: project.projectId,
+                });
+                return stored;
+              },
+            });
+            const publicationRepository = createStateStorePublicationRepository(
+              state.value,
+              project.projectId,
+            );
+            const publicationOwnerId = `artifact-${randomUUID()}`;
+            current.retireArtifacts = async () => {
+              const publications = await publicationRepository.list();
+              if (!publications.ok) throw new Error(publications.error.message);
+              for (const record of publications.value) {
+                if (
+                  record.ownerId !== publicationOwnerId ||
+                  record.publication.target !== "local" ||
+                  ["revoked", "expired", "failed"].includes(
+                    record.publication.state,
+                  )
+                )
+                  continue;
+                const retired = await publicationRepository.update({
+                  ...record,
+                  publication: {
+                    ...record.publication,
+                    state: "revoked",
+                    observedAt: Date.now(),
+                  },
+                });
+                if (!retired.ok) throw new Error(retired.error.message);
+              }
+            };
+            artifactCapability.start({
+              artifacts: sharedArtifactStore,
+              projectId: project.projectId,
+              publications: publicationRepository,
+              credentials: {
+                async store(secret, projectName, teamId) {
+                  const stored = await credentialVault.store({
+                    binding: providerBinding(projectName, teamId),
+                    secret,
+                  });
+                  return stored.ok ? stored.value.reference : undefined;
+                },
+                remove: (reference, projectName, teamId) =>
+                  credentialVault.remove(
+                    reference,
+                    providerBinding(projectName, teamId),
+                  ),
+              },
+              publisher: createArtifactPublisher({
+                artifacts: sharedArtifactStore,
+                adapters: publicationAdapters,
+                publications: publicationRepository,
+                policy,
+                actor: role,
+                mode: platformMode,
+                authority: artifactCapability.authority,
+                ownerId: publicationOwnerId,
+                refreshLocal: localViewer.update,
+                ...(providerCanary
+                  ? {
+                      sensitivityCanaries: async () => {
+                        const value = await providerCanary();
+                        return value ? [value] : [];
+                      },
+                    }
+                  : {}),
+              }),
+            });
+          }
+        }
+      }
+
       const queuedPlatformEvents: PlatformHookEventEnvelope[] = [];
       let publishPlatformEvent:
         ((envelope: PlatformHookEventEnvelope) => Promise<void>) | undefined;

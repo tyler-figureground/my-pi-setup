@@ -200,6 +200,11 @@ function normalizeDetails(
       typeof record.resultArtifact === "string"
         ? record.resultArtifact
         : undefined,
+    platformArtifactId:
+      typeof record.platformArtifactId === "string" &&
+      /^[a-f0-9]{64}$/u.test(record.platformArtifactId)
+        ? record.platformArtifactId
+        : undefined,
     transcriptArtifact:
       typeof record.transcriptArtifact === "string"
         ? record.transcriptArtifact

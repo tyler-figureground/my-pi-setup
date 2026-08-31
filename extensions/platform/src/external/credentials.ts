@@ -50,7 +50,9 @@ export function normalizeCredentialBinding(
 ): CredentialBinding {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(binding.resourceId) ||
-    !["mcp", "browser", "monitor", "hook"].includes(binding.integration)
+    !["mcp", "browser", "monitor", "hook", "artifact"].includes(
+      binding.integration,
+    )
   )
     throw new TypeError("Credential binding is invalid.");
   if (

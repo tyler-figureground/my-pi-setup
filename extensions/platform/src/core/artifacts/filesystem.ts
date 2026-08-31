@@ -3,8 +3,10 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { success } from "../result.ts";
 import type {
   ArtifactMetadata,
+  ArtifactOutcome,
   ArtifactStore,
   FileSystemArtifactStoreOptions,
+  PutArtifactInput,
 } from "./model.ts";
 import { exportArtifact } from "./exporter.ts";
 import {
@@ -23,6 +25,7 @@ import {
   serializeMetadata,
   sha256,
   validateArtifactId,
+  validateArtifactMetadata,
   validateLimits,
   validateStoredArtifact,
 } from "./shared.ts";
@@ -143,90 +146,156 @@ export function createFileSystemArtifactStore(
     return total;
   }
 
-  return {
+  function prepare(input: PutArtifactInput):
+    | { readonly ok: false; readonly outcome: ArtifactOutcome<never> }
+    | {
+        readonly ok: true;
+        readonly body: Buffer;
+        readonly serialized: string;
+        readonly snapshot: ArtifactMetadata;
+      } {
+    const body = artifactBody(input.body);
+    if (body.byteLength > limits.maxArtifactBytes)
+      return {
+        ok: false,
+        outcome: artifactError(
+          "artifact_too_large",
+          "Artifact exceeds per-artifact limit",
+        ),
+      };
+    const metadata = createMetadata(input, body, clock());
+    if (!metadata.ok) return { ok: false, outcome: metadata };
+    const serialized = serializeMetadata(
+      metadata.value,
+      limits.maxMetadataBytes,
+    );
+    if (!serialized.ok) return { ok: false, outcome: serialized };
+    return {
+      ok: true,
+      body,
+      serialized: serialized.value,
+      snapshot: JSON.parse(serialized.value) as ArtifactMetadata,
+    };
+  }
+
+  async function putUnlocked(prepared: {
+    body: Buffer;
+    serialized: string;
+    snapshot: ArtifactMetadata;
+  }) {
+    const { body, serialized, snapshot } = prepared;
+    const existing = await readStoredArtifact(snapshot.id);
+    if (existing.ok)
+      return {
+        outcome: artifactMetadataCompatible(existing.value.metadata, snapshot)
+          ? success(existing.value.metadata)
+          : artifactError(
+              "metadata_conflict",
+              `Artifact metadata conflicts for body: ${snapshot.id}`,
+            ),
+        created: undefined,
+      };
+    if (existing.error.code !== "artifact_not_found")
+      return { outcome: existing, created: undefined };
+    const bodyPath = join(bodies, snapshot.id);
+    let bodyExists = false;
+    try {
+      const persistedBody = await readBoundedRegularFile(
+        bodyPath,
+        limits.maxArtifactBytes,
+      );
+      bodyExists = true;
+      if (sha256(persistedBody) !== snapshot.id)
+        return {
+          outcome: artifactError(
+            "corrupt_artifact",
+            `Artifact body hash collision: ${snapshot.id}`,
+          ),
+          created: undefined,
+        };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const additionalBytes = bodyExists ? 0 : body.byteLength;
+    if ((await storedBytes()) + additionalBytes > limits.maxTotalBytes)
+      return {
+        outcome: artifactError(
+          "quota_exceeded",
+          "Artifact store quota exceeded",
+        ),
+        created: undefined,
+      };
+    const bodyCreated = bodyExists
+      ? false
+      : await writeFileAtomicNew(bodyPath, body);
+    try {
+      const metadataCreated = await writeFileAtomicNew(
+        join(metadataDirectory, `${snapshot.id}.json`),
+        serialized,
+      );
+      if (!metadataCreated) {
+        if (bodyCreated) await unlink(bodyPath).catch(() => undefined);
+        const raced = await readStoredArtifact(snapshot.id);
+        return {
+          outcome: raced.ok ? success(raced.value.metadata) : raced,
+          created: undefined,
+        };
+      }
+      return {
+        outcome: success(snapshot),
+        created: { id: snapshot.id, bodyCreated, metadataCreated: true },
+      };
+    } catch (error) {
+      if (bodyCreated) await unlink(bodyPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  const store: ArtifactStore = {
     async put(input) {
       try {
-        const body = artifactBody(input.body);
-        if (body.byteLength > limits.maxArtifactBytes) {
-          return artifactError(
-            "artifact_too_large",
-            "Artifact exceeds per-artifact limit",
-          );
-        }
-        const metadata = createMetadata(input, body, clock());
-        if (!metadata.ok) return metadata;
-        const serialized = serializeMetadata(
-          metadata.value,
-          limits.maxMetadataBytes,
+        const prepared = prepare(input);
+        if (!prepared.ok) return prepared.outcome;
+        return await withValidatedStoreLock(
+          async () => (await putUnlocked(prepared)).outcome,
         );
-        if (!serialized.ok) return serialized;
-        const snapshot = JSON.parse(serialized.value) as ArtifactMetadata;
+      } catch (error) {
+        return ioError(error);
+      }
+    },
 
+    async putBatch(inputs) {
+      if (inputs.length < 1 || inputs.length > 1_000)
+        return artifactError(
+          "invalid_input",
+          "Artifact batch must contain 1 through 1000 entries",
+        );
+      try {
+        const prepared = inputs.map(prepare);
+        const invalid = prepared.find((entry) => !entry.ok);
+        if (invalid && !invalid.ok) return invalid.outcome;
         return await withValidatedStoreLock(async () => {
-          const existing = await readStoredArtifact(snapshot.id);
-          if (existing.ok) {
-            if (
-              !artifactMetadataCompatible(existing.value.metadata, snapshot)
-            ) {
-              return artifactError(
-                "metadata_conflict",
-                `Artifact metadata conflicts for body: ${snapshot.id}`,
-              );
-            }
-            return success(existing.value.metadata);
-          }
-          if (existing.error.code !== "artifact_not_found") return existing;
-
-          const bodyPath = join(bodies, snapshot.id);
-          let bodyExists = false;
-          try {
-            const persistedBody = await readBoundedRegularFile(
-              bodyPath,
-              limits.maxArtifactBytes,
-            );
-            bodyExists = true;
-            if (sha256(persistedBody) !== snapshot.id) {
-              return artifactError(
-                "corrupt_artifact",
-                `Artifact body hash collision: ${snapshot.id}`,
-              );
-            }
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          }
-
-          const additionalBytes = bodyExists ? 0 : body.byteLength;
-          if ((await storedBytes()) + additionalBytes > limits.maxTotalBytes) {
-            return artifactError(
-              "quota_exceeded",
-              "Artifact store quota exceeded",
-            );
-          }
-
-          const bodyCreated = bodyExists
-            ? false
-            : await writeFileAtomicNew(bodyPath, body);
-          try {
-            const metadataCreated = await writeFileAtomicNew(
-              join(metadataDirectory, `${snapshot.id}.json`),
-              serialized.value,
-            );
-            if (!metadataCreated) {
-              const raced = await readStoredArtifact(snapshot.id);
-              if (raced.ok) return success(raced.value.metadata);
-              return raced;
-            }
-          } catch (error) {
-            if (bodyCreated) {
-              try {
-                await unlink(bodyPath);
-              } catch {
-                // Preserve metadata persistence failure.
+          const created: Array<{
+            id: string;
+            bodyCreated: boolean;
+            metadataCreated: boolean;
+          }> = [];
+          const results: ArtifactMetadata[] = [];
+          for (const entry of prepared) {
+            if (!entry.ok) return entry.outcome;
+            const persisted = await putUnlocked(entry);
+            if (!persisted.outcome.ok) {
+              for (const item of created.reverse()) {
+                if (item.metadataCreated)
+                  await unlink(join(metadataDirectory, `${item.id}.json`));
+                if (item.bodyCreated) await unlink(join(bodies, item.id));
               }
+              return persisted.outcome;
             }
-            throw error;
+            if (persisted.created) created.push(persisted.created);
+            results.push(persisted.outcome.value);
           }
-          return success(snapshot);
+          return success(results);
         });
       } catch (error) {
         return ioError(error);
@@ -270,6 +339,121 @@ export function createFileSystemArtifactStore(
           artifact.value.body,
           input,
         );
+      } catch (error) {
+        return ioError(error);
+      }
+    },
+
+    async list(input = {}) {
+      try {
+        const limit = input.limit ?? 50;
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+          return artifactError(
+            "invalid_input",
+            "Artifact list limit must be an integer from 1 through 100",
+          );
+        }
+        if (input.cursor !== undefined && !validateArtifactId(input.cursor)) {
+          return artifactError(
+            "invalid_artifact_id",
+            `Invalid artifact cursor: ${input.cursor}`,
+          );
+        }
+        return await withValidatedStoreLock(async () => {
+          const current: ArtifactMetadata[] = [];
+          const entries = await readdir(metadataDirectory, {
+            withFileTypes: true,
+          });
+          for (const entry of entries) {
+            if (!entry.name.endsWith(".json")) continue;
+            const id = entry.name.slice(0, -".json".length);
+            if (!validateArtifactId(id)) continue;
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(
+                (
+                  await readBoundedRegularFile(
+                    join(metadataDirectory, entry.name),
+                    limits.maxMetadataBytes,
+                  )
+                ).toString("utf8"),
+              );
+            } catch {
+              continue;
+            }
+            const metadata = validateArtifactMetadata(id, parsed);
+            if (!metadata.ok) continue;
+            if (!isExpired(metadata.value, clock()))
+              current.push(metadata.value);
+          }
+          current.sort(
+            (left, right) =>
+              right.createdAt - left.createdAt ||
+              left.id.localeCompare(right.id),
+          );
+          const start =
+            input.cursor === undefined
+              ? 0
+              : current.findIndex(({ id }) => id === input.cursor) + 1;
+          if (input.cursor !== undefined && start === 0) {
+            return artifactError(
+              "invalid_input",
+              "Artifact list cursor is not present in the current catalog",
+            );
+          }
+          const page = current.slice(start, start + limit);
+          return success({
+            artifacts: page,
+            ...(start + page.length < current.length
+              ? { nextCursor: page.at(-1)!.id }
+              : {}),
+          });
+        });
+      } catch (error) {
+        return ioError(error);
+      }
+    },
+
+    async remove(id) {
+      try {
+        if (!validateArtifactId(id)) {
+          return artifactError(
+            "invalid_artifact_id",
+            `Invalid artifact id: ${id}`,
+          );
+        }
+        return await withValidatedStoreLock(async () => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(
+              (
+                await readBoundedRegularFile(
+                  join(metadataDirectory, `${id}.json`),
+                  limits.maxMetadataBytes,
+                )
+              ).toString("utf8"),
+            );
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT")
+              return artifactError(
+                "artifact_not_found",
+                `Artifact not found: ${id}`,
+              );
+            return artifactError(
+              "corrupt_artifact",
+              `Artifact metadata is invalid: ${id}`,
+            );
+          }
+          const metadata = validateArtifactMetadata(id, parsed);
+          if (!metadata.ok) return metadata;
+          await unlink(join(metadataDirectory, `${id}.json`));
+          try {
+            await unlink(join(bodies, id));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          return success(metadata.value);
+        });
       } catch (error) {
         return ioError(error);
       }
@@ -371,4 +555,5 @@ export function createFileSystemArtifactStore(
       }
     },
   };
+  return store;
 }

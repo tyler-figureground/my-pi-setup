@@ -49,6 +49,11 @@ import {
   type PlatformGoalConfiguration,
 } from "./goals/config.ts";
 import {
+  decodeArtifactConfiguration,
+  defaultPlatformArtifactConfiguration,
+  type PlatformArtifactConfiguration,
+} from "./artifacts/config.ts";
+import {
   decodePlatformFlags,
   defaultPlatformFlags,
   type PlatformDiagnostic,
@@ -242,6 +247,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly monitors: PlatformMonitorConfiguration;
   readonly scheduler: PlatformSchedulerConfiguration;
   readonly goals: PlatformGoalConfiguration;
+  readonly artifacts: PlatformArtifactConfiguration;
   readonly hookActions: PlatformHookActionConfiguration;
   readonly diagnostics: PlatformDiagnostic[];
 } {
@@ -272,6 +278,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
   let monitors = defaultPlatformMonitorConfiguration;
   let scheduler = defaultPlatformSchedulerConfiguration;
   let goals = defaultPlatformGoalConfiguration;
+  let artifacts = defaultPlatformArtifactConfiguration;
   let hookActions = defaultPlatformHookActionConfiguration;
   for (const source of sources) {
     if (!existsSync(source.path)) continue;
@@ -298,6 +305,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
                     "monitorSettings",
                     "schedulerSettings",
                     "goalSettings",
+                    "artifactSettings",
                     "hookActions",
                   ].includes(key),
               ),
@@ -343,6 +351,11 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
         goals,
         source.scope,
       );
+      const decodedArtifacts = decodeArtifactConfiguration(
+        object?.artifactSettings,
+        artifacts,
+        source.scope,
+      );
       const decodedHookActions = decodeHookActionConfiguration(
         object?.hookActions,
         hookActions,
@@ -358,6 +371,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
       monitors = decodedMonitors.monitors;
       scheduler = decodedScheduler.scheduler;
       goals = decodedGoals.goals;
+      artifacts = decodedArtifacts.artifacts;
       hookActions = {
         http: decodedHookActions.http,
         mcp: decodedHookActions.mcp,
@@ -374,6 +388,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
           ...decodedMonitors.diagnostics,
           ...decodedScheduler.diagnostics,
           ...decodedGoals.diagnostics,
+          ...decodedArtifacts.diagnostics,
           ...decodedHookActions.diagnostics,
         ].map((diagnostic) => ({
           path: `${source.path}:${diagnostic.path}`,
@@ -412,6 +427,7 @@ export function loadPlatformFlags(location: PlatformConfigLocation): {
     monitors,
     scheduler,
     goals,
+    artifacts,
     hookActions,
     diagnostics,
   };

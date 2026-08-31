@@ -75,62 +75,126 @@ export function validateFilename(filename: string) {
   );
 }
 
-export function validateStoredArtifact(
+const artifactTypes = new Set([
+  "markdown",
+  "html",
+  "json",
+  "image",
+  "bundle",
+  "other",
+]);
+const artifactSensitivities = new Set([
+  "unknown",
+  "public",
+  "internal",
+  "confidential",
+  "restricted",
+]);
+
+function boundedText(value: unknown, maximum: number) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= maximum &&
+    !value.includes("\0")
+  );
+}
+
+export function validateArtifactMetadata(
   id: string,
   metadataValue: unknown,
-  body: Uint8Array,
-): ArtifactOutcome<StoredArtifact> {
+): ArtifactOutcome<ArtifactMetadata> {
   if (
     typeof metadataValue !== "object" ||
     metadataValue === null ||
     Array.isArray(metadataValue)
-  ) {
+  )
     return artifactError(
       "corrupt_artifact",
       `Invalid metadata for artifact: ${id}`,
     );
-  }
   const candidate = metadataValue as Record<string, unknown>;
-  const actualSha256 = sha256(body);
   const filename = candidate.filename;
   const mediaType = candidate.mediaType;
+  const title = candidate.title;
+  const creator = candidate.creator;
+  const projectId = candidate.projectId;
+  const kind = candidate.kind;
+  const sensitivity = candidate.sensitivity;
   const customMetadata = candidate.metadata;
   const expiresAt = candidate.expiresAt;
   if (
     candidate.id !== id ||
     candidate.sha256 !== id ||
-    candidate.size !== body.byteLength ||
-    actualSha256 !== id ||
+    !Number.isSafeInteger(candidate.size) ||
+    Number(candidate.size) < 0 ||
     !Number.isSafeInteger(candidate.createdAt) ||
     (filename !== undefined &&
       (typeof filename !== "string" || !validateFilename(filename))) ||
-    (mediaType !== undefined && typeof mediaType !== "string") ||
+    (mediaType !== undefined &&
+      (typeof mediaType !== "string" ||
+        !boundedText(mediaType, 512) ||
+        /[\r\n]/u.test(mediaType))) ||
+    (title !== undefined && !boundedText(title, 512)) ||
+    (creator !== undefined && !boundedText(creator, 256)) ||
+    (projectId !== undefined && !boundedText(projectId, 512)) ||
+    (kind !== undefined && !artifactTypes.has(String(kind))) ||
+    (sensitivity !== undefined &&
+      !artifactSensitivities.has(String(sensitivity))) ||
     (customMetadata !== undefined &&
       (typeof customMetadata !== "object" ||
         customMetadata === null ||
         Array.isArray(customMetadata))) ||
     (expiresAt !== undefined &&
       (!Number.isSafeInteger(expiresAt) || Number(expiresAt) < 0))
-  ) {
+  )
+    return artifactError(
+      "corrupt_artifact",
+      `Artifact metadata failed validation: ${id}`,
+    );
+  return success({
+    id,
+    sha256: id,
+    size: Number(candidate.size),
+    createdAt: Number(candidate.createdAt),
+    ...(filename === undefined ? {} : { filename: String(filename) }),
+    ...(mediaType === undefined ? {} : { mediaType: String(mediaType) }),
+    ...(title === undefined ? {} : { title: String(title) }),
+    ...(creator === undefined ? {} : { creator: String(creator) }),
+    ...(projectId === undefined ? {} : { projectId: String(projectId) }),
+    ...(kind === undefined
+      ? {}
+      : { kind: String(kind) as ArtifactMetadata["kind"] }),
+    ...(sensitivity === undefined
+      ? {}
+      : {
+          sensitivity: String(sensitivity) as ArtifactMetadata["sensitivity"],
+        }),
+    ...(customMetadata === undefined
+      ? {}
+      : { metadata: customMetadata as JsonObject }),
+    ...(expiresAt === undefined ? {} : { expiresAt: Number(expiresAt) }),
+  });
+}
+
+export function validateStoredArtifact(
+  id: string,
+  metadataValue: unknown,
+  body: Uint8Array,
+): ArtifactOutcome<StoredArtifact> {
+  const metadata = validateArtifactMetadata(id, metadataValue);
+  const actualSha256 = sha256(body);
+  if (
+    !metadata.ok ||
+    metadata.value.size !== body.byteLength ||
+    actualSha256 !== id
+  )
     return artifactError(
       "corrupt_artifact",
       `Artifact integrity check failed: ${id}`,
       { details: { expectedSha256: id, actualSha256 } },
     );
-  }
-  const metadata: ArtifactMetadata = {
-    id,
-    sha256: id,
-    size: body.byteLength,
-    createdAt: Number(candidate.createdAt),
-    ...(filename === undefined ? {} : { filename: String(filename) }),
-    ...(mediaType === undefined ? {} : { mediaType: String(mediaType) }),
-    ...(customMetadata === undefined
-      ? {}
-      : { metadata: customMetadata as JsonObject }),
-    ...(expiresAt === undefined ? {} : { expiresAt: Number(expiresAt) }),
-  };
-  return success({ metadata, body: Buffer.from(body) });
+  return success({ metadata: metadata.value, body: Buffer.from(body) });
 }
 
 export function serializeMetadata(
@@ -163,12 +227,22 @@ export function artifactMetadataCompatible(
     {
       filename: existing.filename,
       mediaType: existing.mediaType,
+      title: existing.title,
+      creator: existing.creator,
+      projectId: existing.projectId,
+      kind: existing.kind,
+      sensitivity: existing.sensitivity,
       metadata: existing.metadata,
       expiresAt: existing.expiresAt,
     },
     {
       filename: requested.filename,
       mediaType: requested.mediaType,
+      title: requested.title,
+      creator: requested.creator,
+      projectId: requested.projectId,
+      kind: requested.kind,
+      sensitivity: requested.sensitivity,
       metadata: requested.metadata,
       expiresAt: requested.expiresAt,
     },
@@ -199,6 +273,29 @@ export function createMetadata(
       "Artifact expiresAt must be a non-negative safe integer",
     );
   }
+  for (const [name, value, maximum] of [
+    ["title", input.title, 512],
+    ["creator", input.creator, 256],
+    ["projectId", input.projectId, 512],
+  ] as const) {
+    if (value !== undefined && !boundedText(value, maximum))
+      return artifactError(
+        "invalid_input",
+        `Artifact ${name} must be bounded non-empty text`,
+      );
+  }
+  if (
+    input.mediaType !== undefined &&
+    (!boundedText(input.mediaType, 512) || /[\r\n]/u.test(input.mediaType))
+  )
+    return artifactError("invalid_input", "Artifact mediaType is invalid");
+  if (input.kind !== undefined && !artifactTypes.has(input.kind))
+    return artifactError("invalid_input", "Artifact kind is invalid");
+  if (
+    input.sensitivity !== undefined &&
+    !artifactSensitivities.has(input.sensitivity)
+  )
+    return artifactError("invalid_input", "Artifact sensitivity is invalid");
   if (input.filename !== undefined && !validateFilename(input.filename)) {
     return artifactError(
       "invalid_filename",
@@ -213,6 +310,13 @@ export function createMetadata(
     createdAt,
     ...(input.filename === undefined ? {} : { filename: input.filename }),
     ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+    ...(input.title === undefined ? {} : { title: input.title }),
+    ...(input.creator === undefined ? {} : { creator: input.creator }),
+    ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+    ...(input.kind === undefined ? {} : { kind: input.kind }),
+    ...(input.sensitivity === undefined
+      ? {}
+      : { sensitivity: input.sensitivity }),
     ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
     ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
   });

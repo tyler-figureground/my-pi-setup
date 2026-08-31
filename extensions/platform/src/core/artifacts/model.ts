@@ -12,10 +12,21 @@ export interface ArtifactLimits {
   readonly maxMetadataBytes: number;
 }
 
+export type ArtifactType =
+  "markdown" | "html" | "json" | "image" | "bundle" | "other";
+
+export type ArtifactSensitivity =
+  "unknown" | "public" | "internal" | "confidential" | "restricted";
+
 export interface PutArtifactInput {
   readonly body: string | Uint8Array;
   readonly filename?: string;
   readonly mediaType?: string;
+  readonly title?: string;
+  readonly creator?: string;
+  readonly projectId?: string;
+  readonly kind?: ArtifactType;
+  readonly sensitivity?: ArtifactSensitivity;
   readonly metadata?: JsonObject;
   readonly expiresAt?: number;
 }
@@ -27,6 +38,11 @@ export interface ArtifactMetadata {
   readonly createdAt: number;
   readonly filename?: string;
   readonly mediaType?: string;
+  readonly title?: string;
+  readonly creator?: string;
+  readonly projectId?: string;
+  readonly kind?: ArtifactType;
+  readonly sensitivity?: ArtifactSensitivity;
   readonly metadata?: JsonObject;
   readonly expiresAt?: number;
 }
@@ -44,6 +60,16 @@ export interface ExportArtifactInput {
 export interface ExportedArtifact {
   readonly artifact: ArtifactMetadata;
   readonly path: string;
+}
+
+export interface ListArtifactsInput {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ArtifactPage {
+  readonly artifacts: readonly ArtifactMetadata[];
+  readonly nextCursor?: string;
 }
 
 export interface CollectArtifactsInput {
@@ -79,6 +105,10 @@ export type ArtifactOutcome<T> = Outcome<T, ArtifactStoreError>;
 export interface ArtifactStore {
   /** Persist a body and bounded metadata, or return existing metadata by hash. */
   put(input: PutArtifactInput): Promise<ArtifactOutcome<ArtifactMetadata>>;
+  /** Persist a bounded batch or roll back every body created by the failed batch. */
+  putBatch(
+    inputs: readonly PutArtifactInput[],
+  ): Promise<ArtifactOutcome<readonly ArtifactMetadata[]>>;
   /** Explicitly load a body. Artifact bodies are absent from put results. */
   get(id: string): Promise<ArtifactOutcome<StoredArtifact>>;
   /** Export one safe basename using create-new semantics; never overwrite. */
@@ -86,6 +116,10 @@ export interface ArtifactStore {
     id: string,
     input: ExportArtifactInput,
   ): Promise<ArtifactOutcome<ExportedArtifact>>;
+  /** List current metadata newest-first without returning bodies. */
+  list(input?: ListArtifactsInput): Promise<ArtifactOutcome<ArtifactPage>>;
+  /** Explicitly remove one artifact body and its metadata. */
+  remove(id: string): Promise<ArtifactOutcome<ArtifactMetadata>>;
   /** Remove artifacts whose expiresAt is less than or equal to now. */
   collect(
     input?: CollectArtifactsInput,

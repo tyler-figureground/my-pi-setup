@@ -1,6 +1,6 @@
 # Pi Capability Expansion Implementation Plan
 
-Status: **Phase 8 complete and live-integrated; Phase 9 pending explicit approval**
+Status: **Phase 9 complete in isolated worktree; live integration pending**
 Created: 2026-08-24
 Last updated: 2026-08-26
 Source decision file: `C:/Users/Tyler/pi-competitor-feature-checklist.md`
@@ -71,7 +71,7 @@ The reviewed file contains 15 `[X]` selections.
 | F14 | Path-scoped lazy project rules | 2 | [x] |
 | F15 | Reactive monitor | 7 | [x] |
 | F16 | Scheduled and recurring prompts | 7 | [x] |
-| F23 | Shareable interactive artifacts | 9 | [ ] |
+| F23 | Shareable interactive artifacts | 9 | [x] |
 
 ## Explicitly excluded
 
@@ -1040,57 +1040,57 @@ Feature: F13.
 
 ---
 
-# Phase 9 - Shareable interactive artifacts
+# Phase 9 - Shareable interactive artifacts **COMPLETE**
 
 Feature: F23.
 
 ## Artifact model and local viewer
 
-- [ ] Define artifact types: Markdown, HTML, JSON, image, bundle
-- [ ] Add metadata: title, creator, project, content hash, MIME type, size, created time, sensitivity, retention
-- [ ] Build local loopback viewer with random capability token
-- [ ] Bind loopback only
-- [ ] Sandbox HTML iframe and set strict Content Security Policy
-- [ ] Disable network by default in artifact HTML
-- [ ] Sanitize Markdown/HTML
-- [ ] Support live refresh for explicitly live artifacts
-- [ ] Add `/artifacts` browser, open, export, delete
-- [ ] Keep body outside model context
+- [x] Define artifact types: Markdown, HTML, JSON, image, bundle
+- [x] Add metadata: title, creator, project, content hash, MIME type, size, created time, sensitivity, retention
+- [x] Build local loopback viewer with random capability token
+- [x] Bind loopback only
+- [x] Sandbox HTML iframe and set strict Content Security Policy
+- [x] Disable network by default in artifact HTML
+- [x] Sanitize Markdown/HTML
+- [x] Support live refresh for explicitly live artifacts
+- [x] Add `/artifacts` browser, open, export, delete
+- [x] Keep body outside model context
 
 ## Sharing provider decision
 
-- [ ] Write requirements: private-by-default, authentication, expiry, revocation, size limits, no secret leakage, interactive HTML support
-- [ ] Evaluate existing hosted provider vs self-hosted option
-- [ ] Implement local publisher adapter
-- [ ] Implement one approved remote publisher adapter
-- [ ] Add explicit publish confirmation with sensitivity scan result
-- [ ] Return share URL and revocation handle
-- [ ] Support expiry and manual revoke
-- [ ] Never auto-publish from agent or schedule
-- [ ] Record provider/privacy ADR
+- [x] Write requirements: private-by-default, authentication, expiry, revocation, size limits, no secret leakage, interactive HTML support
+- [x] Evaluate existing hosted provider vs self-hosted option
+- [x] Implement local publisher adapter
+- [x] Implement one approved remote publisher adapter
+- [x] Add explicit publish confirmation with sensitivity scan result
+- [x] Return share URL and revocation handle
+- [x] Support expiry and manual revoke
+- [x] Never auto-publish from agent or schedule
+- [x] Record provider/privacy ADR
 
 ## Workflow integration
 
-- [ ] Let review, browser proof, goals, LSP reports, and workflows emit artifacts
-- [ ] Add `artifact` reference rendering to session without body injection
-- [ ] Support export/import bundle with integrity manifest
-- [ ] Link artifact evidence from goal/review completion
+- [x] Let review, browser proof, goals, LSP reports, and workflows emit artifacts
+- [x] Add `artifact` reference rendering to session without body injection
+- [x] Support export/import bundle with integrity manifest
+- [x] Link artifact evidence from goal/review completion
 
 ## Acceptance
 
-- [ ] Local Markdown/HTML/image/JSON render correctly
-- [ ] Script injection, traversal, oversized body, malformed MIME, and network escape tests pass
-- [ ] Export/import hash verification passes
-- [ ] Remote publish requires human confirmation
-- [ ] Revoke and expiry pass
-- [ ] Secret scanner blocks seeded credentials
-- [ ] Shared page contains no local filesystem paths or tokens
+- [x] Local Markdown/HTML/image/JSON render correctly
+- [x] Script injection, traversal, oversized body, malformed MIME, and network escape tests pass
+- [x] Export/import hash verification passes
+- [x] Remote publish requires human confirmation
+- [x] Revoke and expiry pass
+- [x] Secret scanner blocks seeded credentials
+- [x] Shared page contains no local filesystem paths or tokens
 
 ## Phase 9 exit gate
 
-- [ ] F23 local and remote acceptance complete
-- [ ] Privacy/security review complete
-- [ ] Provider outage and revoke runbooks tested
+- [x] F23 local and remote acceptance complete
+- [x] Privacy/security review complete
+- [x] Provider outage and revoke runbooks tested
 
 ---
 
@@ -1201,6 +1201,7 @@ Add one row for every phase exit and material regression fix.
 | 2026-08-29 | Phase 7 live integration | `8f88ece` plus live evidence commit | fast-forward and push live main; platform install/audit; live check/format; focused Phase 7 suite; smoke; live backends | 214 focused pass + 4 platform skips; audit zero vulnerabilities; smoke pass; Claude/Codex/Pi 5/5 | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 8 not started |
 | 2026-08-30 | Phase 8 persistent task graph and Goal Mode | `c0edbd5`, `77f2464` | repeated adversarial review/fix cycles; native SQLite races; real Windows killed-parent drill; 72-hour fake-time soak; cumulative token metering; check/format/unit/integration/smoke/live | 712 unit; 433 integration + 22 delegated; 5 platform skips; smoke pass; earlier live 5/5; final strict Codex/Pi pass with Claude quota-blocked | Pass isolated with external Claude limit | F13 complete; no Workflow changes; `docs/verification/phase-8-acceptance.md` |
 | 2026-08-30 | Phase 8 live integration | `c0edbd5`, `77f2464` plus live evidence commit | fast-forward and push live main; live check/format; focused Goal/Goal Worker/metering suites; smoke | 198 Goal + 57 Goal Worker/metering pass; smoke print/JSON/RPC/reload/shutdown/leaks | Pass | Preserved deleted `AGENTS.md`, untracked `skills/impeccable/`, and dependency backups; Phase 9 not started |
+| 2026-08-31 | Phase 9 shareable interactive Artifacts | pending commit | repeated adversarial security/correctness/interface/visual review; native loopback/Chromium; check/format/unit/integration/smoke/live backends | 750 unit; 433 integration + 5 skips with 16/16 isolated load-failure reruns; 22 delegated; smoke pass; live backends 5/5; viewer visual pass | Pass isolated | F23 complete; static protected Vercel adapter; remote interactive/live refused; `docs/verification/phase-9-acceptance.md` |
 
 # Decision log
 
@@ -1234,6 +1235,8 @@ Record durable decisions here, then link a full ADR when needed.
 | D024 | 2026-08-29 | Authenticate restart-only Trigger records with an agent-scoped OS-keyring HMAC envelope | Accepted | Filesystem write access alone must not fabricate automation events; missing keys fail closed and verification never rotates |
 | D025 | 2026-08-29 | Scheduler request identity is project-global and admission/eviction/mutation/receipt commit share one optimistic transactional gate | Accepted | Native multi-process cap and same/cross-scope conflict probes require bounded storage and one intent per request ID |
 | D026 | 2026-08-30 | Goal execution uses at-most-once opaque dispatch and blocks ambiguous post-dispatch Attempts as Unknown | Accepted | Exactly-once local transitions are possible; exactly-once external Agent effects are not; `docs/architecture/phase-8-goal-mode.md` |
+| D027 | 2026-08-31 | Artifact bodies remain SHA-256 addressed inside Project Identity namespaces; producer/run provenance stays on references while conflicting intrinsic/security metadata remains rejected | Accepted; preserves D014 | Prevent cross-project enumeration and security-metadata confusion without duplicating bytes; `docs/architecture/phase-9-artifacts.md` |
+| D028 | 2026-08-31 | Remote Vercel publishing accepts sanitized static snapshots only; interactive/live HTML remains local | Accepted | CSP cannot prevent top-level navigation exfiltration; local opaque-origin iframe supplies containment; ADR `docs/adr/0012-publish-artifacts-through-protected-vercel-previews.md` |
 
 # Risk register
 
@@ -1252,7 +1255,7 @@ Record durable decisions here, then link a full ADR when needed.
 | Multi-process duplicate schedules/messages | Medium | High | Fenced claims, atomic admission/cancellation receipts, Pi JSONL readback/dedupe, native crash races | Mitigated through Phase 7 |
 | Tool schema/context explosion | High | Medium | Deferred registration/activation and bounded result rendering | Mitigated through Phase 6 rules, language, review, MCP, browser, messaging, and Memory tools |
 | Watcher/timer/process leaks on reload | Medium | High | `LifecycleSupervisor`, bounded process runner, real-resource cleanup tests, smoke leak gate | Mitigated through Phase 7 |
-| Hosted artifact exposes sensitive data | Medium | Critical | Private default, scan, confirmation, revoke | Open |
+| Hosted artifact exposes sensitive data | Medium | Critical | Project-scoped storage; scan; exact confirmation; protected static preview; expiring link; intent recovery; revoke | Mitigated in Phase 9 |
 | Scope expands into excluded sandbox/remote-control work | Medium | Medium | Enforce explicit exclusions and ADR review | Open |
 
 # Rollback strategy

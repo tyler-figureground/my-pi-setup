@@ -245,6 +245,11 @@ export function createLocalReview(
       body: JSON.stringify(body),
       filename: "local-review.json",
       mediaType: "application/json",
+      title: "Local Review",
+      creator: "local-review",
+      projectId: options.projectId,
+      kind: "json",
+      sensitivity: "internal",
       metadata: { kind: "local-review", version: 1 },
     });
 

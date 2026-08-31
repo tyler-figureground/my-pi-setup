@@ -4,6 +4,8 @@ import {
   createEventBus,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { createInMemoryArtifactStore } from "./src/core/artifacts/index.ts";
+import { createMemoryStateStore } from "./src/core/persistence/index.ts";
 import {
   canOwnPlatformDaemons,
   createPlatformExtension,
@@ -112,6 +114,70 @@ test("only parent execution role can own platform daemons", () => {
   ] as const) {
     assert.equal(canOwnPlatformDaemons(role), false, role);
   }
+});
+
+test("Artifact flag composes trusted local capability and tears its lifecycle down", async () => {
+  const { api, events, calls } = recordingApi();
+  const closes: string[] = [];
+  let artifactRoot = "";
+  createPlatformExtension({
+    flags: { ...defaultPlatformFlags, artifacts: true },
+    createProjectIdentity: () =>
+      ({
+        async resolve(cwd: string) {
+          return {
+            ok: true,
+            value: {
+              kind: "directory",
+              projectId: "directory:artifact-test",
+              canonicalCwd: cwd,
+            },
+          };
+        },
+      }) as never,
+    createStateStore: () => ({
+      ok: true,
+      value: createMemoryStateStore({ now: () => 1 }),
+    }),
+    createArtifactStore: (options) => {
+      artifactRoot = options.root;
+      return createInMemoryArtifactStore();
+    },
+    createLifecycleSupervisor: () => ({
+      async acquire(resource) {
+        const lease = await resource.start(new AbortController().signal);
+        return lease.value;
+      },
+      async shutdown(reason) {
+        closes.push(reason);
+        return { reason, status: "clean", closed: [], failures: [] };
+      },
+    }),
+  })(api);
+  const context = {
+    cwd: process.cwd(),
+    mode: "tui",
+    hasUI: true,
+    isProjectTrusted: () => true,
+    sessionManager: { getSessionId: () => "artifact-session" },
+    ui: { notify() {} },
+  };
+  await events.get("session_start")?.(
+    { type: "session_start", reason: "startup" },
+    context,
+  );
+  assert.ok(calls.includes("registerCommand"));
+  assert.ok(calls.includes("registerTool"));
+  assert.ok(calls.includes("registerEntryRenderer"));
+  assert.match(
+    artifactRoot.replaceAll("\\", "/"),
+    /\/artifacts\/projects\/[a-f0-9]{32}$/u,
+  );
+  await events.get("session_shutdown")?.(
+    { type: "session_shutdown", reason: "quit" },
+    context,
+  );
+  assert.deepEqual(closes, ["quit"]);
 });
 
 test("available Phase 2 flags enable while invalid and unavailable flags diagnose independently", async () => {

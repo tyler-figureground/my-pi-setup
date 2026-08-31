@@ -37,7 +37,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, Scheduled Prompts, and persistent Goal Mode:
+`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, Scheduled Prompts, and persistent Goal Mode, and shareable interactive Artifacts:
 
 ```json
 {
@@ -55,6 +55,7 @@ When changing Effect, update every extension manifest in the same change, regene
   "monitors": true,
   "scheduler": true,
   "goals": true,
+  "artifacts": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -85,6 +86,10 @@ When changing Effect, update every extension manifest in the same change, regene
     "maxConcurrent": 4,
     "defaultTimeoutMs": 900000,
     "leaseTtlMs": 60000
+  },
+  "artifactSettings": {
+    "defaultExpiryMs": 3600000,
+    "maxExpiryMs": 604800000
   },
   "goalSettings": {
     "maxGoals": 100,
@@ -125,13 +130,13 @@ Configuration locations:
 - guarded workspace, mailbox, Trigger, Monitor, Schedule, and Goal state: `~/.pi/agent/state/platform.sqlite`
 - persistent Memory state and FTS index: `~/.pi/agent/state/memory.sqlite`
 - guarded workspace roots: `%LOCALAPPDATA%/pi-agent/workspaces/` on Windows, `~/.pi/agent/workspaces/` elsewhere
-- language/review/MCP/browser/message/Monitor/Schedule/Goal/export artifacts: `%LOCALAPPDATA%/pi-agent/artifacts/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/` or `~/.local/state/pi-agent/artifacts/` elsewhere
+- language/review/MCP/browser/message/Monitor/Schedule/Goal/Workflow/shareable/export Artifacts: Project Identity-namespaced directories under `%LOCALAPPDATA%/pi-agent/artifacts/projects/` on Windows, `$XDG_STATE_HOME/pi-agent/artifacts/projects/` or `~/.local/state/pi-agent/artifacts/projects/` elsewhere
 - dedicated browser profiles: platform-managed project/profile-specific directories under `%LOCALAPPDATA%/pi-agent/browser-profiles/` on Windows
-- OAuth and browser credentials: OS credential store, referenced by opaque ids in state/config
+- OAuth, browser, and Artifact publisher credentials: OS credential store, referenced by opaque ids in state/config
 
-Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, Schedules, and Goals start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Reactive Monitors, Scheduled Prompts, and Goal Mode require an active Session Broker. Scheduled Prompts require a named profile with role `scheduled`; Goal nodes require role `goal-worker`.
+Empty MCP servers, browser origins, Monitor definitions, poll targets, WebSocket origins, Schedules, Goals, and Artifact remote-provider settings start no external resource. Configure exact trusted servers/origins before use. The browser requires an existing Chrome or Edge executable; Playwright downloads no browser. Reactive Monitors, Scheduled Prompts, and Goal Mode require an active Session Broker. Scheduled Prompts require a named profile with role `scheduled`; Goal nodes require role `goal-worker`.
 
-See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md), and [`docs/phase-8-configuration.md`](docs/phase-8-configuration.md).
+See [`docs/phase-2-configuration.md`](docs/phase-2-configuration.md), [`docs/phase-3-configuration.md`](docs/phase-3-configuration.md), [`docs/phase-4-configuration.md`](docs/phase-4-configuration.md), [`docs/phase-5-configuration.md`](docs/phase-5-configuration.md), [`docs/phase-6-configuration.md`](docs/phase-6-configuration.md), [`docs/phase-7-configuration.md`](docs/phase-7-configuration.md), [`docs/phase-8-configuration.md`](docs/phase-8-configuration.md), and [`docs/phase-9-configuration.md`](docs/phase-9-configuration.md).
 
 ## Firecrawl
 

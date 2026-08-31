@@ -249,6 +249,7 @@ async function smokeRepositoryExtensions() {
   );
   assert.ok(surface, "repository extension discovery completed");
   for (const tool of [
+    "artifact_inspect",
     "ask_user",
     "search",
     "scrape",
@@ -330,6 +331,7 @@ async function smokeRepositoryExtensions() {
     "schedules",
     "goal",
     "goals",
+    "artifacts",
   ]) {
     assert.ok(
       surface.commands.includes(command),

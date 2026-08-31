@@ -175,3 +175,23 @@ _Avoid_: Worker output, completion claim, assertion
 **Unknown Attempt**:
 Goal Attempt whose external execution may have occurred but whose durable outcome cannot be proven. It blocks automatic replay until direct user resolution.
 _Avoid_: Failed Attempt, stale lease, retryable error
+
+**Artifact Publication**:
+Revisioned record that one exact Artifact representation is available through a local or remote viewer under explicit access and expiry terms.
+_Avoid_: Upload, deployment, share
+
+**Sensitivity**:
+Bounded classification of disclosure risk found in exact Artifact publication bytes. It informs or blocks publication without retaining matched secret values.
+_Avoid_: Safety score, trust level
+
+**Retention**:
+Declared period during which an Artifact body or provider copy may remain stored. It does not imply that access remains available for the whole period.
+_Avoid_: Expiry, lifetime
+
+**Revocation**:
+Authoritative transition that stops an Artifact Publication from granting access. It is distinct from provider deletion and physical erasure.
+_Avoid_: Delete, expire, unshare
+
+**Capability Token**:
+High-entropy bearer secret granting narrowly scoped, time-bounded access to one Artifact Publication. Possession grants the capability; identity is not implied.
+_Avoid_: Share ID, password, session token

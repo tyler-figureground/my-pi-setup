@@ -144,6 +144,7 @@ const toolOperations = {
     session_list: ["read"],
     session_send: ["orchestration"],
     memory_search: ["read"],
+    artifact_inspect: ["read"],
   },
   sdk: {},
 } as const satisfies Record<

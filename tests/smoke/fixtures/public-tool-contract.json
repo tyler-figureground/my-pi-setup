@@ -1,5 +1,22 @@
 [
   {
+    "name": "artifact_inspect",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    }
+  },
+  {
     "name": "ask_user",
     "parameters": {
       "type": "object",

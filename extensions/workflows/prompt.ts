@@ -74,6 +74,8 @@ export function buildWorkflowResultMessage(
       `across ${details.phases.length} phase(s) in ${elapsed}.`,
     `Run dir: ${shortenHome(runDir)}`,
   ];
+  if (details.platformArtifactId)
+    lines.push(`Artifact: ${details.platformArtifactId}`);
   if (details.error) lines.push(`Error: ${details.error}`);
   if (details.agents.length > 0) {
     lines.push("", "Agents:");

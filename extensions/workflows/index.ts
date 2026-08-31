@@ -40,6 +40,7 @@ import {
   type PlatformHookEventProducer,
 } from "../platform/src/automation/platform-hook-event-sink.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
+import { artifactProducerFor } from "../platform/src/artifacts/producer-service.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
 import {
@@ -430,6 +431,7 @@ export default function workflows(pi: ExtensionAPI) {
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details);
+      const platformArtifactProducer = artifactProducerFor(pi.events);
 
       // Background runs survive Esc on the parent turn, but all runs are
       // aborted and settled during session shutdown.
@@ -690,6 +692,44 @@ export default function workflows(pi: ExtensionAPI) {
         details.status = status;
         details.finishedAt = Date.now();
         try {
+          if (platformArtifactProducer) {
+            const artifact = await platformArtifactProducer.put({
+              body: safeStringify(
+                {
+                  runId,
+                  name: details.name,
+                  description: details.description,
+                  status: details.status,
+                  startedAt: details.startedAt,
+                  finishedAt: details.finishedAt,
+                  phases: details.phases,
+                  agents: details.agents.map(
+                    ({ index, label, phase, state, error }) => ({
+                      index,
+                      label,
+                      phase,
+                      state,
+                      error,
+                    }),
+                  ),
+                  result: details.result,
+                  error: details.error,
+                },
+                { maxBytes: 1024 * 1024 },
+              ),
+              filename: "workflow-result.json",
+              mediaType: "application/json",
+              title: details.name ?? "Workflow Result",
+              creator: "workflow",
+              kind: "json",
+              sensitivity: "internal",
+            });
+            if (!artifact.ok)
+              throw new Error(
+                `Platform Artifact persistence failed: ${artifact.error.message}`,
+              );
+            details.platformArtifactId = artifact.value.id;
+          }
           persistence.flush();
           const terminalEvent: PlatformHookEvent =
             details.status === "completed"

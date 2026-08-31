@@ -13,6 +13,7 @@
   "monitors": true,
   "scheduler": true,
   "goals": true,
+  "artifacts": true,
   "mcpServers": [],
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -37,6 +38,10 @@
     "allowedWebSocketOrigins": [],
     "allowLoopback": false,
     "pollTargets": []
+  },
+  "artifactSettings": {
+    "defaultExpiryMs": 3600000,
+    "maxExpiryMs": 604800000
   },
   "schedulerSettings": {
     "maxSchedules": 1000,

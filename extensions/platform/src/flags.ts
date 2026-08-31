@@ -34,6 +34,7 @@ export const availablePlatformFlags = Object.freeze([
   "monitors",
   "scheduler",
   "goals",
+  "artifacts",
 ] as const satisfies readonly PlatformFlagName[]);
 
 const availablePlatformFlagSet = new Set<PlatformFlagName>(
