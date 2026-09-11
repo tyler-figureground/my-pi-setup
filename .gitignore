@@ -34,3 +34,6 @@ extensions/summaries/config.private.json.*.tmp
 # Local editor settings
 .vscode/
 .idea/
+
+# herdr-managed pi integration (installed/overwritten by herdr)
+extensions/herdr-*.ts
