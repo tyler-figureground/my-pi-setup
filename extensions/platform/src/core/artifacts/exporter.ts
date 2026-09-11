@@ -1,3 +1,11 @@
+/**
+ * Copies one artifact body out to a caller-chosen directory with create-new
+ * semantics: write a 0600 temp file, fsync, then hard-link it into place, so
+ * an existing destination is never overwritten (`destination_exists`).
+ * Refuses when the target directory or any ancestor is a symlink or not a
+ * directory. Shared by both ArtifactStore adapters.
+ */
+
 import { randomBytes } from "node:crypto";
 import { link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";

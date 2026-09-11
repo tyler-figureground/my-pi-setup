@@ -1,3 +1,13 @@
+/**
+ * In-process StateStore adapter that mirrors the node:sqlite adapter's
+ * validation, limits, and transaction semantics. Each transaction applies to
+ * a cloned state that is swapped in only on success. Nothing outlives the
+ * process; tests use it as the fast stand-in for `sqlite-state-store.ts`.
+ * `export` supports snapshots only.
+ *
+ * See: docs/adr/0002-state-store-node-sqlite.md
+ */
+
 import { failure, success, type JsonObject } from "../result.ts";
 import {
   CURRENT_SCHEMA_VERSION,

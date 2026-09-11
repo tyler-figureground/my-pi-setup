@@ -1,3 +1,16 @@
+/**
+ * Pi extension entry for the capability platform. Pi loads the default
+ * export; the named re-exports let tests build the platform with overrides
+ * (`createPlatformExtension(options)`) and inspect flag metadata.
+ *
+ * All startup, Execution Role gating, and capability wiring lives in
+ * `src/composition.ts`. With every flag off (the default) the platform
+ * registers no tools or commands.
+ *
+ * See: docs/adr/0001-platform-composition-root.md,
+ * docs/architecture/platform-foundation.md
+ */
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   canOwnPlatformDaemons,

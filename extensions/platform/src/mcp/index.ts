@@ -1,3 +1,33 @@
+/**
+ * ToolFederation - project-bound discovery, activation, and invocation of
+ * Federated Tools from configured MCP servers.
+ *
+ * Lazy: nothing connects until the first `search`, `activate`, or `invoke`,
+ * and each catalog load is first assessed by `ExternalIntegrationControls`
+ * (STDIO as `process`, HTTP as `network-read` against its origins). Server
+ * content is untrusted: descriptions and errors are sanitized, schemas are
+ * compiled by the official validator, and free-text annotations are stripped
+ * from schemas before they reach the model. Unconfigured tool effects
+ * default to `remote-write`. A call that fails in transport drops the
+ * connection and returns `ambiguous_outcome`; calls are never replayed.
+ * Results are sanitized; bodies over 50 KiB spill to the core
+ * `ArtifactStore`. Pi tools are registered in `src/wiring/mcp.ts`.
+ *
+ * Map:
+ * - Transport seam: `McpServerDefinition`, `McpConnection`,
+ *   `McpTransportAdapter` (production: `official-adapter.ts`)
+ * - Public model: `ToolFederation`, tool summaries, errors, options
+ * - `federatedId`: `<server>__<tool>` ids, hash-suffixed when normalized
+ *   or over 60 chars
+ * - `schemaForPublication`, `assertBoundedJson`: schema stripping, arg bounds
+ * - `createToolFederation`: generation-fenced `connect`, `loadCatalog`
+ *   (policy, include/exclude globs, validators)
+ * - `search`, `activate`, `invoke`, `close`
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md,
+ * docs/adr/0006-build-tool-federation-on-official-mcp-v2.md
+ */
+
 import { createHash } from "node:crypto";
 import {
   fromJsonSchema,

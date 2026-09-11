@@ -1,3 +1,17 @@
+/**
+ * Loader-scoped hand-off of Parent platform authorities to the subagents
+ * extension. `src/composition.ts` binds the ProfileCatalog and
+ * WorkspaceManager to a Pi event bus; `extensions/subagents/index.ts` looks
+ * them up with `platformAgentServices(pi.events)` at tool execution time.
+ *
+ * Lookup is a direct WeakMap hit, else a versioned query on a private
+ * event-bus channel (trusted-code coordination, not an authority boundary).
+ * One binding per bus; the returned unbind is idempotent and removes only its
+ * own binding.
+ *
+ * See: docs/architecture/phase-3-profiles-workspaces.md
+ */
+
 import type { ProfileCatalog } from "../profiles/index.ts";
 import type { WorkspaceManager } from "../workspaces/index.ts";
 

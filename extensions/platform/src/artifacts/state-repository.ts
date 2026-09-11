@@ -1,3 +1,15 @@
+/**
+ * Durable `PublicationRepository` on the platform `StateStore` - the
+ * production home of Artifact Publication records.
+ *
+ * Records live in a collection named by a SHA-256 of the scope (the Project
+ * Identity in `src/composition.ts`), so publications never cross projects.
+ * Every read and write is re-validated against the record schema, which has
+ * no body or share-URL field. Updates are fenced twice: optimistic `revision`
+ * and StateStore `expectedVersion`. At 1,000 records, creation evicts the
+ * oldest terminal record or fails.
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import type { StateMutation, StateStore } from "../core/persistence/index.ts";
 import type { JsonObject } from "../core/result.ts";

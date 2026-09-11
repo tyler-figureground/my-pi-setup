@@ -1,3 +1,30 @@
+/**
+ * `RuleCatalog`: indexes Lazy Rules and activates them for observed paths.
+ *
+ * Discovery reads only bounded YAML frontmatter (`id`, `include`, `exclude`,
+ * `priority`; no aliases, bounded depth and node count). Bodies stay unread
+ * until `activate` sees a canonical project-relative path matching `include`
+ * and not `exclude`. Project rules load only for a trusted project whose rule
+ * root resolves inside it; duplicate IDs and malformed or escaping files
+ * become diagnostics, never partial rules. Activation order: specificity,
+ * priority, project before user, id, path. A rule enters each Context Epoch
+ * at most once (the last 16 epochs are remembered), within 16 rules / 256 KiB
+ * per activation; a body whose metadata changed since discovery is rejected
+ * until reload.
+ *
+ * Map:
+ * - storage and limit types, DEFAULT_LIMITS, resolveLimits (lower-only)
+ * - path containment helpers
+ * - frontmatter: stringArray (safe patterns), frontmatterBoundary,
+ *   parseMetadata
+ * - matching: patternSpecificity, matchingPattern, rejectDuplicateIds
+ * - createRuleCatalog: discoverUnlocked, relativeActivationPaths; discover,
+ *   activate, and reload serialized through `exclusive`; inspect
+ *
+ * Storage: rules/filesystem.ts. Wiring: src/wiring/rules.ts.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { isCollection, isPair, parseDocument } from "yaml";

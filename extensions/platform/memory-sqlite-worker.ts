@@ -1,3 +1,17 @@
+/**
+ * Test-only child process, not runtime code.
+ * `memory-sqlite.integration.test.ts` spawns two of these
+ * (`node --experimental-strip-types`) against one SQLite file to prove that
+ * concurrent Memory `remember` calls from separate processes converge
+ * (near-duplicate dedupe, same-request replay or conflict, contradiction
+ * links).
+ *
+ * Args: db path, gate file, request id, content. After its first candidate
+ * lookup it prints `READY` and blocks until the gate file exists, so both
+ * processes are mid-write when released; it retries retryable failures up to
+ * 4 times and prints the final outcome as one JSON line. Exit 2 = bad args.
+ */
+
 import { existsSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { createInMemoryArtifactStore } from "./src/core/artifacts/index.ts";

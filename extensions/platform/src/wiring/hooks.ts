@@ -1,3 +1,34 @@
+/**
+ * Declarative Hook wiring: adapts `Hooks` (`src/automation/hooks/`) to Pi
+ * events, the `/hooks` command, and `platform-hook:*` status items.
+ *
+ * Native events become bounded, key-redacted plain data, are published to the
+ * TriggerEngine as `hook:<event>` Trigger Events, and return through one
+ * `dispatch` Trigger Binding (`hooks.handle` runs directly only when no
+ * TriggerEngine is bound; `composition.ts` always binds one). Gate events
+ * (`tool_call`, `input`, `user_bash`, `context`, `session_before_*`) fail
+ * closed on an over-bound payload or failed dispatch; observers never block.
+ * Config: `<agentDir>/hooks.yaml` plus the trusted project's
+ * `<CONFIG_DIR_NAME>/hooks.yaml`. `handlePlatformEvent` receives workspace,
+ * Monitor, and Scheduler events from the platform hook event sink. Gated by
+ * the `hooks` flag (Parent only).
+ *
+ * Map:
+ * - `nativeEventIsUnattended` - no direct user can answer a hook confirm
+ * - payload bounding: `accountText`, `boundedPlain`, `eventPayload`
+ * - `sourcesFor` / `decodeHookResponse` - config sources, delivery output
+ * - `handle` - shared dispatch path for native and platform events
+ * - `/hooks` command (inspect, validate, reload, logs)
+ * - native observer loop, then gate handlers from `before_agent_start` on
+ * - `start` - build Hooks, bind the TriggerEngine, apply config, emit
+ *   `session_start`; `stop` - emit `session_shutdown`, unbind, shut down the
+ *   hook process runner
+ * - returned `inspect`, `handlePlatformEvent`
+ *
+ * See: docs/architecture/phase-2-policy-rules-hooks.md,
+ * docs/architecture/phase-7-automation.md
+ */
+
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import path from "node:path";

@@ -1,3 +1,13 @@
+/**
+ * Summary model choice (provider, model, reasoning level) for the summaries
+ * extension, persisted in `config.private.json` at the extension root.
+ *
+ * `loadSummaryConfig` never throws: a missing, unreadable, or invalid file
+ * yields `DEFAULT_SUMMARY_CONFIG`. `saveSummaryConfig` writes a 0600 temp file
+ * and renames it into place within a 5 s timeout, rejecting on failure.
+ * Used by `../index.ts`.
+ */
+
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";

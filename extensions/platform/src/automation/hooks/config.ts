@@ -1,3 +1,21 @@
+/**
+ * Safe loader for Declarative Hook YAML (`hooks.yaml`, version 1 or 2):
+ * reads each configured source and returns validated registrations plus
+ * per-source identity (canonical path, device, inode, SHA-256 digest).
+ * `phase7.ts` (and the legacy `engine.ts`) use it to validate, apply, and
+ * recheck a source before each action.
+ *
+ * Untrusted project sources are never read. A source must be a regular,
+ * non-link file inside its `root` when one is given, opened with
+ * `O_NOFOLLOW` where available, with identity checked before and after the
+ * read. YAML uses the strict core schema with aliases refused, then bounded
+ * plain-data checks. Version 2 hooks are compiled onto the version 1 shape
+ * (`action` from `actions[0]`, `timeoutMs` from `deadlineMs`). Any error in
+ * any source yields no hooks at all.
+ * See: docs/migrations/phase-7-declarative-hooks.md,
+ * docs/security/phase-7-threat-model.md (Changed trusted configuration race)
+ */
+
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
@@ -505,6 +523,7 @@ async function loadSource(source: HookConfigSource, limits: ConfigLimits) {
   } satisfies Pick<ValidationResult, "hooks" | "diagnostics" | "sources">;
 }
 
+/** At most 16 sources; `reservedIds` count as taken for duplicate checks. */
 export async function validateConfigSources(
   sources: readonly HookConfigSource[],
   limits: ConfigLimits,

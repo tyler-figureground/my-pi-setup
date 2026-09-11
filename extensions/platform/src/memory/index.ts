@@ -1,3 +1,29 @@
+/**
+ * `MemoryStore` implementation (remember, search, inspect, change, transfer)
+ * plus `createHostMemoryBindingFactory`, which mints the opaque
+ * `HostMemoryBinding` capability that `bind` requires.
+ *
+ * Memory is untrusted data that never grants authority. Every operation
+ * re-validates host authority (and purges expired Memory) first and again
+ * before each write. `remember` from non-`direct-user` ingress lands in
+ * `review`; only `direct-user` ingress may promote or commit an import.
+ * Secrets are redacted, or the write is refused, before hashing or
+ * persistence. Request IDs are idempotent: the same intent replays its prior
+ * result, a different intent is rejected.
+ *
+ * Map:
+ * - host binding validation + createHostMemoryBindingFactory
+ * - resolveScope / canAccessMemory (Memory Scope isolation)
+ * - secret redaction: citations, content, safePersisted* guards
+ * - createMemoryStoreModule -> bind -> refreshBinding
+ * - remember: replay, dedupe / review takeover, Contradiction Links, create
+ * - inspect, search (bounded hits), change (forget / replace / promote)
+ * - transfer: export bundle Artifact, preview-import, commit-import
+ *
+ * Wiring: src/wiring/memory.ts; composed in src/composition.ts.
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { EXECUTION_ROLES } from "../../../shared/execution-role.ts";
 import {
@@ -117,6 +143,10 @@ function sameHostAuthority(
   );
 }
 
+/**
+ * `issue` throws `TypeError` for an invalid assertion, or for a workspace
+ * assertion when no `revalidate` callback was supplied.
+ */
 export function createHostMemoryBindingFactory(
   options: HostMemoryBindingFactoryOptions = {},
 ) {
@@ -568,6 +598,10 @@ function safePersistedStructure(
   );
 }
 
+/**
+ * Throws on invalid `secretCanaries`. `bind` throws `TypeError` unless given
+ * a capability minted by `createHostMemoryBindingFactory`.
+ */
 export function createMemoryStoreModule(
   options: MemoryStoreModuleOptions,
 ): import("./model.ts").MemoryStoreModule {

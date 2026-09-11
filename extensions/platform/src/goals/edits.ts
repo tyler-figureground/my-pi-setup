@@ -1,3 +1,22 @@
+/**
+ * Pure application of direct-user `GoalEdit`s during `resume`: definition
+ * edits, manual dispositions, Unknown Attempt resolution, and waivers.
+ *
+ * `resume` in `engine.ts` has already checked authority, editable state, and
+ * referenced Artifacts, and commits the result in one transaction. Task,
+ * criteria, or dependency edits (and `invalidateNode`) reset the node and its
+ * transitive dependents to `waiting`. A node a person marks `done` (disposition
+ * or resolved Unknown Attempt) must carry `user-accepted` evidence at the new
+ * revision and leave no criterion unmet, checked after every other edit.
+ * Map:
+ * - `DEFINITION_EDITS` / `INVALIDATING_EDITS`: revision bump vs node reset
+ * - `transitiveDependents`: downstream closure used for invalidation
+ * - `applyGoalEdits`: one branch per edit kind, then invalidation, graph
+ *   revalidation (`validateGoalGraph`), and the attested-`done` gate
+ * - `manualEvidence`: `user-accepted` evidence from a disposition/resolution
+ * See: docs/architecture/phase-8-goal-mode.md (Authority and edits)
+ */
+
 import type { JsonObject } from "../core/result.ts";
 import {
   appendEvidence,
@@ -127,6 +146,11 @@ export function transitiveDependents(
   return order.filter((id) => affected.has(id));
 }
 
+/**
+ * Nothing is persisted here: the result holds only records that changed
+ * (`nodes` contains changed nodes only) plus audit events to append. The first
+ * invalid edit rejects the whole batch.
+ */
 export function applyGoalEdits(
   inputs: GoalEditInputs,
   edits: readonly GoalEdit[],

@@ -1,3 +1,20 @@
+/**
+ * Lazy Rule wiring: adapts `RuleCatalog` (`src/rules/`) to Pi context
+ * injection and the `/rules` command (inspect, `reload`).
+ *
+ * A rule body enters context only once a matching path is seen: in the
+ * prompt (`before_agent_start`, which also opens a new Context Epoch), in
+ * tool input (`tool_call`), or in tool details and search-tool output
+ * (`tool_result`). Mid-turn activations arrive as a `platform-lazy-rules`
+ * steer message, and the triggering `tool_call` is blocked unless policy
+ * rates it allowed and side-effect free, so the model reads the rules before
+ * retrying. `context` drops rule messages from older epochs. Sources:
+ * `<agentDir>/rules` and the project's `<CONFIG_DIR_NAME>/rules`, with trust
+ * passed to the catalog. Gated by the `rules` flag (Parent only).
+ *
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import path from "node:path";
 import {
   CONFIG_DIR_NAME,

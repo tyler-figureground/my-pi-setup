@@ -1,3 +1,18 @@
+/**
+ * Types for Language Intelligence: server definitions and query routes, the
+ * `LanguageServerAdapter` / `LanguageServerConnection` boundary, document
+ * updates, queries, normalized results, and error codes.
+ *
+ * Every discovery, synchronization, and query result is typed
+ * `advisory: true` with `authority: "repository-native-checks"`: empty
+ * diagnostics never mean the project passed verification. Result paths are
+ * `MappedLanguagePath`s, project-relative when contained and explicitly
+ * `external` otherwise.
+ *
+ * Implementation: language/intelligence.ts; adapters: stdio.ts, fixture.ts.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import type {
   Position,
   Range,

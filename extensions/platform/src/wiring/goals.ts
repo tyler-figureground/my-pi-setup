@@ -1,3 +1,29 @@
+/**
+ * Goal Mode wiring: adapts `GoalRuntime`'s `GoalEngine` (`src/goals/`) to Pi
+ * as tools `goal_inspect`/`goal_change` and commands `/goal`/`/goals`.
+ *
+ * Parent only: mutations and `start` reject any other Execution Role. Plan
+ * Mode leaves only `goal_inspect` active and blocks mutations. `authority` is
+ * the host-only approval verifier, so `composition.ts` builds this capability
+ * before the GoalRuntime that checks tokens against it. Gate: `goals` and
+ * `profiles` flags, trusted project, active Session Broker, and the host Goal
+ * Worker executor. The authority and output-trust rules are in the block
+ * comment after the imports.
+ *
+ * Map:
+ * - `safeSummary` / `safeDetail` / `inspectionText` - bounded output
+ * - approval issuer: `issueApproval`, `authorityVerifier`
+ * - confirmation text: `nodeLines`, `editLines`, `confirmationLines`
+ * - `mutate` - digest-bound confirm with stale-approval rechecks
+ * - tool input bounding: `boundedBudget`, `boundedReservation`,
+ *   `decodeToolCommand`
+ * - `parseGoalCommand` / `parseGoalsQuery` - slash-command grammar
+ * - tool schemas, `goal_inspect`, `goal_change`, `/goal`, `/goals`
+ * - returned `authority`, `start`, `stop`
+ *
+ * See: docs/architecture/phase-8-goal-mode.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {

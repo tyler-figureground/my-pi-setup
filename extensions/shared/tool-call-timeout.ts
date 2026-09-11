@@ -1,3 +1,14 @@
+/**
+ * Per-tool-call execution timeout for headless child sessions, so one hung
+ * tool cannot stall a child run indefinitely (default 3 minutes).
+ *
+ * The guard mutates each registered `ToolDefinition.execute` in place, at most
+ * once per definition. On timeout the call rejects with `ToolCallTimeoutError`
+ * and the tool's signal is aborted; the race settles the call even if the tool
+ * ignores that abort. Used by `workflows/runner.ts` and
+ * `subagents/src/backends/pi.ts`.
+ */
+
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export const CHILD_TOOL_CALL_TIMEOUT_MS = 3 * 60 * 1_000;

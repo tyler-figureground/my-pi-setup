@@ -1,3 +1,13 @@
+/**
+ * Production `GoalDeliveryPort`: tells the Pi session hosting the Goal runtime
+ * about a Goal outcome through the Session Broker mailbox.
+ *
+ * `deliverOutcome` in `engine.ts` owns the outbox record and decides when to
+ * send; this adapter only maps one request onto `SessionBroker.send` and
+ * reports a still-queued message as `offline`. Wired in `src/composition.ts`.
+ * See: docs/architecture/phase-8-goal-mode.md (Reused modules)
+ */
+
 import type { SessionBroker } from "../messaging/index.ts";
 import type { GoalDeliveryPort } from "./ports.ts";
 

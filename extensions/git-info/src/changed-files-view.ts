@@ -1,3 +1,16 @@
+/**
+ * `/lg` local-changes viewer for git-info: loads each changed path's diff and
+ * shows a two-pane TUI overlay (file list + scrollable diff).
+ *
+ * `loadChangedFiles` returns `null` outside a git repository. Tracked files
+ * diff against HEAD; untracked files, and every file in a repo with no commits
+ * yet, diff against /dev/null via `git diff --no-index`. Files load one at a
+ * time and each diff is capped at 20,000 lines. Paths and diff text are
+ * repository-controlled, so terminal control sequences are stripped before
+ * theme styling. `ChangedFile` additions/deletions are `null` for binary
+ * files. Called from `../index.ts`.
+ */
+
 import { basename } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {

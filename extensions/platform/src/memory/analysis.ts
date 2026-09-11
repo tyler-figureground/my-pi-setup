@@ -1,3 +1,21 @@
+/**
+ * Conservative, pure text heuristics shared by every Memory write path:
+ * near-duplicate detection and the subject/value claim extraction behind
+ * advisory Contradiction Links. No I/O.
+ *
+ * Both are deliberately narrow. `isConservativeNearDuplicate` accepts only
+ * equal-length token sequences (at least 4 tokens) that differ in exactly one
+ * token by at most one character edit, and never pairs opposite polarity
+ * (not/never/no, always/never, allow/deny, ...). `contradictionClaim`
+ * recognizes only "X is/are/should be/=/: Y" and use/avoid-style sentences
+ * and returns `undefined` for anything else rather than guessing.
+ *
+ * Callers: memory/index.ts and both persistence adapters
+ * (memory-persistence.ts, sqlite-memory-persistence.ts), which re-run the
+ * checks at commit time.
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 const oppositeTokens = [
   ["always", "never"],
   ["allow", "deny"],

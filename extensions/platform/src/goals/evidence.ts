@@ -1,3 +1,14 @@
+/**
+ * Pure Goal Evidence helpers: `evaluateCriteria` (the completion gate),
+ * deterministic evidence IDs, and bounded retention.
+ *
+ * Trust is stamped by callers, not decided here: `engine.ts` records worker
+ * output as `worker-reported` and `GoalReviewPort` verdicts as `host-verified`;
+ * `edits.ts` records waivers and manual evidence as `user-accepted`. Only
+ * evidence bound to the current definition revision counts.
+ * See: docs/architecture/phase-8-goal-mode.md (Evidence gate)
+ */
+
 import { digestOfText } from "./digest.ts";
 import {
   GOAL_LIMITS,
@@ -41,6 +52,11 @@ export interface GoalCriteriaEvaluation {
   }[];
 }
 
+/**
+ * Per criterion, reports the first gap in this order: no evidence of an
+ * accepted kind, none at `definitionRevision`, none at `minimumTrust`, then
+ * fewer distinct entries than `minimumEvidenceCount`.
+ */
 export function evaluateCriteria(
   criteria: readonly GoalCriterion[],
   evidence: readonly GoalEvidence[],
@@ -92,6 +108,10 @@ export function appendEvidence(
   return [...kept, entry].slice(-limit);
 }
 
+/**
+ * Deterministic: identical inputs give the same ID, so `appendEvidence`
+ * replaces a re-recorded entry instead of duplicating it.
+ */
 export function evidenceId(
   scope: "goal" | "node",
   nodeId: string | null,

@@ -1,3 +1,19 @@
+/**
+ * StateStore contract (seam: `transact`, `query`, `compact`, `export`,
+ * `diagnose`) for small versioned State Records, per-stream ordered events,
+ * and fenced Leases. Plain JSON only; large bodies go to ArtifactStore.
+ *
+ * Both adapters guarantee: transactions commit all-or-nothing; reusing a
+ * `transactionId` replays its receipt (TRANSACTION_CONFLICT if the operations
+ * differ); a Lease claim bumps its fence, and renew/release need the live
+ * owner and fence (else LEASE_LOST); stream positions and fences never reset;
+ * record versions survive deletes; event IDs are unique across streams. Only
+ * explicit `compact` options retire receipts, event-ID tombstones, or
+ * record-version heads.
+ *
+ * See: docs/adr/0002-state-store-node-sqlite.md
+ */
+
 import type { JsonObject, ModuleError, Outcome } from "../result.ts";
 
 export const CURRENT_SCHEMA_VERSION = 5;
@@ -52,6 +68,11 @@ export interface StateLease {
   readonly metadata: JsonObject;
 }
 
+/**
+ * `expectedVersion` on put/delete: `null` requires the record to be absent, a
+ * number requires that exact current version, omitted skips the check
+ * (delete still requires the record to exist).
+ */
 export type StateMutation =
   | {
       readonly type: "check-record";

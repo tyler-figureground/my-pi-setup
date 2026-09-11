@@ -1,3 +1,19 @@
+/**
+ * Review evidence adapter that attaches advisory Language Intelligence
+ * diagnostics for files in a Review Target.
+ *
+ * Deliberately narrow: only `uncommitted` targets are queried (historical
+ * targets report `unavailable` rather than asking live-root servers about
+ * the wrong content). It syncs the captured worktree text of at most 32
+ * matching files (2 MiB each) and polls diagnostics for about 5 s overall.
+ * Per-file failures are recorded in the evidence (`unavailable` when every
+ * file fails) and never fail the review.
+ *
+ * Passed to review/index.ts by src/composition.ts when Language
+ * Intelligence is enabled.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import path from "node:path";
 import type { JsonValue } from "../core/result.ts";
 import type { LanguageIntelligence } from "../language/index.ts";

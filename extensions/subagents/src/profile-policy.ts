@@ -1,3 +1,18 @@
+/**
+ * Compiles an Agent Profile's `ResolvedExecutionPolicy` into each backend's
+ * native restrictions: Pi child-loader tool lists and prompt, Claude Agent SDK
+ * `tools`/`disallowedTools`/sandbox, Codex sandbox mode.
+ *
+ * Fail-closed: a restriction a backend cannot represent exactly is refused,
+ * never approximated. Isolated Pi profiles need an explicit allowlist of
+ * confinable tools and always lose `bash`/`powershell`; Claude throws on an
+ * unmapped tool name and always denies `Agent`/`Task`; Codex returns
+ * `ok: false` for any tool restriction. Used by `backends/{pi,claude,codex}.ts`
+ * and, as a pre-spawn "can this profile run" check, by `scheduled-agent.ts`,
+ * `goal-worker.ts`, and `named-profile-execution.ts`.
+ * See docs/architecture/phase-3-profiles-workspaces.md.
+ */
+
 import type { ResolvedExecutionPolicy } from "../../shared/agent-profile.ts";
 
 const CLAUDE_TOOL_MAP = new Map<string, string>([

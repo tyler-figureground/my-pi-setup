@@ -1,3 +1,12 @@
+/**
+ * Adapter-independent ArtifactStore rules shared by the filesystem and
+ * in-memory adapters: limits, id and metadata validation, SHA-256 digests,
+ * integrity checks, and the metadata-compatibility test behind
+ * content-addressed dedupe. No filesystem access. `validateFilename` rejects
+ * names unsafe on any platform, including Windows device names (CON, NUL,
+ * COM1, ...).
+ */
+
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { JsonObject } from "../result.ts";
@@ -177,6 +186,10 @@ export function validateArtifactMetadata(
   });
 }
 
+/**
+ * `corrupt_artifact` unless metadata validates, size matches, and the body
+ * re-hashes to `id`.
+ */
 export function validateStoredArtifact(
   id: string,
   metadataValue: unknown,
@@ -219,6 +232,10 @@ export function serializeMetadata(
   }
 }
 
+/**
+ * Dedupe check: every caller-supplied field must match; `createdAt` is
+ * ignored.
+ */
 export function artifactMetadataCompatible(
   existing: ArtifactMetadata,
   requested: ArtifactMetadata,

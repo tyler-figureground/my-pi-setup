@@ -1,3 +1,17 @@
+/**
+ * Execution Role vocabulary plus the host-side binding that stamps one role
+ * onto a resource loader's event bus.
+ *
+ * The role is bound by the host (`createChildResources` in `child-session.ts`)
+ * and is never read from env vars, model arguments, or session files. A bus
+ * holds at most one role (rebinding to a different role throws). Other
+ * extensions resolve it with `executionRoleFor`, which answers "parent" for an
+ * unbound top-level loader; `platform/src/composition.ts` uses that to keep
+ * platform daemons Parent-only. Shared by `child-session.ts`,
+ * `agent-profile.ts`, `guarded-workspace.ts`, and platform policy, messaging,
+ * and memory. See docs/architecture/platform-foundation.md ("Execution roles").
+ */
+
 export const EXECUTION_ROLES = [
   "parent",
   "subagent",

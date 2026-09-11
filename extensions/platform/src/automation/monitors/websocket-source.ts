@@ -1,3 +1,18 @@
+/**
+ * WebSocket source for Reactive Monitors on `ws` (loaded lazily): emits
+ * `websocket.message` (text, or binary as base64) and `websocket.status`.
+ *
+ * The URL's origin must be in the host allowlist. Every connect, including
+ * reconnects, re-runs `control.authorize` and pins DNS to the authorized
+ * addresses while keeping the hostname for TLS SNI; redirects and
+ * compression are refused. Oversized frames or buffer overflow terminate
+ * the socket. Idle ping/pong, jittered backoff within a reconnect window,
+ * and a 24 h lifetime cap bound every connection. The authorizer and
+ * credential resolver come from `src/composition.ts` via `sources.ts`.
+ * See: docs/adr/0011-wrap-parcel-watcher-and-ws.md,
+ * docs/security/phase-7-threat-model.md (Network destination bypass)
+ */
+
 import { isIP } from "node:net";
 import type { LookupFunction } from "node:net";
 import { isProxy } from "node:util/types";

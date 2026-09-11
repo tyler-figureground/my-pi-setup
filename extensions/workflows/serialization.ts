@@ -1,3 +1,15 @@
+/**
+ * Bounded, never-throwing JSON helpers for workflow data: sandbox IPC
+ * payloads, agent results, and persisted run artifacts.
+ *
+ * `toSerializable` turns any value into inert JSON-safe data, replacing
+ * cycles, bigints, functions, non-finite numbers, and over-limit depth, node,
+ * or string sizes with explicit markers. `safeStringify` always returns valid
+ * JSON within `maxBytes` (a `{ truncated: true, ... }` stub when it must).
+ * `writeFileAtomic` writes a 0600 temp file and renames it into place.
+ * Used by `sandbox.ts`, `runner.ts`, `artifacts.ts`, `model.ts`, `index.ts`.
+ */
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 

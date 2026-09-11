@@ -1,3 +1,21 @@
+/**
+ * Cross-extension bridge for platform hook events (`worktree.`, `subagent.`,
+ * `task.`, `monitor.`, `schedule.`). Producers in workspaces, subagents,
+ * workflows, monitors, and the scheduler publish typed events;
+ * `src/composition.ts` binds the one sink, which forwards them in order to
+ * the Hooks capability (`src/wiring/hooks.ts`) as unattended invocations.
+ *
+ * Fire-and-forget and observe-only: a publish never fails the producer's
+ * committed transition, and events are dropped when no sink is bound. A
+ * sink bound in the same module instance is called directly; otherwise the
+ * envelope crosses a private `pi.events` channel. Payloads are rebuilt as
+ * bounded plain data (24 KiB) with authority-like keys (`provenance`,
+ * `trust`, `source`, and similar) stripped, secret-looking keys redacted,
+ * and accessors, proxies, and cycles replaced by markers.
+ * See: docs/migrations/phase-7-declarative-hooks.md (Supported platform
+ * events)
+ */
+
 import { isProxy } from "node:util/types";
 import { platformHookEvents, type PlainData } from "./hooks/model.ts";
 
@@ -237,6 +255,7 @@ function payload(value: Readonly<Record<string, unknown>>) {
   return freezePlain(converted) as Readonly<Record<string, PlainData>>;
 }
 
+/** Throws if `loader` already has a sink; returns an idempotent unbind. */
 export function bindPlatformHookEventSink(
   loader: object,
   sink: PlatformHookEventSink,
@@ -267,6 +286,7 @@ export function bindPlatformHookEventSink(
   };
 }
 
+/** Unknown event or source names are ignored; payloads are sanitized here. */
 export function platformHookEventProducerFor(
   loader: object,
   source: PlatformHookEventSource,

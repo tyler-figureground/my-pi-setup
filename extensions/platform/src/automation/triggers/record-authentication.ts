@@ -1,3 +1,16 @@
+/**
+ * Host HMAC-SHA256 tags for durable Trigger Event records, so a record read
+ * back after restart is trusted only if this host wrote it.
+ * `state-store-persistence.ts` signs on store and verifies on claim.
+ *
+ * The production key is 32 random bytes in the OS keyring
+ * (`@napi-rs/keyring`, loaded lazily). Only signing may create it, under a
+ * cross-process mkdir lock with stale takeover; verification never creates
+ * a key, so a missing key surfaces as unavailable rather than as a forged
+ * record. Built in `src/composition.ts`.
+ * See: docs/security/phase-7-threat-model.md (Trust boundaries)
+ */
+
 import {
   createHmac,
   randomBytes,
@@ -53,6 +66,11 @@ function validKey(value: Uint8Array) {
   return value.byteLength === KEY_BYTES;
 }
 
+/**
+ * Keys load once (retried after a failure) and must be exactly 32 bytes.
+ * `verify` returns false for a malformed or wrong tag; it throws only when
+ * the verification key cannot be loaded.
+ */
 export function createHmacTriggerRecordAuthenticator(
   loadSigningKey: () => Promise<Uint8Array>,
   loadVerificationKey: () => Promise<Uint8Array> = loadSigningKey,
@@ -167,6 +185,10 @@ async function acquireInitializationLock(lockDirectory: string) {
   throw new Error("Trigger authentication key initialization timed out.");
 }
 
+/**
+ * Processes that share a keyring entry must share `lockDirectory`, or
+ * first-use key creation can race. Throws `TypeError` on invalid options.
+ */
 export function createKeyringTriggerRecordAuthenticator(
   options: KeyringTriggerRecordAuthenticatorOptions,
 ) {

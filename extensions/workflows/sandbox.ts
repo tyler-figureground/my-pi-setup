@@ -1,3 +1,16 @@
+/**
+ * Parent side of the workflow sandbox: runs a prepared workflow script in a
+ * separate Node process (`sandbox-child.cjs`) under Node's `--permission`
+ * model and brokers its only capabilities, `agent` and `phase`, over IPC.
+ *
+ * The child may read only its own directory, gets a `PATH`-only env, a 128 MB
+ * heap, and no stdio. Every IPC message must carry the per-run random token
+ * and fit its byte limit; any protocol violation or a 33rd agent request ends
+ * the run. Refuses to run on a Node that lacks `--permission`. Agent requests
+ * go to the `onAgent` callback supplied by `index.ts`; values crossing the
+ * boundary are normalized by `serialization.ts`.
+ */
+
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";

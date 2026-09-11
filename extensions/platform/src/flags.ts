@@ -1,3 +1,13 @@
+/**
+ * Platform feature flags: one boolean per capability, all off by default, so
+ * nothing activates without explicit opt-in. `availablePlatformFlags` gates
+ * turning a flag on - a known but unavailable flag set to `true` stays off
+ * with a diagnostic (today every flag is available). No I/O; `config.ts`
+ * feeds parsed `platform.json` through `decodePlatformFlags`.
+ *
+ * See: docs/architecture/platform-foundation.md
+ */
+
 export const defaultPlatformFlags = Object.freeze({
   planMode: false,
   hooks: false,
@@ -46,6 +56,10 @@ export interface PlatformDiagnostic {
   readonly message: string;
 }
 
+/**
+ * Overlays `input` onto `base`. Unknown names, non-boolean values, and
+ * unavailable flags are skipped with a diagnostic; never throws.
+ */
 export function decodePlatformFlags(
   input: unknown = undefined,
   base: PlatformFlags = defaultPlatformFlags,

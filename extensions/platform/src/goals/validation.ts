@@ -1,3 +1,15 @@
+/**
+ * Structural gate for `GoalSubmitCommand`: turns untrusted input into a
+ * digest-stamped `GoalDefinition` with a deterministic topological `order`.
+ *
+ * Pure, and bounded only by the core `GOAL_LIMITS`; in production the
+ * narrower host caps from `config.ts` are applied first by
+ * `src/wiring/goals.ts`. Called by `submit` in `engine.ts`; `edits.ts` reuses
+ * the criteria, budget, and graph validators plus `goalNodeDigest`, so an
+ * edited graph passes the same checks as a submitted one.
+ * See: docs/architecture/phase-8-goal-mode.md (Validation bounds)
+ */
+
 import { digestOf } from "./digest.ts";
 import {
   GOAL_EVIDENCE_KINDS,
@@ -113,6 +125,10 @@ const BUDGET_FIELDS = [
   "maxCostMicros",
 ];
 
+/**
+ * `undefined` means no criteria. An omitted `minimumEvidenceCount` defaults to
+ * 1 and an omitted `minimumTrust` to `worker-reported`.
+ */
 export function validateCriteria(
   value: unknown,
   path: string,
@@ -168,6 +184,7 @@ export function validateCriteria(
   return { ok: true, value: criteria };
 }
 
+/** An omitted `maxTokens` or `maxCostMicros` becomes `null`: unlimited. */
 export function validateBudget(
   value: unknown,
   path = "budget",
@@ -363,6 +380,11 @@ export function topologicalOrder(
   return { ok: true, value: order };
 }
 
+/**
+ * Graph-level checks shared by submission and `edits.ts`: duplicate node IDs,
+ * dependencies on missing nodes, a finite token or cost budget with a node
+ * reserving none, and cycles. Stamps `order` and `revisionDigest`.
+ */
 export function validateGoalGraph(
   goalId: string,
   objective: string,

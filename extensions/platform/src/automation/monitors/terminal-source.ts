@@ -1,3 +1,18 @@
+/**
+ * Terminal source for Reactive Monitors: subscribes to one Background
+ * Terminal's ordered output through `TerminalObservationSource` (production:
+ * `extensions/background-terminals/src/observation-service.ts`) and emits
+ * `terminal.line`, `terminal.chunk`, `terminal.gap`, `terminal.settled`.
+ *
+ * Observes only; it never starts, signals, or owns the process. Stale
+ * sequence numbers are ignored, and a skipped range emits `terminal.gap`
+ * and drops partial lines. Line framing keeps at most 16 KiB of an
+ * unterminated line per stream, flushed as `incomplete` on settle. Output
+ * is untrusted; `index.ts` redacts it and allows terminal monitors only in
+ * session scope.
+ * See: docs/architecture/phase-7-automation.md (MonitorRegistry)
+ */
+
 import type {
   MonitorSourceEvent,
   MonitorSourceFactory,

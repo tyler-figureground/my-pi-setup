@@ -1,3 +1,15 @@
+/**
+ * Answers "is this session running inside a Guarded Workspace it currently
+ * leases?" for workspace-scoped Memory. `current()` returns the WorkspaceLease
+ * only when the session cwd still resolves to the same Project Identity and
+ * worktree, exactly one live `leased` workspace owned by this session sits at
+ * that path, and a fenced `rebind` confirms it; any doubt yields `undefined`,
+ * so workspace Memory fails closed. Built in `src/composition.ts`; consumed as
+ * `CurrentWorkspaceLeaseProvider` by `src/wiring/memory.ts`.
+ *
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { canonicalPathKey } from "../../../shared/child-session.ts";
 import type {
   ProjectIdentity,

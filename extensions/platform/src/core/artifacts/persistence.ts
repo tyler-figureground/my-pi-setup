@@ -1,3 +1,16 @@
+/**
+ * Filesystem primitives behind the filesystem ArtifactStore: private 0700
+ * directories, bounded no-follow reads, create-new writes (temp file + hard
+ * link, never overwrite), and a cooperative cross-process store lock.
+ *
+ * The lock is a `.artifact-store.lock` directory holding `{pid, token}`;
+ * waiters poll for up to 5 s. A lock older than 30 s whose owner PID is gone
+ * is reclaimed through a quarantine rename, and every lock transition runs
+ * under a separate `.artifact-store.reclamation` guard so reclaimers cannot
+ * race. Release removes the lock only while it still carries this holder's
+ * token.
+ */
+
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import {

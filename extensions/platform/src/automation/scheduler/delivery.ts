@@ -1,3 +1,15 @@
+/**
+ * Scheduler result delivery: maps one finished Schedule Occurrence onto a
+ * `SessionBroker.send` Mailbox Message to the Schedule's result-route
+ * session. The message carries only the result Artifact id, digest, and
+ * size, labelled untrusted with no authority.
+ *
+ * Idempotent per occurrence (`idempotencyKey` is the delivery id); a
+ * still-queued message reports `offline`. `index.ts` decides when to send
+ * and retries on failure. Wired in `src/composition.ts`.
+ * See: docs/architecture/phase-7-automation.md (Internal adapter seams)
+ */
+
 import type { SessionBroker } from "../../messaging/index.ts";
 import type { ResultDelivery } from "./model.ts";
 

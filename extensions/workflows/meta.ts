@@ -1,3 +1,15 @@
+/**
+ * Workflow script gatekeeping and metadata: parses a model-written workflow
+ * with Acorn, rejects every module form except one `export const meta = {...}`
+ * (no imports, no other exports), and decodes that metadata statically.
+ *
+ * Nothing is evaluated: metadata must be plain literals, fails closed on
+ * anything else, and is length-clamped. The declaration is blanked out of the
+ * body (line numbers preserved) before `index.ts` hands the source to the
+ * sandbox (`sandbox.ts`). `extractMeta` is the non-throwing, cached variant
+ * for tool renderers, where partial model output is normal.
+ */
+
 import {
   parse,
   type ArrayExpression,

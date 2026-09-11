@@ -1,3 +1,30 @@
+/**
+ * Plan Mode wiring: adapts `PlanMode` (`src/plan/`) to Pi tool gating, the
+ * `/plan` command, the `platform-plan` status/widget, and session entries.
+ *
+ * While planning or approval-pending, every `tool_call` must pass
+ * `mode.authorize`, `user_bash` is refused, and the system prompt carries a
+ * PLAN MODE notice. The read-only Git tools are hidden at construction,
+ * offered to `mode.enter` for planning, and blocked if their source identity
+ * changes. Only `approve` - a direct `ctx.ui.confirm` plus a re-verified
+ * plan-file hash - presents the private authority to `mode.approve`.
+ * `mode()` drives the platform-wide plan/normal mode in `composition.ts`.
+ * Gated by the `planMode` flag (Parent only).
+ *
+ * Map:
+ * - helpers: `assistantText`, `safeGitPath`, `safeRevision`
+ * - `createPlanCapability`: `applyResult`, `readApprovedPlan`, `approve`
+ * - `executeGit` - hardened no-shell git; spill kept only if not secret-like
+ * - tools `git_status`, `git_diff`, `git_log`, `git_show`, `git_list_files`
+ *   and their identity fingerprints
+ * - `/plan` command (enter, status, approve, cancel)
+ * - handlers: `before_agent_start`, `tool_call`, `user_bash`, `agent_end`
+ *   (records the plan), `session_tree` (restores from the selected branch)
+ * - returned `start` (restore + verify), `stop`, `mode`
+ *
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import { randomUUID } from "node:crypto";
 import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

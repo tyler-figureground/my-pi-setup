@@ -1,3 +1,22 @@
+/**
+ * `ArtifactPublisher.publish`: the two-call exact-approval protocol and the
+ * at-most-once dispatch state machine for one Artifact Publication.
+ *
+ * Without a matching authority token the call verifies, materializes, and
+ * scans, then returns `approval_required` with a `PublicationApproval` whose
+ * `scope` hashes the exact intent (source/outbound hashes, target, provider,
+ * access, expiry, Sensitivity). The caller repeats the call with direct-user
+ * authority for that scope; any changed input yields a new scope. Policy is
+ * re-checked just before dispatch. The record is saved `pending` (with the
+ * adapter's recovery reference) before dispatch and `unknown` right after;
+ * an adapter throw or `ambiguous_outcome` also leaves `unknown`, which is
+ * never replayed. Share URLs must be `http://127.0.0.1` (local) or `https`
+ * (remote) without userinfo. A differing outbound body is saved as a new
+ * core Artifact.
+ *
+ * See: docs/architecture/phase-9-artifacts.md (Publication state)
+ */
+
 import { createHash } from "node:crypto";
 import { scanArtifactSensitivity } from "./scanner.ts";
 import { publisherFailure, validPublicationHandle } from "./errors.ts";
@@ -11,6 +30,7 @@ import type {
   StoredPublication,
 } from "./model.ts";
 
+/** SHA-256 of `JSON.stringify(value)`: key order matters, so keep it fixed. */
 export function approvalScope(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

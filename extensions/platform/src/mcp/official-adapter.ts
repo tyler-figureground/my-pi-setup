@@ -1,3 +1,19 @@
+/**
+ * Production `McpTransportAdapter` on the official MCP v2 client: STDIO and
+ * Streamable HTTP connections with 30 s connect and request deadlines.
+ *
+ * STDIO children get the SDK's default base environment plus only the
+ * configured `${ENV_NAME}` references, resolved at connect time. On Windows
+ * the spawned process tree (with creation-time identity) is polled and
+ * terminated on close or failed connect, so detached descendants do not
+ * survive. HTTP uses `createPinnedFetch`: every request is authorized by
+ * Origin Policy and pinned to the approved addresses. The auth provider
+ * supplies a token but has no `onUnauthorized` retry, which could replay an
+ * ambiguous mutation. Imported lazily by `src/composition.ts`.
+ *
+ * See: docs/adr/0006-build-tool-federation-on-official-mcp-v2.md
+ */
+
 import {
   Client,
   StreamableHTTPClientTransport,

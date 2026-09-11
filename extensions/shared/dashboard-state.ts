@@ -1,3 +1,14 @@
+/**
+ * Event-bus contract for the footer dashboard: the `model-info` and `git-info`
+ * extensions publish state snapshots and `ui-customization` renders them.
+ *
+ * Snapshots cross `pi.events` as untyped plain objects, so the consumer must
+ * check them with `isModelInfoState` / `isGitInfoState` before use (invalid
+ * payloads are dropped). Publishers
+ * re-emit their current state when `REFRESH_CHANNEL` fires, which
+ * `ui-customization/index.ts` does after installing its footer.
+ */
+
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
 export const REFRESH_CHANNEL = "dashboard:refresh";

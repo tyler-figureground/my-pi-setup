@@ -1,3 +1,15 @@
+/**
+ * The seams `createGoalRuntime` (`engine.ts`) is built from, besides the State
+ * and Artifact stores: clock, executor, Agent Profile resolution, Guarded
+ * Workspace lifecycle, review verification, outcome delivery, host binding.
+ *
+ * Production implementations: `host.ts` (clock, executor, profiles, review)
+ * and `delivery.ts`. `GoalWorkspacePort` has none in production, because the
+ * Goal Worker executor declares `workspaceOwnership: "executor"`; tests supply
+ * one to drive the host-owned path.
+ * See: docs/architecture/phase-8-goal-mode.md (Reused modules)
+ */
+
 import type { GoalMeteringCapabilities } from "./budget.ts";
 import type {
   GoalArtifactReference,

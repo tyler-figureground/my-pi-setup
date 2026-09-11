@@ -1,3 +1,14 @@
+/**
+ * Goal command authority check: binds a command to its digest and verifies
+ * actor, project/session binding, expiry, and the host-issued token.
+ *
+ * Pure apart from the injected `GoalAuthorityVerifier`, whose production
+ * issuer lives in `src/wiring/goals.ts`. `engine.ts` demands direct user
+ * authority for `submit` and `resume`; `pause` and `cancel` also accept an
+ * agent actor, which needs no token.
+ * See: docs/architecture/phase-8-goal-mode.md (Authority and edits)
+ */
+
 import { digestOf } from "./digest.ts";
 import type {
   GoalCommand,
@@ -69,6 +80,11 @@ function denied(reason: string): GoalOutcome<never> {
   };
 }
 
+/**
+ * Fail-closed: every refusal is `authority_denied` with a stable
+ * `details.reason`, and a verifier that throws counts as a rejection. With
+ * `requireDirectUser` set, an agent actor is refused outright.
+ */
 export function verifyGoalAuthority(
   command: GoalCommand,
   authority: GoalCommandAuthority,

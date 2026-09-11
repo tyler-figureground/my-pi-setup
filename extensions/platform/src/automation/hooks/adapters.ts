@@ -1,3 +1,30 @@
+/**
+ * Host adapters behind Declarative Hook `http`, `mcp`, and `agent` actions.
+ * Hook YAML supplies only a name and bounded input; URL, tool identity,
+ * Credential Reference, and Agent Profile come from host configuration
+ * (`configuration.ts`, the profile catalog). Built by `src/composition.ts`,
+ * called by `phase7.ts`.
+ *
+ * Every error and output passes `ExternalIntegrationControls.sanitize`, and
+ * a resolved credential is redacted exactly. HTTP assesses each effect with
+ * External Integration Controls, uses pinned fetch with no redirects and
+ * bounded JSON, and accepts direct-user authority only when its scope binds
+ * adapter, method, origin, input digest, actor, generation, and deadline.
+ * MCP activates exactly the configured Federated Tool and checks its
+ * identity. Agent runs only `subagent` or `review` profiles and re-checks
+ * the profile digest right before execution.
+ * Map:
+ * - definition and port types (`NamedProfileExecutionPort` reaches the
+ *   subagents extension via `src/agents/named-profile-execution-service.ts`)
+ * - shared guards: `validateDirectRequest`, `encodedJson`, `cancellable`,
+ *   `sanitizedText` / `fail` / `outputJson`
+ * - HTTP: `canonicalHttpDefinition`, `httpAuthorityScope`,
+ *   `boundedResponseBody`, `createNamedHookHttpAdapter`
+ * - MCP: `canonicalMcpDefinition`, `createNamedHookMcpAdapter`
+ * - agent: `sameProfileIdentity`, `createNamedHookAgentAdapter`
+ * See: docs/phase-7-configuration.md (Named Hook actions)
+ */
+
 import { createHash } from "node:crypto";
 import type { ActorRole } from "../../core/policy/index.ts";
 import type { JsonObject } from "../../core/result.ts";
@@ -473,6 +500,11 @@ function outputJson(
   return maximum >= 4 ? "null" : "0";
 }
 
+/**
+ * `authorize` exists only when `issueAuthority` is supplied; without it a
+ * confirmation-requiring `remote-write` action cannot run. Throws
+ * `TypeError` on invalid or duplicate definitions.
+ */
 export function createNamedHookHttpAdapter(
   options: NamedHookHttpAdapterOptions,
 ): HookHttpAdapter {

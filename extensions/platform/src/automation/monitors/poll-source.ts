@@ -1,3 +1,19 @@
+/**
+ * Poll source for Reactive Monitors plus the named JSON poll adapter. A poll
+ * monitor names a host-configured adapter (`pollTargets[].id`), never a URL,
+ * command, or header; `src/composition.ts` builds one `createJsonPollAdapter`
+ * per target.
+ *
+ * The adapter asks `authorize` for a pinned destination before every
+ * request, fetches GET only with no redirects or proxy, sends a resolved
+ * Credential Reference as the `authorization` header, and accepts only a
+ * plain JSON object under its byte cap (default 64 KiB). The source polls no
+ * faster than the host minimum, emits `poll.result` or `poll.status`, backs
+ * off exponentially on retryable failures, and stops on permanent ones.
+ * See: docs/phase-7-configuration.md (Monitor settings),
+ * docs/security/phase-7-threat-model.md (Network destination bypass)
+ */
+
 import { isIP } from "node:net";
 import { isProxy } from "node:util/types";
 import type {

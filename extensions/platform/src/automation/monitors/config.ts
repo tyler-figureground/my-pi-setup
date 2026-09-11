@@ -1,3 +1,17 @@
+/**
+ * Decoder for the `monitorSettings` block of `platform.json`: Reactive
+ * Monitor capacity, batch window, poll floor, WebSocket origin allowlist,
+ * loopback, and host-named poll targets.
+ *
+ * Invalid or unknown fields keep the `base` value and add a diagnostic
+ * instead of failing the file. A project source may only tighten: lower
+ * caps, longer windows, a subset of the user's WebSocket origins, no new
+ * loopback, and no added or altered poll targets. Poll targets are exact
+ * canonical HTTP(S) endpoints with no credentials in the URL. Decoded by
+ * `src/config.ts`; consumed by `index.ts` and `src/composition.ts`.
+ * See: docs/phase-7-configuration.md (Monitor settings)
+ */
+
 import type { PlatformDiagnostic } from "../../flags.ts";
 import { isPlainData } from "../triggers/validation.ts";
 

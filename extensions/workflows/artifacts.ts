@@ -1,3 +1,15 @@
+/**
+ * On-disk artifacts for one workflow run directory (the run dir under
+ * `~/.pi/agent/workflows/` that `prompt.ts` advertises): `workflow.json` (run
+ * details minus transcripts and result), `transcripts.json`, `result.json`.
+ *
+ * Every file is size-capped via `safeStringify` and written atomically. Each
+ * agent transcript keeps its first user prompt plus the newest entries within
+ * 32 KiB. `createWorkflowPersistence` coalesces live checkpoints to at most
+ * one write per 500 ms and swallows their errors; `flush` writes
+ * synchronously and throws. Used by `index.ts`.
+ */
+
 import type { TranscriptEntry, WorkflowDetails } from "./model.ts";
 import {
   safeStringify,

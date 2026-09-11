@@ -1,3 +1,18 @@
+/**
+ * Public entry point for Phase 9 Artifact Publication: opening Artifacts in
+ * the loopback viewer and sharing them through protected Vercel previews.
+ *
+ * Not the Artifact store. Immutable content-addressed bodies live in the
+ * Phase 1 `ArtifactStore` (`src/core/artifacts/`); this module reads from it
+ * and writes derived outbound bodies back to it, but owns only publication
+ * records, approval, Sensitivity, and adapters. Composed by
+ * `src/composition.ts`; driven by `/artifacts` in
+ * `src/wiring/artifacts-command.ts`.
+ *
+ * See: docs/architecture/phase-9-artifacts.md,
+ * docs/adr/0012-publish-artifacts-through-protected-vercel-previews.md
+ */
+
 export { exportArtifactBundle, importArtifactBundle } from "./bundle.ts";
 export { createArtifactPublisher } from "./publisher.ts";
 export { createInMemoryPublicationRepository } from "./repository.ts";

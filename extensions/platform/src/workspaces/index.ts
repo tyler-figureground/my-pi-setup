@@ -1,3 +1,29 @@
+/**
+ * WorkspaceManager (ADR 0004): owns Guarded Workspaces for one trusted,
+ * non-bare Git project - worktrees at `<workspaceRoot>/<workspaceId>` on
+ * branch `pi-agent/<workspaceId>` - with records, fenced agent Leases, and
+ * Git-operation guard Leases in StateStore.
+ *
+ * Invariants: intent is persisted before creating, integrating, or removing
+ * a worktree, so interrupted work is left for `recover` to report; holder
+ * calls re-check owner, fence, expiry, and live worktree identity; cleanup
+ * never deletes recursively - links/junctions are detached, then
+ * `git worktree remove` is the only removal; Git runs argv-only with hooks,
+ * fsmonitor, global/system config, and prompts disabled.
+ *
+ * Map:
+ * - types and the `WorkspaceManager` interface
+ * - Git helpers; `inspectWorkspace` (dirty-state inventory)
+ * - `applyWorktreeInclude`, `detachWorkspaceLinks`
+ * - record codec: `metadata`, `decodeSnapshot`
+ * - `createWorkspaceManager`: recover, create, lease, integrate,
+ *   disposition, renew, rebind, inspect
+ *
+ * See: docs/adr/0004-build-guarded-workspace-manager.md,
+ * docs/architecture/phase-3-profiles-workspaces.md,
+ * docs/runbooks/phase-3-workspace-recovery.md
+ */
+
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
@@ -116,6 +142,11 @@ export interface WorkspaceRecoveryReport {
 }
 
 export interface WorkspaceManager {
+  /**
+   * Startup sweep: workspaces whose agent Lease expired return to ready,
+   * dirty, or reviewed; `creating` records, unsafe identities, and live
+   * operation guards are reported as blocked, never cleaned up.
+   */
   recover(): Promise<WorkspaceResult<WorkspaceRecoveryReport>>;
   create(request: {
     readonly base:
@@ -134,6 +165,11 @@ export interface WorkspaceManager {
     readonly profileScope?: string;
     readonly profilePath?: string;
   }): Promise<WorkspaceResult<WorkspaceLease>>;
+  /**
+   * Fast-forwards the protected checkout - clean, on `targetBranch`, at
+   * `expectedTargetCommit` - to the reviewed commit, then removes the
+   * worktree. Requires `reviewed` state with HEAD unchanged since review.
+   */
   integrate(
     lease: WorkspaceLease,
     request: {
@@ -141,6 +177,11 @@ export interface WorkspaceManager {
       readonly expectedTargetCommit: string;
     },
   ): Promise<WorkspaceResult<WorkspaceSnapshot>>;
+  /**
+   * `mark-reviewed` needs a dirty workspace and records HEAD as
+   * `reviewedCommit`; `preserve` releases the Lease; `abandon` removes the
+   * worktree and needs `acknowledgeDataLoss` when dirty.
+   */
   disposition(
     lease: WorkspaceLease,
     action:
@@ -158,6 +199,10 @@ export interface WorkspaceManager {
     lease: WorkspaceLease,
     ttlMs: number,
   ): Promise<WorkspaceResult<WorkspaceLease>>;
+  /**
+   * Revalidates an existing Lease (owner, fence, expiry, path, Git identity)
+   * without extending it; `LEASE_LOST` on any mismatch.
+   */
   rebind(request: {
     readonly workspaceId: string;
     readonly owner: { readonly sessionId: string; readonly agentId: string };

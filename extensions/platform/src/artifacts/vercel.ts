@@ -1,3 +1,21 @@
+/**
+ * Vercel preview `ArtifactPublicationAdapter` (target `remote`): turns one
+ * materialized static HTML Artifact into a protected preview deployment plus
+ * an expiring share link, and reconciles status and revocation.
+ *
+ * Refuses live, interactive, and non-`link` publications, and re-reads
+ * project protection (every preview must be protected) before each upload.
+ * Uploads only `index.html` and a generated `vercel.json` carrying the same
+ * `artifactCsp` the local viewer serves. Non-preview, unsettled, or
+ * off-origin results are deleted or reported as `ambiguous_outcome` with a
+ * provider reference; nothing is retried. `intent:<handle>` references are
+ * resolved via the `piArtifactIntent` deployment meta. Revoke disables the
+ * share secret before deleting the deployment. HTTP lives in `vercel-rest.ts`.
+ *
+ * See: docs/adr/0012-publish-artifacts-through-protected-vercel-previews.md,
+ * docs/runbooks/phase-9-provider-outage-and-revoke.md
+ */
+
 import type { Outcome } from "../core/result.ts";
 import type {
   ArtifactPublicationAdapter,
@@ -68,6 +86,10 @@ export interface VercelArtifactTransport {
   ): Promise<Outcome<undefined, PublicationAdapterError>>;
 }
 
+/**
+ * Share secrets (Capability Tokens) keyed by deployment id, kept only for
+ * revocation. Production: `vault-secrets.ts`; `put` returns false if unsaved.
+ */
 export interface PublicationSecretStore {
   put(publicationId: string, secret: string): Promise<boolean>;
   get(publicationId: string): Promise<string | undefined>;

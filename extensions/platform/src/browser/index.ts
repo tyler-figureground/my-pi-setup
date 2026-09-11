@@ -1,3 +1,34 @@
+/**
+ * BrowserControl - host policy for one Browser Session: owned pages, Browser
+ * Observations, and classified Browser Actions over a `BrowserAdapter`
+ * (production: `playwright.ts`, imported lazily by `src/composition.ts`).
+ *
+ * Every destination - startup origin pinning, each network request, open,
+ * navigate, redirects, adopted popups - is decided by
+ * `ExternalIntegrationControls.assess` (Origin Policy, Plan Mode, direct-user
+ * authority). Page and error text is untrusted and goes through
+ * `controls.sanitize`, with exact redaction of any credential used. DOM
+ * actions need one-shot approval whose scope hashes action, input digest,
+ * target URL, and document identity; after credential or upload lookup the
+ * target is re-verified and any drift re-requests approval. Once a
+ * credential is filled, screenshots and downloads fail closed. Evidence goes
+ * to the core `ArtifactStore`; inline previews stay under 50 KiB.
+ *
+ * Map:
+ * - Adapter seam: `BrowserAdapterConnection`, `BrowserAdapter`
+ * - Public model: `BrowserActionRequest`, `BrowserControl`, options
+ * - `createBrowserControl` / `start`: lazy, generation-fenced launch with
+ *   pinned host resolver rules and the per-request `authorizeUrl` gate
+ * - `targetEvidence`, `currentPages`: document digest; owned-page and popup
+ *   reconciliation (max 16), closing anything not allowed
+ * - `observe`: snapshot redaction, screenshot and diagnostic Artifacts
+ * - `act`: serialized open, close, navigate, then approval-gated DOM
+ *   actions, credential fill, upload, download
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md,
+ * docs/adr/0007-build-browser-control-on-playwright-core.md
+ */
+
 import { createHash } from "node:crypto";
 import type { ArtifactStore } from "../core/artifacts/model.ts";
 import type { CredentialVault } from "../external/credentials.ts";
@@ -68,6 +99,10 @@ export interface BrowserAdapter {
       readonly profileDirectory: string;
       readonly executablePath: string;
       readonly serviceWorkers: "block";
+      /**
+       * Called for every browser request. `mutationApproved` is true only
+       * for the single non-GET request permitted during an approved action.
+       */
       readonly authorizeUrl?: (
         url: string,
         request?: {

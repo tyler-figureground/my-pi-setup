@@ -1,3 +1,16 @@
+/**
+ * git-info extension: publishes `GitInfoState` (branch, changed-file count,
+ * open PR) on `GIT_INFO_CHANNEL` for the ui-customization footer, and
+ * registers the `/lg` (browse changed files and diffs) and `/pr` (forced git
+ * + PR refresh) commands.
+ *
+ * Refreshes run in the background on session start, every 3 s, after each
+ * input and tool execution, and on `REFRESH_CHANNEL`, so startup never blocks
+ * on git or `gh`. A background refresh is skipped while another is in flight
+ * (`src/refresh-coordinator.ts`); a generation counter drops stale results.
+ * `gh pr view` runs only on branch change or `/pr`, and only OPEN PRs count.
+ */
+
 import type {
   ExtensionAPI,
   ExtensionContext,

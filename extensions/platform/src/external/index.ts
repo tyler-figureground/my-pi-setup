@@ -1,3 +1,21 @@
+/**
+ * External Integration Control (`ExternalIntegrationControls`: `assess`,
+ * `sanitize`): the host gate MCP, browser, monitor, hook, and artifact
+ * integrations call before a network operation, and the redactor for
+ * external results before they reach the model, UI, logs, or artifacts.
+ *
+ * `assess` order: CapabilityPolicy (deny, or demand a direct-user authority
+ * token verified by the caller-supplied `authority`) -> offline
+ * (`PI_OFFLINE`) -> Origin Policy: exact configured-origin match, then DNS
+ * resolution rejecting private, link-local, metadata, and multicast addresses
+ * (loopback only when allowed). An allow returns the canonical URL and the
+ * approved addresses for callers to pin (`pinned-fetch.ts`). `sanitize` is
+ * bounded and redacts secret-named fields, URL credentials and secret query
+ * params, auth headers, and exact known secret values.
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import {

@@ -1,3 +1,20 @@
+/**
+ * Child-session contract: how every headless in-process child Pi session
+ * (any child Execution Role) is loaded, restricted, and torn down.
+ *
+ * `createChildResources` binds the child's Execution Role onto a fresh event
+ * bus, drops parent-owned extensions and orchestration tools (children never
+ * get `subagent_*`, `workflow`, `workspace_list`, or `ask_user`), gates project
+ * resources on trust, and, when given a Guarded Workspace `writeRoot`, blocks
+ * `write`/`edit` outside it. Trust resolution fails closed; shutdown is
+ * idempotent and deadline-bounded. The path helpers are the canonical path
+ * form used across platform seams.
+ *
+ * Used by `subagents/src/backends/pi.ts`, `workflows/runner.ts`,
+ * `subagents/index.ts` (child cwd trust), `subagents/src/backends/claude.ts`
+ * (write containment), and platform projects/workspaces/language modules.
+ */
+
 import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
@@ -126,6 +143,10 @@ export function childToolPolicy(
   };
 }
 
+/**
+ * True only when `target` (resolved against `cwd`, symlinks followed) lies
+ * inside `workspaceRoot`. Any resolution error returns false (fail closed).
+ */
 export function workspaceContainsWriteTarget(
   workspaceRoot: string,
   cwd: string,

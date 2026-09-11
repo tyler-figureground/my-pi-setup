@@ -1,3 +1,16 @@
+/**
+ * Decodes `messagingSettings` (`discoverableBy`, `acceptsFrom`) into the
+ * Session Presence exposure the SessionBroker enforces.
+ *
+ * Both default to "none": not discoverable and accepting nothing.
+ * "local-user" exposure is honored only from user-scope configuration; a
+ * project-scope file requesting it gets a diagnostic and keeps `base`.
+ * Invalid values also keep `base` and report diagnostics.
+ *
+ * Decoded by src/config.ts; enforced by messaging/index.ts.
+ * See: docs/phase-6-configuration.md
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 
 export interface PlatformMessagingConfiguration {

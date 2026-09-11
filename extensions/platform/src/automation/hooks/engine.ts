@@ -1,3 +1,18 @@
+/**
+ * Legacy Phase 2 hook core (`createTriggerEngine`, the `TriggerEngine` of
+ * `model.ts`): matches version 1 Declarative Hooks and returns plain
+ * `HookEffect`s for the caller to execute. It runs nothing itself.
+ *
+ * Not the Phase 7 TriggerEngine in `src/automation/triggers/`, and not the
+ * production path: `src/wiring/hooks.ts` builds `createHooks` from
+ * `phase7.ts`. Version 2 action lists are refused. In `plan` mode, command
+ * effects and non-deny policy effects become closed denials; reentrant or
+ * self-traced dispatch is blocked; a failed reload keeps the last
+ * known-good hook set.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md,
+ * docs/adr/0003-build-declarative-hook-core.md
+ */
+
 import { validateConfigSources } from "./config.ts";
 import { declarativeHookEvents } from "./model.ts";
 import type {

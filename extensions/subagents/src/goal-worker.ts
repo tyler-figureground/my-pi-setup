@@ -1,3 +1,27 @@
+/**
+ * Subagents-side `GoalWorkerExecutor`: runs one Goal Attempt as a
+ * `goal-worker` child through the Agent Supervisor (SubagentManager). Bound
+ * in `../index.ts` via `shared/goal-worker.ts` for the platform Goal runtime.
+ * See docs/architecture/phase-8-goal-mode.md ("Execution certainty").
+ *
+ * Core invariant: at most one dispatch per attempt key. An Attempt is
+ * `not-started` while preparing, `unknown` once spawn is invoked, `started`
+ * once a child exists, and certainty never moves back to `not-started`. The
+ * same key and input adopts the live run or replays its settlement; any
+ * post-dispatch ambiguity is `execution_unknown`, and `inspect` reports an
+ * unknown key as `unknown`. Token caps need authoritative metering. Isolated
+ * profiles get a fresh Guarded Workspace that is always preserved.
+ *
+ * Map:
+ * - request/profile validation, `requestDigest`, pre-dispatch rejection
+ * - `GoalWorkerSubagentManager` and `withSupervisorMetering`
+ * - `goalWorkerRetentionLimits` and live/retained attempt records
+ * - `createGoalWorkerExecutor`: `sweep`, `seal`, `settleAttempt`
+ * - `watchTokenCap`: stops a running child at its token cap
+ * - `execute`/`runCore`: lease, dispatch, wait, usage, Artifact candidate
+ * - `executor.run`, `inspect`, `retention`, `shutdown`
+ */
+
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";

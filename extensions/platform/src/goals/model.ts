@@ -1,3 +1,14 @@
+/**
+ * Goal Mode vocabulary: Goal, Goal Node, Goal Attempt, and Goal Evidence
+ * types, the command and observation shapes of the `GoalEngine` seam, and
+ * `GOAL_LIMITS`, the hard ceilings that validation, persistence, and host
+ * config are checked against.
+ *
+ * Types and constants only. Legal moves between the states declared here live
+ * in `transitions.ts`; `config.ts` may narrow the limits but never raise them.
+ * See: docs/architecture/phase-8-goal-mode.md (Domain, Validation bounds)
+ */
+
 import type { ModuleError, Outcome } from "../core/result.ts";
 
 /**

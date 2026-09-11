@@ -1,3 +1,17 @@
+/**
+ * Local Review wiring: adapts `LocalReview` (`src/review/`) to the `/review`
+ * command and the `local-review` status item. No model-facing tool exists.
+ *
+ * `/review [target] [--second] [--allow-stale] [--tests]` (or an interactive
+ * target picker) runs one review at a time; `/review cancel` or `stop`
+ * aborts it. TUI or RPC only. The notice is sanitized, lists at most 50
+ * findings, and names the report Artifact. `composition.ts` creates this
+ * under the `review` flag (Parent only) but calls `start` only for a trusted,
+ * non-bare Git project; until then `/review` reports it is unavailable.
+ *
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import type {
   ExtensionAPI,
   ExtensionCommandContext,

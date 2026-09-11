@@ -1,3 +1,15 @@
+/**
+ * Test-only child process, not runtime code. `scheduler.test.ts` ("two native
+ * Node and SQLite schedulers claim one occurrence for one executor") spawns
+ * two of these against one SQLite file to prove a due Schedule Occurrence is
+ * claimed, executed, and delivered exactly once across processes.
+ *
+ * Args: db path, artifact root, gate file, marker file, owner id, fixed `now`.
+ * Opens a Scheduler with a stub executor that appends its owner id to the
+ * marker, prints `READY`, waits for the gate file, fires its fake clock once,
+ * then prints `{ executions, deliveries }`. Exit 2 = bad args.
+ */
+
 import { appendFileSync, existsSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ResolvedAgentProfile } from "../shared/agent-profile.ts";

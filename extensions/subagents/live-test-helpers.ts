@@ -1,3 +1,15 @@
+/**
+ * Shared helpers for the live backend tests (`pi.test.ts`, `claude.test.ts`,
+ * `codex.test.ts`), which drive a real backend through `SubagentManagerLive`.
+ *
+ * Test-only; no production code imports it. `disposeLiveRuntime` tolerates
+ * the known Windows teardown race (Codex app-server tree already exited) only
+ * after proving every captured process identity is gone. The metering helpers
+ * keep cumulative billed tokens (`metered`) distinct from context occupancy
+ * (`usage`); `claudeAssistantBilling` recomputes Claude's billed total from the
+ * session JSONL, counting each request id once (its largest usage entry).
+ */
+
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";

@@ -1,3 +1,25 @@
+/**
+ * Real `LanguageServerAdapter`: spawns one language-server process and
+ * speaks LSP over stdio through Microsoft `vscode-jsonrpc`.
+ *
+ * Process safety: fixed argv with `shell: false` (Windows .cmd/.bat go
+ * through cmd.exe with strict quoting and reject %, !, CR, LF, and NUL), an
+ * allowlisted environment plus configured overrides, and cwd at the project
+ * root. Incoming frames are size-limited before JSON-RPC parsing; stderr is
+ * capped and never surfaced. Dynamic capability registration is refused.
+ * Close sends shutdown/exit, then terminates the whole process tree (POSIX
+ * process group; Windows descendants matched by PID and start time).
+ *
+ * Map:
+ * - BoundedProtocolStream: header, frame, and total-traffic limits
+ * - process-tree termination (POSIX group; Windows PowerShell + identity)
+ * - environment allowlist; commandInvocation (.cmd/.bat quoting)
+ * - createStdioLanguageServerAdapter: spawn, RPC handlers, initialize, close
+ *
+ * Loaded lazily by src/composition.ts.
+ * See: docs/adr/0005-build-persistent-language-intelligence.md
+ */
+
 import {
   spawn as nativeSpawn,
   type ChildProcess,

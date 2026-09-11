@@ -1,3 +1,21 @@
+/**
+ * Filesystem `PlanPersistenceAdapter` for Plan Mode: create-new atomic plan
+ * writes and hash-verified, no-follow reads.
+ *
+ * Every directory segment between the configured root and the plan file
+ * must be a real directory (no links) that stays inside the canonical root;
+ * missing ones are created 0700. `writeAtomic` writes and fsyncs a 0600
+ * temp file, then publishes with `link()` so an existing plan is never
+ * overwritten, re-checking the directory's dev/inode around each step.
+ * `readVerified` opens with O_NOFOLLOW, rejects identity changes and files
+ * over `maxBytes`, and returns content only if its SHA-256 equals
+ * `expectedHash` (the plan hash kept in Plan Mode state).
+ *
+ * Used by src/wiring/plan.ts, which re-reads approved plans via
+ * `readVerified`.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";

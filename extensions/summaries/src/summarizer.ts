@@ -1,3 +1,16 @@
+/**
+ * One-shot recap call for the summaries extension: sends the serialized run
+ * transcript to the configured model via the session's `ModelRegistry` and
+ * returns a cleaned `{ recap, next }`.
+ *
+ * `summarizeRun` rejects (never returns a partial recap) on a missing model or
+ * credentials, a provider error, an abort, the 45 s overall timeout, or
+ * unparseable output; `../index.ts` then shows a local fallback. Parsing
+ * accepts the bare object, a fenced block, or the outermost braces, but only
+ * with exactly the keys `recap` and `next`. Terminal escapes and control
+ * characters are stripped and both fields are length-capped.
+ */
+
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { Data, Effect } from "effect";

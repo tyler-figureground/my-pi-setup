@@ -1,3 +1,18 @@
+/**
+ * Resolved Agent Profile shapes: what a named profile becomes after the
+ * platform `ProfileCatalog` (`platform/src/profiles/index.ts`) resolves
+ * managed, user, and trusted-project sources.
+ *
+ * Type-only contract. `ResolvedProfileIdentity` (name, content digest,
+ * catalog generation, source) is the immutable pin carried by
+ * `GoalWorkerRequest` and `GuardedWorkspaceBinding`; `ResolvedExecutionPolicy`
+ * is the host-enforced child policy that subagents compiles per backend
+ * (`subagents/src/profile-policy.ts`). A policy's role is always a child
+ * Execution Role, never "parent". Imported by subagents, the platform
+ * profiles/goals/scheduler modules, and the scheduler workers.
+ * See docs/architecture/phase-3-profiles-workspaces.md.
+ */
+
 import type { ChildExecutionRole } from "./execution-role.ts";
 
 export type ProfileScope = "managed" | "user" | "project";

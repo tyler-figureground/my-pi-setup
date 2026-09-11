@@ -1,3 +1,18 @@
+/**
+ * `fetch`-compatible client that connects only to the addresses a prior
+ * authorization approved (typically `ExternalIntegrationControls.assess`)
+ * while keeping the hostname for the HTTP Host header and TLS SNI, so DNS
+ * cannot change between the check and the connection.
+ *
+ * Fail-closed: unauthorized or origin-changed targets throw before
+ * connecting; 3xx redirects are errors, never followed; request bodies must be
+ * buffered (no streams) and at most 4 MiB by default. Response bodies stream
+ * unbounded - callers enforce size limits. Used by the MCP adapter and OAuth,
+ * HTTP hook actions, and Monitor polling.
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import http from "node:http";
 import https from "node:https";
 import { Readable } from "node:stream";

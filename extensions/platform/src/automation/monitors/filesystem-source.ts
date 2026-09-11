@@ -1,3 +1,20 @@
+/**
+ * Filesystem source for Reactive Monitors: watches one canonical directory
+ * root and emits `filesystem.change` (create, update, or delete with a
+ * root-relative path) and `filesystem.error` events.
+ *
+ * Watcher events are hints only. Each `@parcel/watcher` callback (loaded
+ * lazily) and a periodic timer (default 30 s) trigger a serialized full
+ * snapshot diff, which is the source of truth. The root must be a real
+ * directory, never a link or junction; its identity is rechecked on every
+ * pass, and a replaced root emits `root_replaced` and closes the source.
+ * Links are skipped, `.git`, `state`, and artifact folders are ignored, and
+ * snapshots are capped at 10,000 entries.
+ * See: docs/adr/0011-wrap-parcel-watcher-and-ws.md,
+ * docs/security/phase-7-threat-model.md (Filesystem escape or false watcher
+ * truth)
+ */
+
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { MonitorSourceFactory } from "./model.ts";

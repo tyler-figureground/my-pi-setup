@@ -1,3 +1,15 @@
+/**
+ * Selects and serializes one main-agent run for the recap model. Pure, no I/O.
+ *
+ * `createRunBoundary` remembers the session leaf before a run starts;
+ * `getRunEntries` returns the branch entries after it (all entries for a
+ * `null` baseline, none if the baseline left the branch). The transcript is
+ * redacted before it leaves the process (bearer tokens, common key formats,
+ * secret-named fields and query params), caps each tool argument/result, skips
+ * earlier `summary-recap` entries, and keeps head and tail within 48,000
+ * bytes. `buildFallbackRecap` is the local recap used when the model fails.
+ */
+
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export const TOOL_ARGUMENT_MAX_BYTES = 2_000;

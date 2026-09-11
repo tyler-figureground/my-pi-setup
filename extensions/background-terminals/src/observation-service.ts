@@ -1,3 +1,17 @@
+/**
+ * Terminal observation seam: lets the platform's Reactive Monitors subscribe
+ * to background-terminal output without importing the TerminalManager.
+ *
+ * `../index.ts` binds its source to `pi.events` with
+ * `bindTerminalObservationSource`; `platform/src/composition.ts` looks it up
+ * with `terminalObservationSourceFor` and feeds it to the monitor source
+ * factory. Extensions load as isolated modules, so a call crosses as a
+ * versioned, claim-once message on a private event channel; an unclaimed call
+ * rejects as "source is unavailable". At most one source per bus. The
+ * returned lease's `close` ends the subscription; it never owns the process.
+ * See docs/architecture/phase-7-automation.md ("MonitorRegistry").
+ */
+
 import type { TerminalObservation } from "./domain.ts";
 
 export interface TerminalObservationRequest {

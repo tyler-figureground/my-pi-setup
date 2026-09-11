@@ -1,3 +1,18 @@
+/**
+ * Goal Worker executor contract: the seam through which the platform Goal host
+ * (`platform/src/goals/host.ts`) runs one Goal Attempt as a `goal-worker`
+ * child without importing the subagents extension.
+ *
+ * subagents binds its executor (`subagents/src/goal-worker.ts`) to `pi.events`
+ * with `bindGoalWorkerExecutor`; `platform/src/composition.ts` looks it up with
+ * `goalWorkerExecutorFor`. Extensions load as isolated modules, so a call
+ * crosses as a versioned, claim-once message on a private event channel; an
+ * unclaimed call rejects as "executor is unavailable". At most one executor
+ * per bus. Outcomes carry execution certainty so an ambiguous Attempt is
+ * inspected, never redispatched.
+ * See docs/architecture/phase-8-goal-mode.md ("Execution certainty").
+ */
+
 import type { ResolvedProfileIdentity } from "./agent-profile.ts";
 
 export interface GoalWorkerRequest {
@@ -239,6 +254,10 @@ function remoteExecutor(eventBus: EventBusLike): GoalWorkerExecutor {
   };
 }
 
+/**
+ * Serve `executor` on this bus. Throws if one is already bound (locally or by
+ * another extension). Returns an idempotent unbind function.
+ */
 export function bindGoalWorkerExecutor(
   eventBus: object,
   executor: GoalWorkerExecutor,
@@ -279,6 +298,10 @@ export function bindGoalWorkerExecutor(
   };
 }
 
+/**
+ * The executor bound to this bus: the local instance if bound through this
+ * module copy, else an event-bus proxy, else `undefined` when none is bound.
+ */
 export function goalWorkerExecutorFor(eventBus: object) {
   const local = bindings.get(eventBus)?.executor;
   if (local || !isEventBusLike(eventBus)) return local;

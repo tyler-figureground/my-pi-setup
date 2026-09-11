@@ -1,3 +1,18 @@
+/**
+ * Loopback `ArtifactPublicationAdapter` (target `local`, id `local-loopback`)
+ * - the default, private way to open an Artifact in a browser.
+ *
+ * Each publish mints a 32-byte random Capability Token, returns it only in
+ * the `http://127.0.0.1:<port>/open#<token>` share URL, and keeps just its
+ * SHA-256. Publications, token hashes, and sessions live only in memory and
+ * `close()` clears them, so `/reload` or shutdown invalidates every local
+ * link. Capped at 128 active publications. The HTTP surface is in
+ * `local-viewer-server.ts`; `src/composition.ts` runs this as the
+ * `artifact-local-viewer` lifecycle daemon.
+ *
+ * See: docs/architecture/phase-9-artifacts.md (Local viewer protocol)
+ */
+
 import { randomBytes } from "node:crypto";
 import type {
   ArtifactPublicationAdapter,
@@ -165,6 +180,10 @@ export function createLocalArtifactPublicationAdapter(
 
   return {
     adapter,
+    /**
+     * Live refresh: replaces an active, live, unexpired publication's body in
+     * place and bumps its revision. `false` means the swap was refused.
+     */
     async update(
       reference: string,
       input: {

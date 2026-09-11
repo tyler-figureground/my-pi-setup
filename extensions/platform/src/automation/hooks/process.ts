@@ -1,3 +1,19 @@
+/**
+ * No-shell process runner for hook `command` actions (also the plan-mode
+ * Git runner in `src/wiring/plan.ts`): exact executable plus argument
+ * array, stdin ignored, bounded in-memory capture, optional streaming spill.
+ *
+ * `env` replaces the process environment (on Windows `PATH` is blanked
+ * unless supplied). One `outputCapBytes` budget is shared by stdout and
+ * stderr; spill past `spillCapBytes` (default 16 MiB) terminates the child.
+ * On Windows the process tree is killed by creation identity, never by
+ * PID alone; on POSIX the process group gets SIGTERM, then SIGKILL.
+ * `shutdown` stops waiting at its deadline while termination continues.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md (Declarative hooks),
+ * docs/security/phase-7-threat-model.md (Windows PID reuse or junction
+ * cleanup)
+ */
+
 import {
   spawn,
   type ChildProcess,

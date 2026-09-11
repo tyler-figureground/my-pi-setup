@@ -1,3 +1,14 @@
+/**
+ * TUI pieces for the summaries extension: the "Run recap" card that renders a
+ * `summary-recap` entry (the model/reasoning source line appears only when
+ * expanded), and the `/summary-model` pickers.
+ *
+ * The model picker lists only models the registry reports as available; the
+ * reasoning picker offers only levels that model supports, pre-selecting the
+ * saved level when valid. Both resolve `undefined` on cancel.
+ * Used by `../index.ts`.
+ */
+
 import {
   getMarkdownTheme,
   ThinkingSelectorComponent,

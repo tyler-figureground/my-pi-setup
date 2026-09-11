@@ -1,3 +1,31 @@
+/**
+ * Platform composition root (ADR 0001): builds, orders, and tears down every
+ * platform capability for one Pi extension runtime.
+ *
+ * `session_start`: tear down any prior runtime, load config
+ * (`loadPlatformFlags`; `options.flags` replaces it in tests), then return
+ * unless some flag is on AND the loader's Execution Role is `parent` - child
+ * roles own only an empty LifecycleSupervisor. The Parent then resolves
+ * Project Identity and wires each enabled capability; many also require a
+ * trusted project. StateStore (`<agentDir>/state/platform.sqlite`) and the
+ * per-project ArtifactStore open lazily on first use. Each capability's Pi
+ * surface lives in `src/wiring/<name>.ts`; this file builds its adapters and
+ * authorities and calls `start`/`stop`.
+ *
+ * Map:
+ * - root-path helpers, lazy CredentialVault / memory-persistence proxies
+ * - `PlatformExtensionOptions`: config and factory overrides for tests
+ * - `teardown`: fixed stop order, lifecycle shutdown last, AggregateError
+ * - `session_start` wiring order: artifacts, hook event sink, workspaces,
+ *   memory, messaging, MCP, browser, profiles + agent services, language,
+ *   review, plan, rules, hooks, then monitors / scheduler / goals (all three
+ *   gated on an active Session Broker)
+ * - `session_shutdown` -> `teardown`
+ *
+ * See: docs/adr/0001-platform-composition-root.md,
+ * docs/architecture/platform-foundation.md, docs/architecture/phase-*.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -172,6 +200,11 @@ export function canOwnPlatformDaemons(role: ExecutionRole) {
   return role === "parent";
 }
 
+/**
+ * Machine-wide ArtifactStore root: `%LOCALAPPDATA%/pi-agent/artifacts` on
+ * Windows, `$XDG_STATE_HOME/pi-agent/artifacts` elsewhere. `agentDir` does
+ * not affect the result; composition appends `projects/<hash>` per project.
+ */
 export function platformArtifactRoot(agentDir: string) {
   return process.platform === "win32"
     ? path.join(
@@ -289,6 +322,11 @@ function browserProfileScope(agentDir: string, projectId: string) {
     .slice(0, 24);
 }
 
+/**
+ * Default Language Intelligence servers, used when config lists none: the
+ * bundled typescript-language-server (run with this Node) and `ruff server`
+ * from PATH.
+ */
 export function builtInLanguageServers(): readonly LanguageServerDefinition[] {
   const typescriptServer = fileURLToPath(
     new URL(
@@ -358,6 +396,12 @@ function isReleasableLifecycleSupervisor(
   );
 }
 
+/**
+ * Test and embedding overrides. Supplying `flags` replaces `platform.json`
+ * loading: the configuration fields (`plan` through `hookActions`) are read
+ * only then, and unmet flag dependencies throw at construction. Adapter and
+ * `create*` factory overrides apply either way.
+ */
 export interface PlatformExtensionOptions {
   flags?: unknown;
   plan?: Partial<PlatformPlanConfiguration>;

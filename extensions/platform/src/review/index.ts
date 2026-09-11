@@ -1,3 +1,23 @@
+/**
+ * `LocalReview`: read-only evaluation of one Review Target. `run` captures
+ * the target, collects evidence, asks the reviewer (optionally plus an
+ * independent second pass), validates Review Findings, and persists the full
+ * record as a JSON Artifact.
+ *
+ * Read-only guarantee: the source fingerprint (HEAD, index, file contents)
+ * is re-checked after the reviewer and again after the Artifact is written;
+ * any change fails with `source_changed_during_review`. A capture from a
+ * different Project Identity is rejected. Test evidence runs only when
+ * `includeTests` is set. Candidates that all fail validation are an
+ * `invalid_findings` failure, not a no-findings result. After capture, every
+ * outcome is persisted as an Artifact (or fails with `artifact_failed`).
+ *
+ * Collaborators: review/git.ts, findings.ts, language-evidence.ts,
+ * test-evidence.ts, reviewer-service.ts. Composed in src/composition.ts for
+ * trusted non-bare Git projects; `/review` lives in src/wiring/review.ts.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import type {
   ArtifactMetadata,
   ArtifactStore,

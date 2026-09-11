@@ -1,5 +1,24 @@
+/**
+ * TriggerEngine domain model: Trigger Event, Trigger Binding, source
+ * binding, result and inspection shapes, and the engine interfaces. Types
+ * only; `engine.ts` implements them.
+ *
+ * Callers never supply provenance. A publisher from
+ * `TriggerEngineRuntime.bindSource` carries host-resolved Project Identity,
+ * session, and trust; `TriggerPublishInput` is only type, payload, and
+ * durability, and the engine stamps id, time, source, and causal ancestry.
+ * Payloads are data, never authority. Unrelated to the Phase 2 hook-core
+ * `TriggerEngine` interface in `src/automation/hooks/model.ts`.
+ * See: docs/architecture/phase-7-automation.md (TriggerEngine)
+ */
+
 import type { JsonObject, ModuleError, Outcome } from "../../core/result.ts";
 
+/**
+ * `restart-only` events are stored through `TriggerPersistencePort` and
+ * replayed to an owner's bindings on its first reconcile after a restart;
+ * `ephemeral` events stay in memory and may be coalesced.
+ */
 export type TriggerDurability = "ephemeral" | "restart-only";
 
 export interface TriggerSource {
@@ -52,6 +71,10 @@ export interface TriggerPublishInput {
   readonly durability?: TriggerDurability;
 }
 
+/**
+ * Capability handle returned by `bindSource`. Rebinding the same source kind
+ * and id, or `revokeSource`, invalidates it.
+ */
 export interface TriggerSourcePublisher {
   publish(
     input: TriggerPublishInput,
@@ -79,6 +102,11 @@ export interface TriggerBinding {
   };
   readonly coalesceBy?: string;
   readonly deadlineMs?: number;
+  /**
+   * A returned plain JSON object (at most 64 KiB) becomes the delivery's
+   * `output`; any other non-undefined value marks it `failed`. `signal`
+   * aborts on deadline, generation retirement, and engine close.
+   */
   readonly deliver: (
     delivery: TriggerDelivery,
   ) => JsonObject | void | Promise<JsonObject | void>;
@@ -171,6 +199,11 @@ export interface TriggerInspection {
 }
 
 export interface TriggerEngine {
+  /**
+   * Replaces every binding of `ownerId`. `generation` must strictly
+   * increase; the prior generation's queued and running deliveries settle
+   * as `fenced`. An empty `bindings` list detaches the owner.
+   */
   reconcile(
     input: TriggerOwnerReconciliation,
   ): Promise<TriggerOutcome<TriggerReconcileResult>>;

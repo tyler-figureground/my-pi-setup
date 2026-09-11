@@ -1,3 +1,18 @@
+/**
+ * CredentialVault contract (`store`, `resolve`, `inspect`, `replace`,
+ * `remove`) and binding rules. Callers hold only a Credential Reference
+ * (`credential:<id>`); the secret is released only for the exact binding it
+ * was stored under - integration, resource id, canonical origin, and optional
+ * 64-hex project scope - so a reference cannot be replayed against another
+ * server or origin. Mismatches return `undefined`/`false`, not errors;
+ * `inspect` reveals the binding, never the secret.
+ *
+ * `createInMemoryCredentialVault` is the test adapter; production uses the
+ * OS keyring (`keyring-credentials.ts`), loaded lazily by composition.
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import { randomUUID } from "node:crypto";
 import type { ModuleError, Outcome } from "../core/result.ts";
 import type { ExternalIntegration } from "./index.ts";

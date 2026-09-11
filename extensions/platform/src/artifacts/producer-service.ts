@@ -1,3 +1,14 @@
+/**
+ * Handoff that lets other extensions write Artifacts without importing the
+ * platform composition root, keyed (weakly) by the session's `pi.events` bus.
+ *
+ * `src/composition.ts` binds a producer when Artifacts are enabled in a
+ * trusted project; consumers such as `extensions/workflows/` look it up with
+ * `artifactProducerFor`. The bound producer stamps the current Project
+ * Identity and writes to the core `ArtifactStore`; it can only `put`, never
+ * publish. The unbind function removes only its own binding.
+ */
+
 import type {
   ArtifactMetadata,
   ArtifactStoreError,
@@ -29,6 +40,10 @@ export function bindArtifactProducer(
   };
 }
 
+/**
+ * `undefined` when Artifacts are disabled, the project is untrusted, or the
+ * producer was unbound at shutdown.
+ */
 export function artifactProducerFor(events: object) {
   return bindings.get(events);
 }

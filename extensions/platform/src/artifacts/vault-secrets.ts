@@ -1,3 +1,17 @@
+/**
+ * Production `PublicationSecretStore` for Vercel share secrets. A share
+ * secret is the Capability Token inside a remote share URL; it is kept only
+ * so `revoke` can disable that link.
+ *
+ * The secret goes to the platform `CredentialVault`; the `StateStore` keeps
+ * only its opaque Credential Reference, keyed by deployment id (`dpl_...`) in
+ * a collection named by a Project Identity hash. A failed StateStore commit
+ * rolls back the vault write; removal deletes the vault entry before the
+ * reference record.
+ *
+ * See: docs/runbooks/phase-9-provider-outage-and-revoke.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import type { StateStore } from "../core/persistence/index.ts";
 import type { CredentialVault } from "../external/credentials.ts";

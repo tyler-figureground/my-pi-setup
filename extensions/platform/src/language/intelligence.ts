@@ -1,3 +1,30 @@
+/**
+ * `LanguageIntelligence` implementation: routes discover / synchronize /
+ * query to lazily started language servers bound to the current worktree.
+ *
+ * Results are advisory (`authority: "repository-native-checks"`);
+ * unsupported operations fail with `unsupported_capability`, never empty
+ * success, and possibly stale versionless diagnostics are refused. Each
+ * server is one LifecycleSupervisor resource keyed by server ID + canonical
+ * worktree root: acquiring it starts nothing, first use starts one
+ * generation, a crash restarts on next use (backoff, 3-per-60s circuit) and
+ * reopens current documents, and publications from older generations are
+ * ignored. Document versions only increase. Paths outside the worktree are
+ * rejected; oversized results spill to an Artifact.
+ *
+ * Map:
+ * - DEFAULT_LANGUAGE_LIMITS, validateServerDefinition, withDeadline
+ * - path helpers: canonicalCandidate, projectRoot, isInside
+ * - createLanguageIntelligence: per-server slot (connect, crash circuit,
+ *   diagnostics cache, run / notify retry, close)
+ * - result normalizers: locations, symbols, hover, diagnostics, calls
+ * - synchronize: open / change / close with rollback on notify failure
+ * - query: routing, per-kind LSP requests, bounding + Artifact spill
+ *
+ * Loaded lazily by src/composition.ts; tools in src/wiring/language.ts.
+ * See: docs/adr/0005-build-persistent-language-intelligence.md
+ */
+
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -33,6 +60,7 @@ import type {
   NormalizedSymbol,
 } from "./model.ts";
 
+/** Hard ceilings: `options.limits` may lower these but never raise them. */
 export const DEFAULT_LANGUAGE_LIMITS: LanguageLimits = Object.freeze({
   maxServers: 4,
   maxServersPerQuery: 2,

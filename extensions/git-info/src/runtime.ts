@@ -1,3 +1,12 @@
+/**
+ * Effect runtime for the git-info extension: a `ManagedRuntime` providing the
+ * Node-backed `CommandRunner` (`process.ts`).
+ *
+ * `index.ts` creates it lazily and disposes it on `session_shutdown`.
+ * `runEffect` bridges to Promise-land for command handlers, turning an
+ * interrupt (e.g. the command's abort signal) into `interruptMessage`.
+ */
+
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
 import { CommandRunner, CommandRunnerLive } from "./process.ts";

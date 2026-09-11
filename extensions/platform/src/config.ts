@@ -1,3 +1,19 @@
+/**
+ * Platform configuration loader: feature flags plus each capability's
+ * settings block, read from user `<agentDir>/platform.json`, then - only for
+ * a trusted project - `.pi/platform.json` in cwd or the nearest ancestor
+ * holding `.git`. Later sources override earlier ones field by field.
+ *
+ * Top-level booleans are flags; settings keys (`plan`, `mcpServers`,
+ * `browserSettings`, ...) are split off first, so a new settings key must be
+ * added to that list or it is reported as an unknown flag. Files must be
+ * regular, unlinked, at most 64 KiB, and keep the same identity across the
+ * read; problems become diagnostics, and an unreadable file is skipped.
+ *
+ * See: docs/architecture/platform-foundation.md,
+ * docs/phase-2-configuration.md (and the later phase-N-configuration docs)
+ */
+
 import {
   closeSync,
   constants,
@@ -236,6 +252,12 @@ function decodePlanConfiguration(
   };
 }
 
+/**
+ * Despite the name, returns the full platform configuration (flags and every
+ * settings block) plus diagnostics. Unmet flag dependencies (monitors,
+ * scheduler, or goals without messaging; goals without profiles) are only
+ * diagnosed here; composition denies activation at runtime.
+ */
 export function loadPlatformFlags(location: PlatformConfigLocation): {
   readonly flags: PlatformFlags;
   readonly plan: PlatformPlanConfiguration;

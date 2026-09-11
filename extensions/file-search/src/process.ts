@@ -1,3 +1,16 @@
+/**
+ * Runs one `fd` or `rg` process for the file-search tools (`../index.ts`) and
+ * captures its stdout without holding it all in memory.
+ *
+ * Stdout streams to `output.txt` in a fresh temp directory while a head
+ * preview is kept within Pi's default line/byte limits; line and byte counts
+ * ignore trailing newlines. The temp directory is deleted unless the preview
+ * was truncated, in which case `fullOutputPath` points at it and the caller
+ * must eventually `discardCapturedOutput`. Stderr is capped at 64 KiB. The
+ * exit code is returned, not interpreted (rg's "no matches" exit 1 is handled
+ * by the caller).
+ */
+
 import { dirname, join } from "node:path";
 import {
   DEFAULT_MAX_BYTES,

@@ -1,3 +1,17 @@
+/**
+ * In-process fixture `LanguageServerAdapter` for tests: scripted servers with
+ * configurable capabilities, startup delay, request/notification handlers,
+ * and `publish`/`close` hooks to simulate diagnostics and crashes.
+ *
+ * Spawns no processes and honors abort signals like the real adapter.
+ * `inspect()` exposes start/close counts and the recorded requests and
+ * notifications, so tests can assert lazy start, single generation, and
+ * restart behavior through the `LanguageIntelligence` interface.
+ *
+ * Real adapter: language/stdio.ts.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import type {
   FixtureLanguageServerAdapter,
   FixtureLanguageServerDefinition,

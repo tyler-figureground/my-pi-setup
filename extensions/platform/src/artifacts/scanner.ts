@@ -1,3 +1,17 @@
+/**
+ * Deterministic Sensitivity scan of the exact outbound bytes of a publication.
+ *
+ * Reports rule id, severity, and match count only; matched values and
+ * excerpts never leave this function. Exact canaries (e.g. the resolved
+ * Vercel token; up to 32 values of 8+ chars) add a blocking
+ * `known-credential` finding. `digest` hashes scanner version plus findings so
+ * an approval can bind to one scan result. Callers layer policy on top: in
+ * `publish-operation.ts` non-public Artifacts are forced to `review` and
+ * `local-path` is escalated to `block` for remote targets.
+ *
+ * See: docs/security/phase-9-threat-model.md
+ */
+
 import { createHash } from "node:crypto";
 import type { SensitivityFinding, SensitivityReport } from "./model.ts";
 

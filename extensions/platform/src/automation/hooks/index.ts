@@ -1,3 +1,17 @@
+/**
+ * Declarative Hooks barrel, imported by `src/composition.ts` and
+ * `src/wiring/hooks.ts`. The production runtime is `createHooks`
+ * (`phase7.ts`); `createTriggerEngine` here is the legacy Phase 2 hook core
+ * (`engine.ts`), not the Phase 7 bus in `src/automation/triggers/`.
+ *
+ * Where to look: event names and shapes in `model.ts`; YAML loading in
+ * `config.ts`; load-time rules and redaction in `validation.ts`; host-named
+ * integrations in `configuration.ts` and `adapters.ts`; the no-shell
+ * command runner in `process.ts`.
+ * See: docs/migrations/phase-7-declarative-hooks.md,
+ * docs/adr/0003-build-declarative-hook-core.md
+ */
+
 export { createTriggerEngine } from "./engine.ts";
 export {
   decodeHookActionConfiguration,
