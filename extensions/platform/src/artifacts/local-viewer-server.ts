@@ -1,3 +1,20 @@
+/**
+ * HTTP server behind the local Artifact viewer. Trust boundary: any local
+ * process or web page may reach this port, and Artifact content is hostile.
+ *
+ * Binds `127.0.0.1` on an OS-assigned port and answers 421 unless `Host` is
+ * exactly that address. `GET /open` serves the nonce-CSP viewer shell.
+ * `POST /session` trades the Capability Token (sent as `X-Artifact-Capability`
+ * with a same-origin `Origin` and Fetch Metadata) for an `HttpOnly;
+ * SameSite=Strict` cookie scoped to `/p/<handle>/`. `/p/<handle>/content`
+ * serves bytes under the sandbox `artifactCsp`; `/p/<handle>/revision` feeds
+ * live polling. Tokens and session ids are compared by SHA-256 only, every
+ * response is `no-store`/`nosniff`/`no-referrer`, and no GET changes state.
+ *
+ * See: docs/architecture/phase-9-artifacts.md (Local viewer protocol),
+ * docs/security/phase-9-threat-model.md
+ */
+
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { artifactCsp, shellCsp, viewerShell } from "./viewer-shell.ts";

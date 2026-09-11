@@ -1,3 +1,16 @@
+/**
+ * Structural guards for untrusted plain data, shared across automation:
+ * TriggerEngine envelopes and durable records (`engine.ts`,
+ * `persistence.ts`, `state-store-persistence.ts`), monitor definitions and
+ * settings, and hook action settings.
+ *
+ * Inspection reads property descriptors, so getters never run; proxies,
+ * accessors, symbol keys, non-plain objects, cycles, and non-finite numbers
+ * are rejected. Pure, no I/O.
+ * See: docs/security/phase-7-threat-model.md (Forged event provenance or
+ * authority)
+ */
+
 import { isProxy } from "node:util/types";
 
 interface PlainValidationOptions {
@@ -10,6 +23,7 @@ function hasPlainPrototype(value: object) {
   return prototype === Object.prototype || prototype === null;
 }
 
+/** JSON-like data within `maxDepth` (default 32) and `maxNodes` (10,000). */
 export function isPlainData(
   value: unknown,
   options: PlainValidationOptions = {},
@@ -63,6 +77,10 @@ export function isPlainData(
   return visit(value, 0);
 }
 
+/**
+ * True when every own key of `value` is in `allowed`. Despite the name, no
+ * key is required; callers add a key-count check when they need exactness.
+ */
 export function hasExactKeys(
   value: Readonly<Record<string, unknown>>,
   allowed: readonly string[],

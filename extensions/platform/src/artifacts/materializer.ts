@@ -1,3 +1,18 @@
+/**
+ * Converts one stored Artifact into the exact outbound bytes a viewer serves.
+ *
+ * Markdown and plain text are rendered with `marked` then sanitized; static
+ * HTML is sanitized; JSON must parse and is shown as escaped text; images
+ * must match their PNG/JPEG/GIF/WebP signature; bundles pass through after a
+ * JSON parse. The sanitizer keeps a small tag allowlist and strips every
+ * attribute. Interactive HTML passes through unsanitized: it is safe only
+ * inside the local viewer's opaque-origin sandbox, and the Vercel adapter
+ * refuses it. Throws on unsupported MIME types, invalid UTF-8, or NUL bytes.
+ * Loaded lazily by the publish and refresh operations.
+ *
+ * See: docs/architecture/phase-9-artifacts.md (Artifact types)
+ */
+
 import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 import type { ArtifactMetadata } from "../core/artifacts/index.ts";

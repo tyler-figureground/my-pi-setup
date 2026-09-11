@@ -1,3 +1,16 @@
+/**
+ * summaries extension: after each settled main-agent run in the TUI, asks a
+ * cheap, configurable model for a recap plus one next step and appends it as
+ * a `summary-recap` custom session entry.
+ *
+ * Registers the `summary-recap` entry renderer, the `/summary-model` command
+ * (model and reasoning pickers, saved to the private config in
+ * `src/config.ts`), and a "summarizing run" footer status. Summaries run in
+ * the background so the next prompt stays responsive, and the custom entry
+ * never feeds a later agent turn. A failed summary model falls back to a local
+ * recap. TUI only; in-flight summaries are aborted on `session_shutdown`.
+ */
+
 import type {
   ExtensionAPI,
   ExtensionContext,

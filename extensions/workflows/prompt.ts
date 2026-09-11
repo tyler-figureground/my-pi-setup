@@ -1,3 +1,16 @@
+/**
+ * Every model-facing string of the workflows extension: the `workflow` tool
+ * description (the script DSL, limits, and an example), parameter
+ * descriptions, prompt snippet and guidelines, the `structured_output`
+ * instructions for schema-bound children, and the result / background
+ * follow-up messages returned to the parent model.
+ *
+ * No I/O. The limits it states (32 agent calls, concurrency 4, 3-minute
+ * child tool calls) are enforced elsewhere (`controller.ts`, `sandbox.ts`,
+ * `shared/tool-call-timeout.ts`), so change both together. Used by
+ * `index.ts` and `runner.ts`.
+ */
+
 import {
   countStates,
   formatElapsed,

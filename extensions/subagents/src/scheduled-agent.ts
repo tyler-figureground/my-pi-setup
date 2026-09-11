@@ -1,3 +1,17 @@
+/**
+ * Subagents-side `ScheduledAgentExecutor`: runs one Schedule Occurrence as a
+ * `scheduled` child through the SubagentManager. Bound in `../index.ts` via
+ * `shared/scheduled-agent.ts`; see docs/architecture/phase-7-automation.md.
+ *
+ * Fail-closed: the request must be exactly its seven plain-data fields within
+ * host bounds (no role/tool/model/trust overrides), and the Agent Profile must
+ * carry the `scheduled` role and a policy its backend can enforce
+ * (`profile-policy.ts`). An isolated profile runs in a fresh Guarded Workspace
+ * that is always preserved afterwards. Abort, timeout, and shutdown cancel the
+ * child and map to typed failures; output and errors are redacted, and output
+ * over `maxOutputBytes` fails rather than truncates.
+ */
+
 import path from "node:path";
 import { sanitizeSessionText } from "../../platform/src/messaging/index.ts";
 import type {

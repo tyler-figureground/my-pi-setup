@@ -1,3 +1,18 @@
+/**
+ * Loader-scoped bridge that lets declarative hook agent actions run a named
+ * Agent Profile through the subagents extension. The subagents extension
+ * binds its NamedProfileExecutionPort with `bindNamedProfileExecutionPort`;
+ * `src/composition.ts` resolves it with `namedProfileExecutionPortFor` and
+ * hands it to the hooks agent adapter.
+ *
+ * Calls cross a private event-bus channel as versioned messages carrying
+ * resolve/reject callbacks; requests are shallow-frozen copies, and an
+ * unclaimed call rejects at once as unavailable. The subagents execution core,
+ * not this channel, stays the authority.
+ *
+ * See: docs/phase-7-configuration.md
+ */
+
 import type { NamedProfileExecutionPort } from "../automation/hooks/adapters.ts";
 
 interface EventBusLike {

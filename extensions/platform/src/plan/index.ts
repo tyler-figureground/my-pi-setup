@@ -1,3 +1,28 @@
+/**
+ * `PlanMode`: host-enforced state machine off -> planning ->
+ * approval-pending -> executing (cancel returns to off).
+ *
+ * `enter` fingerprints the exact active tool set (name, source, path) and
+ * narrows it to what `CapabilityPolicy` allows in plan context; `authorize`
+ * keeps every call under policy and denies a pre-plan tool whose provenance
+ * changed. `approve` requires a `UserAuthorityToken` accepted by the injected
+ * `UserAuthorityAdapter` (src/wiring/plan.ts presents it only after a direct
+ * UI confirmation) and restores the pre-plan tools only if fingerprints
+ * still match. `restore` replays the selected session branch and fails
+ * closed to planning with no tools on malformed state. State keeps the
+ * plan's SHA-256, never its body; project destinations need a trusted
+ * project.
+ *
+ * Map:
+ * - constants and snapshot / destination / persistence / authority types
+ * - authorizePlanTool, filterPlanTools, tool fingerprint helpers, safePlanId
+ * - createPlanMode: destinationFor, enter, recordPlan, approve,
+ *   revokeExecution, authorize, reconcileTools, cancel, restore
+ *
+ * Persistence: plan/filesystem.ts. Wiring: src/wiring/plan.ts.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import { createHash } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {

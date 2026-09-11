@@ -1,3 +1,24 @@
+/**
+ * ProfileCatalog: loads Agent Profiles from YAML and publishes them as one
+ * immutable, generation-stamped snapshot per `reload`. Sources: user
+ * `<agentDir>/agents/*.yaml`, project `<projectRoot>/.pi/agents/*.yaml` (only
+ * when trusted), and explicit managed paths.
+ * Precedence is managed > project > user; a name defined twice in one scope
+ * drops every copy with an error diagnostic.
+ *
+ * Fail-closed: unknown fields reject a profile; sources and referenced
+ * instruction/skill files must be bounded regular files inside their root
+ * (no links, identity rechecked across the read); YAML aliases are disabled.
+ * `contentDigest` covers the YAML and resolved instruction/skill text.
+ *
+ * Map: limits and types -> `readProfileMaterial` -> `decodeProfile` (schema)
+ * -> `loadProfileSource` / `loadDirectory` -> `rejectScopeCollisions` ->
+ * `createProfileCatalog`
+ *
+ * See: docs/architecture/phase-3-profiles-workspaces.md,
+ * docs/phase-3-configuration.md
+ */
+
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
@@ -71,6 +92,10 @@ export interface ProfileCatalog {
   inspect(): ProfileCatalogSnapshot;
   list(): readonly ResolvedAgentProfile[];
   resolve(name: string): Outcome<ResolvedAgentProfile, ProfileCatalogError>;
+  /**
+   * Reloads the whole catalog (a new generation for every caller), then
+   * resolves `name`.
+   */
   revalidate?(
     name: string,
     context: { readonly projectRoot: string; readonly projectTrusted: boolean },

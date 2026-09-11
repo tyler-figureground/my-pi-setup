@@ -1,3 +1,15 @@
+/**
+ * `CommandRunner` service: runs `git`/`gh` as argv-only (no shell) child
+ * processes for the git-info extension, and never fails.
+ *
+ * Every outcome is a `CommandResult`: a timeout yields `code: -1` with the
+ * output captured so far, a spawn error yields `code: 1` with the failure
+ * appended to stderr. Each stream is capped at 10 * 1024 * 1024 characters
+ * plus a truncation marker; stdin is ignored, and termination escalates to
+ * SIGKILL after 5 s. Provided by `runtime.ts`; used by `../index.ts` and
+ * `changed-files-view.ts`.
+ */
+
 import { Context, Effect, Layer, Stream } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";

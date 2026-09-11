@@ -1,3 +1,15 @@
+/**
+ * ArtifactStore contract and types (seam: `put`, `get`, `export`, `collect`,
+ * plus Phase 9 `putBatch`, `list`, `remove`). Artifact metadata is bounded
+ * plain data and never carries the body. Re-putting identical bytes returns
+ * the stored metadata when every caller-supplied field matches, else
+ * `metadata_conflict`. Expired artifacts read as `artifact_expired` and drop
+ * out of `list` until `collect` removes them.
+ *
+ * See: docs/architecture/platform-foundation.md,
+ * docs/architecture/phase-9-artifacts.md
+ */
+
 import type { JsonObject, ModuleError, Outcome } from "../result.ts";
 
 export const DEFAULT_ARTIFACT_LIMITS = Object.freeze({

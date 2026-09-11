@@ -1,3 +1,16 @@
+/**
+ * Event-bus bridge from the platform's LocalReview to the reviewer that the
+ * subagent extension runs.
+ *
+ * `localReviewerFor` emits each request on `platform:local-review` and
+ * rejects on the next microtask if no handler claimed it (the subagent
+ * extension is not loaded in this session). `bindLocalReviewer`, called from
+ * extensions/subagents/index.ts, claims each request exactly once and
+ * settles it with the reviewer's result.
+ *
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import type { ReviewRequest, ReviewerAdapter } from "./index.ts";
 
 const CHANNEL = "platform:local-review";

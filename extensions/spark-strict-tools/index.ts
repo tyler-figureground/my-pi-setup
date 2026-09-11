@@ -1,3 +1,14 @@
+/**
+ * spark-strict-tools extension: registers no tools or commands. Its
+ * `before_provider_request` hook rewrites the outgoing payload, only when the
+ * active model's provider is `spark-deepseek`, so every OpenAI-style function
+ * tool carries `strict: true`.
+ *
+ * `strictifyOpenAIFunctionTools` is pure: it returns a new payload when any
+ * tool changed and the original object otherwise; non-function tools pass
+ * through untouched.
+ */
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type JsonObject = Record<string, unknown>;

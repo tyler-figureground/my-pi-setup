@@ -1,3 +1,18 @@
+/**
+ * Artifact capability wiring: adapts `ArtifactStore` and `ArtifactPublisher`
+ * (`src/artifacts/`) to Pi.
+ *
+ * Registers the `artifact-reference` entry renderer, the `artifact_inspect`
+ * tool (bounded metadata only - never bodies or publication URLs), and
+ * `/artifacts` via `wiring/artifacts-command.ts`. No model tool can publish
+ * or revoke. `composition.ts` creates this once (reused across reloads) for
+ * the Parent Execution Role when the `artifacts` flag is on and the project
+ * is trusted, passes `authority` to the publisher, and binds each session
+ * with `start`/`stop`; before `start`, both surfaces report unavailable.
+ *
+ * See: docs/architecture/phase-9-artifacts.md
+ */
+
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

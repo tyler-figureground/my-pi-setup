@@ -1,3 +1,12 @@
+/**
+ * Footer status line for background activity ("workflows: ■ 2 running ·
+ * /workflows to view").
+ *
+ * Pure formatting over the Pi theme; zero-count buckets are omitted.
+ * Only `workflows/index.ts` imports it - subagents keeps its own merged copy
+ * in `subagents/src/format.ts`, so a style change must be made in both.
+ */
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Theme = ExtensionContext["ui"]["theme"];

@@ -1,3 +1,19 @@
+/**
+ * Tool Federation wiring: adapts `ToolFederation` (`src/mcp/`) to Pi.
+ *
+ * Registers the `mcp_tools` loader (search, then activate matches), the
+ * `/mcp` command (status, auth, complete, refresh, logout), and the
+ * `platform:mcp` status item. Federated Tools are registered lazily as
+ * `mcp_<toolId>` with the server's input schema only after `mcp_tools`
+ * selects them; name collisions and names over 64 chars are refused, and
+ * `stop` drops them from the active set. An `approval_required` call is shown
+ * in `ctx.ui.confirm` and retried once with direct-user authority issued by
+ * `composition.ts`. Server text is untrusted data. Gated by the `mcp` flag
+ * (Parent only).
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { JsonObject, JsonValue } from "../core/result.ts";

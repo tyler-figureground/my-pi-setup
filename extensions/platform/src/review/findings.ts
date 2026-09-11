@@ -1,3 +1,21 @@
+/**
+ * Host validation and deterministic deduplication of reviewer candidates
+ * into Review Findings. Pure; no I/O.
+ *
+ * A candidate is accepted only with the exact schema, a canonical
+ * project-relative path that was part of the captured Review Target, an
+ * ordered range inside that file's line count for its side
+ * (base/index/worktree/target) that intersects a changed range, bounded
+ * text, and evidence IDs that resolve to captured evidence. Accepted
+ * candidates overlapping in file/category/side/range with the same
+ * normalized failure scenario merge: highest severity and confidence win,
+ * evidence is unioned, and the ID is a SHA-256 of the merged finding. More
+ * than 100 candidates rejects the whole batch.
+ *
+ * Caller: review/index.ts.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type {

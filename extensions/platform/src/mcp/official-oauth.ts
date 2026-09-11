@@ -1,3 +1,19 @@
+/**
+ * `McpOAuthProtocol` built on the official `@modelcontextprotocol/client`
+ * OAuth helpers: issuer-validated metadata discovery, authorization URL, code
+ * exchange, refresh, and revocation.
+ *
+ * Every request is checked by `authorizeUrl` (in `src/composition.ts`, Origin
+ * Policy limited to the configured authorization-server origin) and, by
+ * default, sent through the address-pinned `createPinnedFetch`. The optional
+ * `fetch` override (unused by composition) still authorizes each URL and
+ * disables redirects but is not address-pinned. PKCE is S256 only, the MCP
+ * server URL is sent as the `resource` indicator, and revocation is skipped
+ * when the server advertises no endpoint.
+ *
+ * See: docs/adr/0006-build-tool-federation-on-official-mcp-v2.md
+ */
+
 import {
   discoverAuthorizationServerMetadata,
   exchangeAuthorization,

@@ -1,3 +1,20 @@
+/**
+ * `createArtifactPublisher` - the deep Phase 9 module that owns Artifact
+ * Publication authority, state transitions, and adapter dispatch.
+ *
+ * Delegates `publish` and `refresh` to `publish-operation.ts` and
+ * `refresh-operation.ts`; implements `status` and `revoke` here. One adapter
+ * per target (`local`, `remote`). Every mutating call is gated by
+ * `CapabilityPolicy` as a `publish` operation; `revoke` also needs exact
+ * direct-user approval and records `unknown` when the provider outcome is
+ * ambiguous. `status` returns bounded metadata only, marks expiry, and
+ * reconciles through the adapter. `close` rejects new calls and waits for
+ * in-flight ones. Bodies come from the core `ArtifactStore`
+ * (`src/core/artifacts/`) and are never returned.
+ *
+ * See: docs/architecture/phase-9-artifacts.md
+ */
+
 import { randomUUID } from "node:crypto";
 import { publisherFailure, validPublicationHandle } from "./errors.ts";
 import { approvalScope, publishArtifact } from "./publish-operation.ts";

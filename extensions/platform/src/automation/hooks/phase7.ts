@@ -1,3 +1,32 @@
+/**
+ * Phase 7 `Hooks` runtime (`createHooks`): configure, handle, inspect, and
+ * close for Declarative Hooks, running each hook's actions in order under
+ * CapabilityPolicy and Plan Mode. `src/wiring/hooks.ts` builds it and
+ * reaches `handle` through one TriggerEngine `dispatch` binding fed by
+ * `hook:<event>` Trigger Events (directly only when no engine is bound).
+ *
+ * Config changes are serialized and revision-checked; apply revalidates
+ * trust and file identity before commit, and a changed or untrusted source
+ * is suspended, never run. Before every action the source is rechecked,
+ * Plan Mode admits only read and network-read operations, and
+ * `CapabilityPolicy.decide` runs (again after any confirmation); a hook
+ * `allow` is advisory. Unattended invocations never prompt, so actions that
+ * need confirmation are blocked. Reconfigure or close fences the generation
+ * and aborts in-flight actions with a bounded 250 ms drain.
+ * Map:
+ * - contract and port types (`HookInvocation`, `HookHttpAdapter`,
+ *   `HookUiAdapter`, `HookTrustAdapter`, `Hooks`)
+ * - `matches` / `compareRegistrations`; `operationFor` / `deniedInPlanMode`
+ * - `safeEnvironment`, source-identity helpers, `beforeDeadline`
+ * - `createHooks`: `fenceGeneration`, `runConfiguration` / `configure`,
+ *   `suspendSource` / `sourceIsCurrent`
+ * - `handle`: per-hook and global (8) concurrency, deadline, policy,
+ *   confirmation, then one branch per action type
+ * - `close` / `inspect`
+ * See: docs/architecture/phase-7-automation.md (Hooks),
+ * docs/migrations/phase-7-declarative-hooks.md
+ */
+
 import { resolve } from "node:path";
 import type {
   ActorRole,
@@ -62,6 +91,7 @@ export interface HookInvocation {
   readonly event: HookEvent;
   readonly payload: Readonly<Record<string, PlainData>>;
   readonly cwd: string;
+  /** No direct user is present: confirmation-requiring actions are blocked. */
   readonly unattended: boolean;
 }
 

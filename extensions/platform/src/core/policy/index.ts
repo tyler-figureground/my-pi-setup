@@ -1,3 +1,20 @@
+/**
+ * CapabilityPolicy (seam: `decide`): the synchronous, side-effect-free
+ * allow / deny / require-user-confirmation decision for a tool or operation
+ * kind, given the actor's Execution Role and the mode (normal or Plan Mode).
+ * Every decision carries provenance.
+ *
+ * Precedence: (1) Plan Mode denies anything side-effecting - rules cannot
+ * override it; (2) matching rules, most restrictive first (deny > confirm >
+ * allow, ties by rule id); (3) child roles may not orchestrate; (4) unknown
+ * tools count as arbitrary process execution and need confirmation;
+ * (5) remote-write, credential-use, and publish need confirmation; (6) allow.
+ * A new tool missing from `toolOperations` falls into (4).
+ *
+ * See: docs/architecture/platform-foundation.md,
+ * docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import {
   EXECUTION_ROLES,
   type ExecutionRole,

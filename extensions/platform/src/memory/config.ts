@@ -1,3 +1,17 @@
+/**
+ * Decodes the `memorySettings` block of platform configuration into
+ * `PlatformMemoryConfiguration` plus diagnostics.
+ *
+ * `automaticRecall` and `automaticExtraction` are typed as literal `false`
+ * and forced off here: `true` only yields a diagnostic, because both stay
+ * unavailable until their Phase 6 evaluation gate passes. Invalid values keep
+ * the `base` value; unknown keys and invalid values report diagnostics
+ * instead of throwing.
+ *
+ * Decoded by src/config.ts; `defaultScope` is consumed by src/composition.ts.
+ * See: docs/phase-6-configuration.md
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 
 export interface PlatformMemoryConfiguration {

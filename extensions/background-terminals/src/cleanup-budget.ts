@@ -1,3 +1,13 @@
+/**
+ * One shared wall-clock deadline for a multi-stage teardown, used by
+ * `manager.ts` when killing a Windows process tree.
+ *
+ * `remaining(stage, maximumMs?)` returns the milliseconds left (optionally
+ * capped for that stage) and throws once the deadline is exhausted, naming
+ * the stage it was about to start. `createCleanupBudget` throws `RangeError`
+ * for a non-positive or non-finite total.
+ */
+
 export interface CleanupBudget {
   readonly deadline: number;
   remaining(stage: string, maximumMs?: number): number;

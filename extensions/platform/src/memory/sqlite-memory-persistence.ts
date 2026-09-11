@@ -1,3 +1,28 @@
+/**
+ * Production `MemoryPersistenceAdapter`: built-in `node:sqlite` with an FTS5
+ * index at `agentDir/state/memory.sqlite` (path chosen by
+ * src/composition.ts, which creates the adapter lazily on first use).
+ *
+ * Each call opens, validates, and closes its own connection; writes run in
+ * `BEGIN IMMEDIATE`. The database file, parent directory, and -wal/-shm
+ * sidecars must stay canonical, non-link, and identity-stable around every
+ * open (private modes enforced off Windows). Scope predicates run inside
+ * SQL, and query text is quoted term by term so it cannot inject FTS5
+ * syntax. `secure_delete` and FTS secure-delete are on; forget and
+ * `purgeExpired` report failure unless a TRUNCATE WAL checkpoint succeeds.
+ * FTS drift found at search time is rebuilt in a transaction or fails loudly.
+ *
+ * Map:
+ * - path/directory validation, openDatabase pragmas, migrate (schema v1)
+ * - row codecs, updateCanonical, purgeExpiredDatabase (link scrubbing)
+ * - withDatabase, checkpoint, literalFtsQuery, ensureFtsIntegrity
+ * - createSqliteMemoryPersistenceAdapter: startup purge, create/update
+ *   (dedupe + Contradiction Links), forget (tombstone), list, import
+ *   previews, commitImport, search (exact | bm25 | recent)
+ *
+ * See: docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md
+ */
+
 import {
   chmodSync,
   lstatSync,
@@ -650,6 +675,11 @@ function ensureFtsIntegrity(database: DatabaseSync) {
   }
 }
 
+/**
+ * Synchronously creates the private parent directory, migrates, enables WAL,
+ * and purges expired rows. Returns a `storage_failed` outcome instead of
+ * throwing when options, paths, or the database are unusable.
+ */
 export function createSqliteMemoryPersistenceAdapter(
   options: SqliteMemoryPersistenceOptions,
 ): Outcome<MemoryPersistenceAdapter, MemoryPersistenceError> {

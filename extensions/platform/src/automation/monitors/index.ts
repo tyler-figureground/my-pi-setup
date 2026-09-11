@@ -1,3 +1,31 @@
+/**
+ * MonitorRegistry runtime (`createMonitorRegistry`) and the folder's public
+ * barrel. Built only for the Parent by `src/composition.ts`; driven by
+ * `src/wiring/monitors.ts`.
+ *
+ * Routes through the TriggerEngine: each active monitor binds its own
+ * `untrusted` source and one batching `monitor:<id>` Trigger Binding.
+ * Source events are redacted (patterns plus credential canaries), matched,
+ * and published; each batch becomes a sensitive evidence Artifact (15 min
+ * expiry) sent via `MonitorDelivery`. Source handles come from the
+ * releasable LifecycleSupervisor, and a per-monitor fence drops late
+ * callbacks. `change` is serialized, idempotent per request id, and rolls
+ * back on failure; restored durable monitors that fail revalidation come
+ * back `blocked`, and malformed stored records are quarantined.
+ * Map:
+ * - re-exports; `validDefinition` (terminal is session-only, poll input has
+ *   no URLs or secrets, WebSocket origin allowlisted)
+ * - `createMonitorRegistry`: option bounds, then StateStore helpers
+ *   (`persist`, `quarantine`, `removePersisted`, `rollbackPersisted`)
+ * - `redactString` / `redact`, `matches`, `deliver`: evidence and delivery
+ * - `bindings` / `reconcile` / `start`: the TriggerEngine and source side
+ * - startup restore of durable definitions and request receipts
+ * - `registry.change` (create, replace, pause, resume, stop, delete),
+ *   `inspect`, and `close`
+ * See: docs/architecture/phase-7-automation.md (MonitorRegistry),
+ * docs/adr/0009-unify-automation-through-trigger-engine.md
+ */
+
 import { createHash } from "node:crypto";
 import { isProxy } from "node:util/types";
 import { success } from "../../core/result.ts";

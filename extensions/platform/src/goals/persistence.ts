@@ -1,3 +1,22 @@
+/**
+ * Goal State Records on the shared State Store: per-project collections for
+ * Goal heads, nodes, Attempts, request receipts, the delivery outbox, and a
+ * live-Goal capacity counter, plus one audit event stream per Goal.
+ *
+ * Mechanism only: `engine.ts` decides what to commit, including every lease
+ * claim, renewal, and release (this file just names the lease resource). Loads
+ * fail closed with `storage_failed` when a record does not revalidate. Head
+ * writes drop the oldest history, then evidence, and node writes the oldest
+ * evidence, to fit the metadata bound; nothing reports that loss.
+ * Map:
+ * - `Stored*` record shapes, then field validators (`validHead` and friends)
+ * - `stateErrorToGoalError`: State Store error codes to `GoalErrorCode`
+ * - `boundedHeadMetadata` / `boundedNodeMetadata`: size trimming
+ * - `createGoalPersistence`: collection names and keys, loaders and listers,
+ *   `commit` (replay-safe transaction IDs), capacity, `put*`/`delete*` builders
+ * See: docs/architecture/phase-8-goal-mode.md (Persistence)
+ */
+
 import { createHash } from "node:crypto";
 import type {
   StateMutation,
@@ -103,6 +122,11 @@ export interface StoredGoalAttempt {
   readonly cwd: string;
   readonly startedAt: number;
   readonly settledAt: number | null;
+  /**
+   * When this Attempt's reservation was released from the Goal budget. Set
+   * once, even by a late settlement that leaves the record unsettled, so the
+   * release never repeats.
+   */
   readonly accountedAt: number | null;
   readonly certainty: "not-started" | "started" | "unknown" | null;
   readonly usage: {
@@ -128,6 +152,10 @@ export interface StoredGoalDelivery {
   readonly state: GoalState;
   readonly runGeneration: number;
   readonly deliveredAt: number;
+  /**
+   * `pending` until the port answers, then `delivered`, `offline`, or
+   * `failed`. Recovery retries anything but `delivered` and `offline`.
+   */
   readonly result: string;
 }
 

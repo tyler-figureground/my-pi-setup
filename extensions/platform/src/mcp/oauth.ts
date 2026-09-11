@@ -1,3 +1,20 @@
+/**
+ * McpAuthorization - authorization-code + PKCE (S256) flows and token
+ * lifecycle for user-configured MCP HTTP servers (`/mcp auth|complete|
+ * refresh|logout` in `src/wiring/mcp.ts`).
+ *
+ * State and verifier are random, in memory only, expire (default 10 min),
+ * are capped at 16 pending flows, and are consumed once; the callback must
+ * match the configured loopback redirect and server fingerprint. Tokens are
+ * one `CredentialVault` secret bound to a SHA-256 of the full server config,
+ * so reconfiguration cannot reuse old tokens; only the opaque Credential
+ * Reference is persisted (`references.ts`). Refresh is single-flight and all
+ * operations serialize per server. Errors collapse to fixed messages.
+ * Protocol calls go through `McpOAuthProtocol` (`official-oauth.ts`).
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md (OAuth and credentials)
+ */
+
 import { createHash, randomBytes } from "node:crypto";
 import type {
   CredentialBinding,
@@ -93,6 +110,10 @@ export interface McpAuthorization {
       readonly status: "logged-out";
     }>
   >;
+  /**
+   * Access token for transport use. Refreshes within 30 s of expiry; never
+   * throws - `undefined` when absent or on any failure.
+   */
   token(server: McpOAuthServer): Promise<string | undefined>;
 }
 

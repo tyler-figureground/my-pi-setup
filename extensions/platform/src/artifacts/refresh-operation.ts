@@ -1,3 +1,17 @@
+/**
+ * `ArtifactPublisher.refresh`: swaps in a new body for an active, live,
+ * local publication owned by this publisher, under the same exact-approval
+ * protocol as publish.
+ *
+ * Re-materializes and re-scans the new Artifact (blocking findings cannot be
+ * overridden), binds approval to the new outbound hash, then re-checks Plan
+ * Mode and expiry after approval. State moves `refreshing` -> `active`; if the
+ * local viewer refuses the swap, the previous record is restored. Only local
+ * targets can refresh; remote publications are never updated in place.
+ *
+ * See: docs/architecture/phase-9-artifacts.md (Local viewer protocol)
+ */
+
 import { createHash } from "node:crypto";
 import { publisherFailure, validPublicationHandle } from "./errors.ts";
 import { approvalScope } from "./publish-operation.ts";

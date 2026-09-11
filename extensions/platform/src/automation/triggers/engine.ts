@@ -1,3 +1,29 @@
+/**
+ * TriggerEngine runtime: the Parent-owned bus that admits Trigger Events
+ * from bound sources and routes them to owner-reconciled Trigger Bindings.
+ * Built by `src/composition.ts`; used by `src/automation/monitors/index.ts`
+ * and `src/wiring/hooks.ts`.
+ *
+ * Only `bindSource` publishers can publish, and the engine stamps id, time,
+ * provenance, and cause. A child publish appends `owner/binding` to the
+ * ancestry and no binding receives an event naming itself; depth and
+ * per-root firing/fanout budgets cap the rest. Queue slots are reserved
+ * before any await. Numeric options are clamped to hard ceilings, never
+ * rejected. Only `restart-only` events leave memory.
+ * Map:
+ * - `decodeBinding` / `decodeReconciliation` / `decodeClaimPage`: getter-free
+ *   snapshots; persistence output is untrusted, bad records become `corrupt`
+ * - `createTriggerEngine`: clamped limits, runtime maps, `retire`
+ * - `reconcile`: serialized; an owner's first call claims stored records,
+ *   quarantines corrupt ones, fences the old generation, then replays
+ * - `publishStamped`: stamp, route by priority, budgets, reservations,
+ *   durable store and attempts, `pump`/`schedule`/`enqueue` per binding
+ * - `inspect`: redacted, byte-bounded metadata
+ * - `publish` / `bindSource` / `revokeSource` / `close`
+ * See: docs/adr/0009-unify-automation-through-trigger-engine.md,
+ * docs/architecture/phase-7-automation.md (TriggerEngine)
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { isProxy } from "node:util/types";
 import { success } from "../../core/result.ts";
@@ -349,6 +375,7 @@ function boundedOption(
     : fallback;
 }
 
+/** Out-of-range numeric options are clamped, not rejected. */
 export function createTriggerEngine(options: TriggerEngineOptions) {
   const clock = {
     now: options.clock?.now ?? Date.now,

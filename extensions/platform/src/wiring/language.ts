@@ -1,3 +1,19 @@
+/**
+ * Language Intelligence wiring: adapts `LanguageIntelligence`
+ * (`src/language/`) to Pi tools.
+ *
+ * `start` activates only `language_tools`; calling it runs `discover()`
+ * without starting a language server and adds whichever of `lsp_diagnostics`,
+ * `lsp_symbols`, `lsp_navigate`, `lsp_hover`, and `lsp_call_hierarchy` the
+ * configured servers support. Path-based queries first sync the file's
+ * current text (open first, change after), and successful `write`/`edit`
+ * results re-sync it best-effort. Results are advisory; repository-native
+ * checks stay authoritative. Gated by the `languageIntelligence` flag
+ * (Parent only).
+ *
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";

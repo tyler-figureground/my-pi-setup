@@ -1,3 +1,28 @@
+/**
+ * `ReviewGitAdapter`: captures an immutable Review Target from the local Git
+ * repository and computes the source fingerprint LocalReview uses for its
+ * read-only checks.
+ *
+ * Git always runs through `execFile` (no shell) with hooks, fsmonitor,
+ * external diff, textconv, credential helpers, askpass, and terminal prompts
+ * disabled, and only http(s)/file transports allowed. Revisions are bounded
+ * and passed after `--end-of-options`; captured object IDs, not ref names,
+ * define the target. Paths from Git must be canonical project-relative, and
+ * working-tree reads refuse escapes. Captures are bounded (files, bytes,
+ * diff size) and fail if the fingerprint changes during capture.
+ *
+ * Map:
+ * - limits, gitArgs / gitEnvironment hardening, path and diff helpers
+ * - createReviewGitAdapter: run / runBytes, textAttributes, readWorkingFile
+ * - fingerprint: HEAD + index bytes + every tracked and untracked file
+ * - captureUncommitted: HEAD -> index -> worktree + untracked, EOL-aware
+ * - capture: commit (vs first parent or empty tree), range, base (fetch;
+ *   stale only with allowStaleBase)
+ *
+ * Loaded lazily by src/composition.ts for LocalReview.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, readlink, realpath } from "node:fs/promises";

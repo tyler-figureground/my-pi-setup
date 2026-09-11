@@ -1,3 +1,17 @@
+/**
+ * Production CredentialVault on the operating-system credential store via
+ * `@napi-rs/keyring`, imported lazily so no native module loads until a
+ * credential is first used.
+ *
+ * A secret is split into chunk entries of at most 1000 characters under a
+ * random generation, plus one `<reference>:index` entry holding the binding,
+ * chunk count, and SHA-256. The index is the commit point: `replace` writes
+ * the new generation, switches the index, then deletes old chunks; `resolve`
+ * checks the digest; `remove` deletes the index, then its chunks.
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import type { AsyncEntry as AsyncEntryType } from "@napi-rs/keyring";
 import {

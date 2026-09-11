@@ -1,3 +1,18 @@
+/**
+ * Decodes `mcpServers` from `platform.json` into `ConfiguredMcpServer`
+ * definitions for Tool Federation.
+ *
+ * Secrets are never literal: STDIO `env` values must be `${ENV_NAME}`
+ * references, and bearer auth is an opaque Credential Reference (HTTPS only).
+ * `env`, `oauth`, and `credentialReference` are user-scope only; project
+ * config may still declare commands and URLs. Tools without a configured
+ * effect are treated as `remote-write` at invoke time (`index.ts`). Duplicate
+ * ids across layers are rejected, and any invalid entry discards that whole
+ * source layer. Layered by `src/config.ts`.
+ *
+ * See: docs/phase-5-configuration.md
+ */
+
 import type { OperationKind } from "../core/policy/index.ts";
 import type { PlatformDiagnostic } from "../flags.ts";
 import type { McpServerDefinition } from "./index.ts";

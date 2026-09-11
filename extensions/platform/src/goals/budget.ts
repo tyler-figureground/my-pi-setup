@@ -1,3 +1,14 @@
+/**
+ * Goal budget ledger arithmetic: `reserveAttempt` holds an Attempt's worst
+ * case at claim time and `settleAttempt` releases it and books usage.
+ *
+ * Pure; `engine.ts` applies both inside Goal head transactions (claim, settle,
+ * abandon), so this file owns the math and the engine owns the atomicity.
+ * `validateBudgetMetering` is also the submit-time gate that refuses finite
+ * token or cost limits the executor cannot meter.
+ * See: docs/architecture/phase-8-goal-mode.md (Budgets)
+ */
+
 import type {
   GoalBudget,
   GoalBudgetAmounts,
@@ -105,6 +116,10 @@ export function validateBudgetMetering(
   return { ok: true, value: undefined };
 }
 
+/**
+ * Capacity left after reservations and consumption. An unlimited token or
+ * cost dimension reports `Number.POSITIVE_INFINITY`.
+ */
 export function budgetRemaining(budget: GoalBudget): GoalBudgetAmounts {
   const used = (pick: keyof GoalBudgetAmounts) =>
     budget.reserved[pick] + budget.consumed[pick];

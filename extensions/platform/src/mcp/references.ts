@@ -1,3 +1,12 @@
+/**
+ * StateStore-backed `McpCredentialReferences`: maps an MCP server id to the
+ * opaque Credential Reference of its OAuth tokens in the `CredentialVault`.
+ *
+ * Holds references only, never token values. Keys are `<scope>:<serverId>`
+ * (scope is the Project Identity in `src/composition.ts`), and writes are
+ * version-fenced. Used by `oauth.ts`.
+ */
+
 import { randomUUID } from "node:crypto";
 import type {
   StateRecord,

@@ -1,3 +1,16 @@
+/**
+ * firecrawl-search extension: registers the `search`, `crawl`, and `scrape`
+ * web tools backed by the Firecrawl API (tool descriptions and prompt
+ * guidance live in `prompt.ts`).
+ *
+ * `FIRECRAWL_API_KEY` is read from the environment or `~/.pi/agent/.env` on
+ * each call, so a missing key fails the call, not the extension load. Each
+ * call is one Effect pipeline with a per-tool timeout that honours the tool's
+ * abort signal. Output over Pi's default size limits keeps its head for the
+ * model and is saved in full to a `pi-firecrawl-*` temp file whose path is
+ * appended. `crawlEffect` cancels the remote crawl job on any non-success exit.
+ */
+
 import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";

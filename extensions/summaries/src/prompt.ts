@@ -1,3 +1,9 @@
+/**
+ * System prompt and user message for the run-recap model. The model must
+ * answer with one `{"recap","next"}` JSON object, which `summarizer.ts`
+ * parses; change both together.
+ */
+
 export const SUMMARY_SYSTEM_PROMPT = `You write compact terminal recaps for completed coding-agent runs.
 
 Return exactly one JSON object with this shape:

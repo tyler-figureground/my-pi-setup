@@ -1,3 +1,29 @@
+/**
+ * Persistent Memory wiring: adapts `MemoryStoreModule` (`src/memory/`) to Pi.
+ *
+ * The only model tool is the read-only `memory_search`. Everything else goes
+ * through TUI-only commands that wait for idle and re-check
+ * `CapabilityPolicy`; `/remember`, `/forget`, and `/memory edit|import|export`
+ * also require `ctx.ui.confirm` before mutating. Writes bind the store with
+ * `ingress: "direct-user"`, everything else with `"model-proposal"`. The
+ * workspace Memory Scope fails closed without a current workspace lease.
+ * Each `start` opens a generation that `stop` aborts, waiting up to
+ * `stopTimeoutMs` (default 2 s) for in-flight work. Gated by the `memory`
+ * flag plus a trusted project (Parent only).
+ *
+ * Map:
+ * - output projection: `publicHit`, `searchResult`, `inspectionResult`
+ * - argument parsers: `parseMemoriesArgs`, `parseRememberArgs`
+ * - generation and policy guards: `trackOperation`, `authorize`,
+ *   `commandGeneration`
+ * - store binding: `directUserStore`, `modelProposalStore`, `inspectExact`
+ * - `memory_search` tool
+ * - `/remember`, `/memories`, `/forget`, `/memory` commands
+ * - returned `start` / `stop`
+ *
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
@@ -34,6 +60,10 @@ const friendlyKinds = {
 type FriendlyKind = keyof typeof friendlyKinds;
 
 export interface CurrentWorkspaceLeaseProvider {
+  /**
+   * This session's Guarded Workspace lease; `undefined` makes workspace-scoped
+   * Memory fail closed.
+   */
   current(): WorkspaceLease | undefined | Promise<WorkspaceLease | undefined>;
 }
 

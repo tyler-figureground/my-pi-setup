@@ -1,3 +1,34 @@
+/**
+ * Scheduler runtime (`createScheduler`) and the folder's public barrel.
+ * Built only for the Parent by `src/composition.ts`; driven by
+ * `src/wiring/scheduler.ts`.
+ *
+ * Does not route through the TriggerEngine: it owns one wake timer
+ * (`SchedulerClock.arm`, re-armed at the earliest due, renew, poll, timeout,
+ * or recovery time) and StateStore Leases, and emits only observe-only
+ * `schedule.due`/`started`/`completed`/`failed`/`blocked` hook events.
+ * Occurrence ids are deterministic, so racing processes contend for one
+ * Lease. Host authority (project, trust, credentials, pinned profile digest,
+ * `scheduled` role) is re-resolved before execution; drift blocks the
+ * Schedule. Executor failures are never retried, and a running occurrence
+ * whose claimant is lost becomes `unknown` and blocks.
+ * Map:
+ * - re-exports, then getter-free decoders (`decodeScheduleCommand`,
+ *   `decodeExecutorOutcome`) and helpers (`publicSnapshot` hides Credential
+ *   References and sanitizes text)
+ * - `deterministicOccurrenceId`, `createSchedulerHostAuthority`,
+ *   `createSystemSchedulerClock`
+ * - `createScheduler`: startup triage, `arm`, completion and blocking,
+ *   `executeOccurrence`, recovery, `claimDue`, `renewActiveClaims`, `wake`
+ * - `prepareCancellation` / `coordinateCancellation`: pause or delete while
+ *   another process holds the Lease
+ * - `scheduler.change` (create, replace, pause, resume, run-now, delete),
+ *   `inspect`, and `close` (drops this session's session-scoped Schedules)
+ * See: docs/architecture/phase-7-automation.md (Scheduler),
+ * docs/security/phase-7-threat-model.md (Duplicate or stale Scheduled
+ * Occurrence)
+ */
+
 import { createHash } from "node:crypto";
 import type { ResolvedAgentProfile } from "../../../../shared/agent-profile.ts";
 import { defaultPlatformSchedulerConfiguration } from "./config.ts";
@@ -545,6 +576,7 @@ function publicSnapshot(
   };
 }
 
+/** Same inputs give the same id in every process, so claimants share a Lease. */
 export function deterministicOccurrenceId(
   scheduleId: string,
   revision: number,
@@ -594,6 +626,10 @@ function validatePolicy(
   return policy;
 }
 
+/**
+ * Re-resolves Project Identity, trust, credential availability, and the
+ * Agent Profile on every call; the profile must have role `scheduled`.
+ */
 export function createSchedulerHostAuthority(
   options: SchedulerHostAuthorityOptions,
 ) {

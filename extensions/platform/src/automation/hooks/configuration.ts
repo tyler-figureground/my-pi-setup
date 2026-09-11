@@ -1,3 +1,17 @@
+/**
+ * Decoder for the `hookActions` block of `platform.json`: host-named HTTP
+ * and MCP integrations that Declarative Hook `http` and `mcp` actions may
+ * invoke by id. Decoded by `src/config.ts`; `src/composition.ts` feeds the
+ * result to the adapters in `adapters.ts`.
+ *
+ * Hook YAML can only name an entry; URL, method, origins, loopback, and
+ * Credential Reference live here. HTTP URLs must be canonical with their
+ * origin allowlisted, and `GET` is always `network-read` while `POST` is
+ * `remote-write`. A project source cannot add or alter entries: it gets the
+ * base back with a diagnostic. An invalid list is dropped whole.
+ * See: docs/phase-7-configuration.md (Named Hook actions)
+ */
+
 import type { PlatformDiagnostic } from "../../flags.ts";
 import type {
   NamedHookHttpDefinition,

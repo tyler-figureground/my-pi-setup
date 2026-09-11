@@ -1,3 +1,17 @@
+/**
+ * Types for Phase 9 Artifact Publication: the `ArtifactPublisher` seam, the
+ * transport-only `ArtifactPublicationAdapter` seam, persisted publication
+ * records, and the exact `PublicationApproval` a user confirms.
+ *
+ * Not the Artifact store: `src/core/artifacts/model.ts` types the immutable
+ * content-addressed `ArtifactStore`. Publication records reference Artifacts
+ * by ID and never hold a body. The Capability Token-bearing `shareUrl` exists
+ * only in adapter results and `PublicationReceipt`; `StoredPublication` has
+ * no field for it.
+ *
+ * See: docs/architecture/phase-9-artifacts.md
+ */
+
 import type { ActorRole, CapabilityPolicy } from "../core/policy/index.ts";
 import type { ArtifactStore } from "../core/artifacts/index.ts";
 import type { ModuleError, Outcome } from "../core/result.ts";
@@ -45,6 +59,10 @@ export interface ArtifactPublication {
 
 export interface PublicationReceipt {
   readonly publication: ArtifactPublication;
+  /**
+   * Contains the Capability Token. Show it once in trusted direct-user UI;
+   * never log, persist, or return it to a model.
+   */
   readonly shareUrl: string;
   readonly revocationHandle: string;
 }
@@ -150,6 +168,10 @@ export interface ArtifactPublicationAdapter {
   readonly id: string;
   readonly target: PublicationTarget;
   readonly maxBytes: number;
+  /**
+   * Provider reference persisted with the `pending` record before dispatch,
+   * so an ambiguous publish can still be reconciled by `status`/`revoke`.
+   */
   recoveryReference?(handle: string): string | undefined;
   publish(
     input: {
@@ -227,6 +249,7 @@ export interface CreateArtifactPublisherOptions {
   readonly authority: {
     verify(token: ArtifactUserAuthorityToken, scope: string): boolean;
   };
+  /** Exact secret values (e.g. the resolved Vercel token) that block publish. */
   readonly sensitivityCanaries?: () => Promise<readonly string[]>;
   readonly refreshLocal?: (
     handle: string,
@@ -238,5 +261,6 @@ export interface CreateArtifactPublisherOptions {
   ) => Promise<boolean>;
   readonly clock?: () => number;
   readonly createHandle?: () => string;
+  /** Stamped on created records; `refresh` only touches records it owns. */
   readonly ownerId?: string;
 }

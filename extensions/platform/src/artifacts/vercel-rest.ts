@@ -1,3 +1,18 @@
+/**
+ * `VercelArtifactTransport` over the Vercel REST API: project protection,
+ * deploy plus readiness polling, intent lookup, share-link
+ * (protection-bypass) create/revoke, status, and delete.
+ *
+ * Uses the global `fetch` against the fixed `https://api.vercel.com` host -
+ * outside `ExternalIntegrationControls` - with `redirect: "error"`, a 30 s
+ * timeout, and responses capped at 1 MiB of UTF-8 JSON. The bearer token is
+ * resolved per request and never appears in errors, which carry only the
+ * HTTP status. Mutating calls map transport failures, 5xx, and 429 to
+ * `ambiguous_outcome` so the publisher records `unknown` instead of retrying.
+ * A deploy response must match the verified project, the `piArtifactIntent`
+ * meta, and a null (preview) target, or it is deleted.
+ */
+
 import type { PublicationAdapterError } from "./model.ts";
 import type { VercelArtifactTransport, VercelFile } from "./vercel.ts";
 

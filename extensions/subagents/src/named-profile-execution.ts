@@ -1,3 +1,19 @@
+/**
+ * Subagents-side `NamedProfileExecutionPort`: runs a Declarative Hook's named
+ * Agent Profile action as a child through the SubagentManager. Port type in
+ * `platform/src/automation/hooks/adapters.ts`; bound in `../index.ts` via
+ * `platform/src/agents/named-profile-execution-service.ts`.
+ *
+ * Fail-closed on drift: requests must be exact plain-data shapes; the profile
+ * must still resolve to the same identity in the current catalog generation,
+ * with a `subagent` or `review` role and a backend-enforceable policy
+ * (`profile-policy.ts`); the cwd must match the catalog's project, plus trust
+ * for project-scoped profiles. Profile and trust are re-checked just before
+ * spawn. Abort, deadline (capped by the profile timeout), and shutdown cancel
+ * the child; failures throw redacted errors, and output is redacted and
+ * truncated to `outputCapBytes`. See docs/architecture/phase-7-automation.md.
+ */
+
 import { isDeepStrictEqual } from "node:util";
 import type { NamedProfileExecutionPort } from "../../platform/src/automation/hooks/adapters.ts";
 import { sanitizeSessionText } from "../../platform/src/messaging/index.ts";

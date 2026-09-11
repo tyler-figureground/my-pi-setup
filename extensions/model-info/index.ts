@@ -1,3 +1,16 @@
+/**
+ * model-info extension: publishes live model dashboard state
+ * (`ModelInfoState`) on `MODEL_INFO_CHANNEL` for the ui-customization footer.
+ *
+ * Registers no tools, commands, or UI of its own. Re-publishes on session,
+ * model, thinking-level, message, turn, and agent lifecycle events, and when
+ * `REFRESH_CHANNEL` fires. Cost is summed over assistant messages on the
+ * current branch. Tokens/sec excludes the first streamed chunk; at message end
+ * it uses the provider's output count when the message had no tool call, else
+ * a chars/4 estimate, accumulated across the agent run. Mid-stream live
+ * updates (chars/4) are throttled to 200 ms.
+ */
+
 import type {
   ExtensionAPI,
   ExtensionContext,

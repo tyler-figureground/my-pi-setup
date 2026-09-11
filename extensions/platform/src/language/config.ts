@@ -1,3 +1,18 @@
+/**
+ * Decodes the `languageServers` configuration array into validated
+ * `LanguageServerDefinition`s for Language Intelligence.
+ *
+ * All-or-nothing: at most four servers; commands are argv arrays (never a
+ * shell string) with bounded args and env; selectors and query routes are
+ * checked against fixed allowlists. Any invalid entry reports diagnostics and
+ * keeps the previous `base` list rather than accepting a partial set; an
+ * accepted list replaces `base` wholesale.
+ *
+ * Decoded by src/config.ts; re-validated at construction by
+ * language/intelligence.ts.
+ * See: docs/phase-4-configuration.md
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 import type { LanguageQueryKind, LanguageServerDefinition } from "./model.ts";
 

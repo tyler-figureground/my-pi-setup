@@ -1,3 +1,13 @@
+/**
+ * Helpers for `/btw` ("by the way") asides: user-started subagents with
+ * origin "btw" (see `SubagentOrigin` in `domain.ts`).
+ *
+ * An aside shows in the /subagents dashboard but is filtered out of every
+ * model-facing `subagent_*` tool by `isModelVisible`; its answer is appended
+ * as a session entry rather than delivered to the model. Used by
+ * `../index.ts`.
+ */
+
 import type { SubagentOrigin } from "./domain.ts";
 
 export const BTW_TITLE_MAX_LENGTH = 60;

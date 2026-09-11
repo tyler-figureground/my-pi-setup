@@ -1,3 +1,16 @@
+/**
+ * Pure dispatch, retry, and crash-recovery decisions for Goal Nodes and Goal
+ * Attempts; `engine.ts` persists and acts on every answer.
+ *
+ * `planSchedule` promotes, blocks, and picks nodes to claim in the Goal's
+ * topological `order`, capped at `min(maxConcurrency,
+ * GOAL_LIMITS.maxConcurrentNodes)` minus nodes already running.
+ * `retryDecision` and `recoveryDecision` map every unproven outcome to
+ * `block`, never to a new dispatch; `engine.ts` settles an `adopt` answer as
+ * unknown as well.
+ * See: docs/architecture/phase-8-goal-mode.md (Execution certainty)
+ */
+
 import {
   GOAL_LIMITS,
   type GoalAttemptPhase,

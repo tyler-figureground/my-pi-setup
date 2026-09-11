@@ -1,3 +1,11 @@
+/**
+ * Canonical JSON for StateStore: sorted keys and strict plain-data checks
+ * (finite numbers; no cycles, array holes, `undefined`, or class instances).
+ * Both adapters use it to size metadata and to fingerprint a transaction, so
+ * a reused `transactionId` replays only when its canonical operations match
+ * exactly.
+ */
+
 import type { StateTransaction } from "./state-store.ts";
 
 export function canonicalJson(value: unknown): string {
@@ -48,6 +56,10 @@ export function canonicalJson(value: unknown): string {
   return visit(value);
 }
 
+/**
+ * Idempotency fingerprint of a transaction. Strips an explicit
+ * `expectedVersion: undefined`, which `canonicalJson` would otherwise reject.
+ */
 export function canonicalStateTransaction(transaction: StateTransaction) {
   return canonicalJson({
     ...transaction,

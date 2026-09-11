@@ -1,3 +1,17 @@
+/**
+ * Pure calendar math for Schedules: normalize one-shot, interval, and cron
+ * input, then compute the next due instant and missed-run outcome. No
+ * timers, state, or I/O; `index.ts` owns those.
+ *
+ * Wraps `cron-parser` only for strict five-field parsing and iteration.
+ * Cron needs an IANA timezone and may not constrain both day-of-month and
+ * day-of-week; each candidate's local wall-clock fields are re-checked, so
+ * DST-shifted gap times are skipped. Interval cadence counts from the
+ * anchor, not from completion. Instants go in as RFC 3339 with an explicit
+ * offset and come out as ISO UTC strings.
+ * See: docs/adr/0010-wrap-cron-parser-as-calendar-calculator.md
+ */
+
 import { CronExpressionParser } from "cron-parser";
 import type {
   CalendarSearchOptions,
@@ -92,6 +106,7 @@ function normalizeCron(expression: string, timeZone: string) {
   return { normalizedExpression, timeZone };
 }
 
+/** Throws `TypeError` or `RangeError` on invalid calendar input. */
 export function normalizeSchedule(input: ScheduleInput) {
   if (input.kind === "one-shot") {
     return {
@@ -234,6 +249,10 @@ function cronOccurrence(
   }
 }
 
+/**
+ * First instant strictly after `after`, or `null` when none exists within
+ * the search horizon (default about 10 years) or candidate limit.
+ */
 export function nextOccurrence(
   schedule: Schedule,
   after: string,
@@ -263,6 +282,11 @@ export function nextOccurrence(
   return new Date(Number(occurrenceMs)).toISOString();
 }
 
+/**
+ * `occurrenceAt` is what to run now: `null` when not yet due or when `skip`
+ * drops an overdue slot; under `run-once` the original `dueAt` stands in for
+ * every missed slot. `nextAt` is the first instant after `now`.
+ */
 export function resolveMissedRun(
   schedule: Schedule,
   dueAt: string,

@@ -1,3 +1,19 @@
+/**
+ * `/artifacts` slash command: direct-user create, browse, open/share, live
+ * refresh, status, revoke, export/import, delete, and provider-credential
+ * management for Artifacts.
+ *
+ * TUI or RPC only (`browser` is TUI-only); print/JSON callers are pointed at
+ * the `artifact_inspect` tool. Publish, refresh, and revoke use the
+ * publisher's two-call protocol: an `approval_required` result is shown in
+ * `ctx.ui.confirm`, and only a yes mints one-shot authority for the retry.
+ * The share URL reaches only `ctx.ui.notify`, never the `artifact-reference`
+ * session entry. `credential-store` reads the secret from a named env var,
+ * then deletes it from `process.env`. Registered by `wiring/artifacts.ts`.
+ *
+ * See: docs/architecture/phase-9-artifacts.md
+ */
+
 import type {
   ExtensionAPI,
   ExtensionCommandContext,

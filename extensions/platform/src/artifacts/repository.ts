@@ -1,3 +1,12 @@
+/**
+ * In-memory `PublicationRepository` used by tests; production uses the
+ * StateStore-backed `state-repository.ts`.
+ *
+ * Mirrors the durable contract: structured-clone snapshots, optimistic
+ * `revision` checks on update, and a 1,000-record cap that evicts the oldest
+ * terminal (revoked/expired/failed) record or refuses creation.
+ */
+
 import { failure, success } from "../core/result.ts";
 import type { PublicationRepository, StoredPublication } from "./model.ts";
 

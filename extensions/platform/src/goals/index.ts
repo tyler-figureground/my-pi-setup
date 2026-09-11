@@ -1,3 +1,21 @@
+/**
+ * Goal Mode barrel: `src/composition.ts` and `src/wiring/goals.ts` import
+ * through here (config decoding also comes straight from `config.ts`).
+ *
+ * Where to change what:
+ * - types, states, `GOAL_LIMITS`: `model.ts`; legal moves: `transitions.ts`
+ * - submission and graph checks: `validation.ts`; resume edits: `edits.ts`
+ * - dispatch, retry, and crash-recovery choices: `scheduling.ts`
+ * - reservation/settlement math: `budget.ts`; criterion gate: `evidence.ts`
+ * - direct user authority: `authority.ts`; canonical hashing: `digest.ts`
+ * - claim protocol, leases, commands, recovery: `engine.ts`
+ * - State Record layout: `persistence.ts`; injected seams: `ports.ts`
+ * - production port adapters: `host.ts`, `delivery.ts`; host caps: `config.ts`
+ * Files listed before `engine.ts` do no I/O. Commands and tools that drive the
+ * engine live in `src/wiring/goals.ts`.
+ * See: docs/architecture/phase-8-goal-mode.md, docs/phase-8-configuration.md
+ */
+
 export {
   GOAL_DISPOSITIONS,
   GOAL_EVIDENCE_KINDS,

@@ -1,3 +1,18 @@
+/**
+ * ProjectIdentity (seam: `resolve`): maps a cwd to a stable Project Identity.
+ * Git checkouts hash the canonical common git dir, so a main checkout and all
+ * its linked worktrees share one `projectId` (`git:<sha256>`); bare repos
+ * resolve with null worktree fields. Non-Git directories hash their canonical
+ * path (`non-git:<sha256>`). Paths are realpath-canonicalized, so junction and
+ * symlink aliases collapse to one identity; `cwdWasAliased` records that.
+ *
+ * Runs read-only `git rev-parse` / `git worktree list` (5 s timeout). Only
+ * "not a git repository" falls back to non-Git; any other failure is
+ * `PROJECT_IDENTITY_UNAVAILABLE`, never a guess.
+ *
+ * See: docs/architecture/platform-foundation.md
+ */
+
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";

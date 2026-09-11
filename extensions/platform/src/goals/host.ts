@@ -1,3 +1,15 @@
+/**
+ * Production adapters for the `ports.ts` seams: system clock, the Goal Worker
+ * as `GoalExecutorPort`, the Agent Profile catalog as `GoalProfilePort`, and
+ * Local Review as `GoalReviewPort` (`delivery.ts` holds the delivery adapter).
+ *
+ * The Goal Worker (`extensions/subagents/src/goal-worker.ts`, bridged by
+ * `extensions/shared/goal-worker.ts`) leases the Guarded Workspace itself, so
+ * this executor declares `workspaceOwnership: "executor"` and production wires
+ * no `GoalWorkspacePort`. All four are composed in `src/composition.ts`.
+ * See: docs/architecture/phase-8-goal-mode.md (Reused modules)
+ */
+
 import type { ProfileCatalog, ProfileCatalogError } from "../profiles/index.ts";
 import type { ResolvedAgentProfile } from "../../../shared/agent-profile.ts";
 import type { GoalWorkerExecutor } from "../../../shared/goal-worker.ts";
@@ -22,6 +34,10 @@ import type {
 /** Node timers cannot represent more than about 24.8 days. */
 const MAX_TIMER_MS = 2_147_483_647;
 
+/**
+ * Wall clock whose timers are `unref`'d, so a pending wake never holds the
+ * process open. A wake beyond `MAX_TIMER_MS` fires early, at that limit.
+ */
 export function createSystemGoalClock(): GoalClock {
   return {
     now: Date.now,

@@ -1,3 +1,17 @@
+/**
+ * ui-customization extension: replaces Pi's TUI header and footer.
+ *
+ * Registers no tools or commands. On `session_start` in TUI mode it installs a
+ * gradient "pi" title header (`ctx.ui.setHeader`), a two-line dashboard footer
+ * (`ctx.ui.setFooter`: cwd, model, context/cost/tok-per-sec, git branch,
+ * changed files, PR link) followed by every extension status line, and sets
+ * the terminal title. Dashboard data arrives only from the `model-info` and
+ * `git-info` extensions over the `shared/dashboard-state.ts` channels; install
+ * emits `REFRESH_CHANNEL` so they re-publish. It also prunes the "[Themes]"
+ * block from the TUI tree on several delayed passes (and on
+ * `resources_discover`). Displayed cwd text is stripped of terminal escapes.
+ */
+
 import { homedir } from "node:os";
 import { relative } from "node:path";
 import type {

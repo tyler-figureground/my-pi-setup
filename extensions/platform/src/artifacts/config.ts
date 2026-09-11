@@ -1,3 +1,17 @@
+/**
+ * Decodes the `artifactSettings` block of `platform.json`: default and maximum
+ * publication expiry plus the optional Vercel provider binding.
+ *
+ * User-managed only: project-scope input is ignored with a diagnostic, so
+ * trusted-project config can never choose a remote provider or credential.
+ * The Vercel token is never configured here, only its opaque Credential
+ * Reference. Decoding is all-or-nothing per source; any diagnostic keeps the
+ * previous layer's settings. Layered by `src/config.ts`, consumed by
+ * `src/composition.ts`.
+ *
+ * See: docs/phase-9-configuration.md
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 
 export interface PlatformArtifactConfiguration {

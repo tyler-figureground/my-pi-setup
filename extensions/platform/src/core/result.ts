@@ -1,3 +1,12 @@
+/**
+ * Shared plain-data result and error shapes for platform modules. Deep
+ * modules return `Outcome<T, ModuleError<Code>>` for expected failures
+ * instead of throwing, so their interfaces stay plain data; `retryable` tells
+ * the caller whether the same request may succeed later.
+ *
+ * See: docs/architecture/platform-foundation.md
+ */
+
 export type JsonValue =
   | null
   | boolean

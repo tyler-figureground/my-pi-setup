@@ -1,3 +1,15 @@
+/**
+ * Decoder for the `goalSettings` config block: host caps (Goal count and size,
+ * budgets, lease and retention timing) plus the defaults the host fills in for
+ * fields callers may not set.
+ *
+ * Each field has a hard range (`BOUNDS`, mostly from `GOAL_LIMITS`). A project
+ * source may only keep or lower a value and may never change `leaseTtlMs`.
+ * Decoded by `src/config.ts`; the caps are applied in `src/wiring/goals.ts`,
+ * and `src/composition.ts` hands lease, capacity, and retention to the runtime.
+ * See: docs/phase-8-configuration.md
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 import { GOAL_LIMITS } from "./model.ts";
 
@@ -76,6 +88,11 @@ const BOUNDS: Readonly<
   defaultNodeCostMicrosReservation: [1, GOAL_LIMITS.maxCostMicros],
 };
 
+/**
+ * Layer one config source over `base`. Never throws: an out-of-range or
+ * widening field keeps the base value and adds a diagnostic, and defaults are
+ * clamped to the resulting caps.
+ */
 export function decodeGoalConfiguration(
   input: unknown,
   base: PlatformGoalConfiguration = defaultPlatformGoalConfiguration,

@@ -1,3 +1,19 @@
+/**
+ * Optional review evidence adapter that runs the project's native `test`
+ * script in a disposable snapshot, never in the live worktree.
+ *
+ * The snapshot is a `git archive` of the target commit (HEAD for
+ * uncommitted targets, hooks disabled) extracted to a fresh temp directory,
+ * with captured uncommitted files overlaid; overlay paths may not escape the
+ * snapshot. No parent dependencies are linked in. The script runs via npm
+ * or pnpm with an allowlisted environment, a 120 s timeout, and a 64 KiB
+ * output tail, and the temp directory is always removed. LocalReview calls
+ * it only when `includeTests` is set.
+ *
+ * Composed in src/composition.ts.
+ * See: docs/architecture/phase-4-language-review.md
+ */
+
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,29 @@
+/**
+ * `createGoalRuntime`: the Goal Mode runtime behind the five-method
+ * `GoalEngine` seam, plus `drain`/`close`. Composed in `src/composition.ts`;
+ * commands arrive from `src/wiring/goals.ts`.
+ *
+ * Owns orchestration and I/O; the rules it applies live in `transitions.ts`,
+ * `scheduling.ts`, `budget.ts`, `evidence.ts`, and `edits.ts`, record layout
+ * in `persistence.ts`. One Goal's ticks are chained in-process; across
+ * processes only record versions and the node lease fence protect state.
+ * Settling an Attempt as unknown on a live Goal sets `blockedReason:
+ * "unknown-attempt"` on its node and the head, so the Goal blocks and `resume`
+ * refuses unless that command resolves each one.
+ * Map:
+ * - ids, snapshots, request replay; capacity count and terminal compaction
+ * - commands: `submit`, `pause`, `cancel`, `resume`, `observe`
+ * - scheduler: `commitWithRetry`, `blockNode`, `tick`
+ * - claim protocol: `claimAttempt` (steps 1-2), `renewLeaseWhileRunning`,
+ *   `abandonAttempt`, `runAttempt` (3-5), `settleAttemptOutcome` (5; a stale
+ *   fence is audited as `goal.late-settlement`, never applied to the node)
+ * - `refreshGoal` (sole writer of Goal done/failed/blocked), `deliverOutcome`
+ * - recovery: `recoverAttempt` (a child still running elsewhere is sealed
+ *   unknown, not adopted), `reconcileCancellation`, the `recoverAll` sweep
+ * - lifecycle: `drain`, `close`
+ * See: docs/architecture/phase-8-goal-mode.md
+ */
+
 import { randomUUID } from "node:crypto";
 import type { ArtifactStore } from "../core/artifacts/model.ts";
 import type {

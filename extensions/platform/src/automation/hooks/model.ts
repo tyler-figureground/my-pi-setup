@@ -1,3 +1,18 @@
+/**
+ * Declarative Hook domain model: supported event names (native Pi plus the
+ * platform `worktree.`, `subagent.`, `task.`, `monitor.`, and `schedule.`
+ * events), matcher and action shapes, definitions with provenance, and the
+ * legacy hook-core contracts. Types and constants only.
+ *
+ * `action` is always set; for version 2 hooks `config.ts` copies
+ * `actions[0]` into it and keeps the full list in `actions`. The
+ * `TriggerEngine` and `TriggerEngineOptions` here describe the Phase 2 hook
+ * core (`engine.ts`), not the Phase 7 bus in `src/automation/triggers/`;
+ * the Phase 7 `Hooks` contract lives in `phase7.ts`.
+ * See: docs/migrations/phase-7-declarative-hooks.md,
+ * docs/architecture/phase-2-policy-rules-hooks.md (Declarative hooks)
+ */
+
 export const nativeHookEvents = [
   "resources_discover",
   "session_start",
@@ -57,6 +72,7 @@ export const platformHookEvents = [
   "schedule.blocked",
 ] as const;
 
+/** Native Pi events only; `declarativeHookEvents` adds the platform ones. */
 export const hookEvents = nativeHookEvents;
 
 export const declarativeHookEvents = [
@@ -294,6 +310,7 @@ export interface TriggerEngineOptions {
   readonly maxLogBytes?: number;
 }
 
+/** Phase 2 hook core (`engine.ts`), not the Phase 7 bus in `../triggers/`. */
 export interface TriggerEngine {
   readonly instanceId: string;
   register(registration: HookRegistration): RegistrationResult;

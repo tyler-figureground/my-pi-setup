@@ -1,3 +1,28 @@
+/**
+ * Scheduler wiring: adapts `Scheduler` (`src/automation/scheduler/`) to Pi.
+ *
+ * Registers tools `schedule_inspect` and `schedule_change` and commands
+ * `/schedule` and `/schedules`. Every mutation needs the Parent role and a
+ * TUI/RPC `ctx.ui.confirm` of the exact timing, profile, and prompt digest;
+ * the Schedule is re-read after the prompt and any revision or metadata drift
+ * rejects the approval as stale. Plan Mode leaves only `schedule_inspect`
+ * active and blocks mutations. Gate: `scheduler` flag, trusted project,
+ * active Session Broker, host Scheduled Agent executor; `composition.ts`
+ * creates this only after the Scheduler opens.
+ *
+ * Map:
+ * - `/schedule` grammar: `findPromptSeparator`, `tokenize`,
+ *   `parseScheduleCommand`
+ * - `decodeToolCommand` - `schedule_change` input validation
+ * - `safeOccurrence` / `safeSchedule` - sanitized projections
+ * - `parseSchedulesQuery` / `inspectionText` - `/schedules` grammar, output
+ * - `createSchedulerCapability`: `authorize`, `mutate`, `inspect`
+ * - tool schemas, `schedule_inspect`, `schedule_change`
+ * - `/schedule`, `/schedules` commands; returned `start` / `stop`
+ *
+ * See: docs/architecture/phase-7-automation.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {

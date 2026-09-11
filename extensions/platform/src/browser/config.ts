@@ -1,3 +1,15 @@
+/**
+ * Decodes the `browserSettings` block of `platform.json` for BrowserControl.
+ *
+ * `executablePath` and `profileName` are user-managed; project config may
+ * only add `allowedOrigins` (merged and deduplicated) and set
+ * `allowLoopback`. Each origin must be a bare `http(s)` origin with no path,
+ * query, fragment, or userinfo. Decoding is all-or-nothing per source: any
+ * diagnostic keeps the previous layer's settings. Layered by `src/config.ts`.
+ *
+ * See: docs/phase-5-configuration.md (Browser)
+ */
+
 import type { PlatformDiagnostic } from "../flags.ts";
 
 export interface PlatformBrowserConfiguration {

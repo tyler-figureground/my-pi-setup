@@ -1,3 +1,30 @@
+/**
+ * `SessionBroker`: Session Presence discovery and durable Mailbox Message
+ * delivery between Parent sessions, stored in `StateStore` (records, mailbox
+ * event streams, Leases) with message bodies as expiring Artifacts.
+ *
+ * `attach` is Parent-only and needs a proof from `issueHostSessionProof`
+ * (only its SHA-256 verifier is stored). One live Lease per Pi session
+ * rejects a second Session Incarnation, and every heartbeat, send, and
+ * delivery transition re-proves owner + fence. Sender provenance is
+ * host-stamped; sender-supplied text is secret-redacted and rendered as
+ * untrusted data (`authority: "none"`). A send commits every recipient in one
+ * idempotent all-or-none transaction; a message is marked delivered only
+ * after the delivery adapter returns a valid receipt.
+ *
+ * Map:
+ * - limits, retention, redaction patterns; public and adapter types
+ * - renderDelivery, requestKey / requestFingerprint, sanitize helpers,
+ *   validateSendRequest
+ * - issueHostSessionProof; createSessionBrokerModule (hourly maintenance)
+ * - attach: lease claim, presence heartbeat, recipient exposure checks
+ * - finishDelivery / pumpMailbox (claim -> deliverOnce -> ack), close
+ * - broker.discover / send / messages
+ *
+ * Adapter: messaging/pi-delivery.ts. Wiring: src/wiring/messaging.ts.
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ExecutionRole } from "../../../shared/execution-role.ts";
 import type {
@@ -149,6 +176,11 @@ export interface MessageEnvelope {
   readonly authority: "none";
 }
 
+/**
+ * Host-only replay identity (used by goals and the scheduler): keys a send by
+ * project + producer + key instead of Session Incarnation + request ID, so a
+ * retry after restart replays the original send rather than resending.
+ */
 export interface HostAutomationIdempotency {
   readonly producerId: string;
   readonly idempotencyKey: string;
@@ -1030,6 +1062,10 @@ async function settleBefore<T>(promise: Promise<T>, deadline: number) {
   return result;
 }
 
+/**
+ * Mints an opaque proof for `attach`. Its 32-byte secret never leaves this
+ * module; only a SHA-256 verifier is persisted.
+ */
 export function issueHostSessionProof(): HostSessionProof {
   const proof = Object.freeze({}) as HostSessionProof;
   proofSecrets.set(proof, randomBytes(32));

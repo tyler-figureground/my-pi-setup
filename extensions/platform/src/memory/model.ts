@@ -1,3 +1,19 @@
+/**
+ * Public types for the Memory capability: the `MemoryStore` interface
+ * (remember, search, inspect, change, transfer), `MemoryRecord`, Memory Scope
+ * selectors, Memory Citations, request/receipt shapes, error codes, limits.
+ *
+ * The trust contract is encoded in the types: every record and citation is
+ * `trust: "untrusted"` and records are `authority: "none"`. Callers pass only
+ * a scope selector ("user" | "project" | "workspace"), never raw keys or
+ * paths, and obtain a store only through `MemoryStoreModule.bind` with a
+ * branded, host-issued `HostMemoryBinding`.
+ *
+ * Implementation: memory/index.ts. Persistence seam: memory-persistence.ts.
+ * See: docs/architecture/phase-6-messaging-memory.md,
+ *      docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md
+ */
+
 import type {
   ArtifactMetadata,
   ArtifactStore,
@@ -8,6 +24,10 @@ import type { WorkspaceLease } from "../workspaces/index.ts";
 import type { ExecutionRole } from "../../../shared/execution-role.ts";
 import type { MemoryPersistenceAdapter } from "./memory-persistence.ts";
 
+/**
+ * The only Memory kinds the store accepts. Other kinds fail with
+ * `unsupported_kind`; preview-import counts and skips them instead.
+ */
 export const coreMemoryKinds = {
   preference: { id: "pi/preference", version: 1 },
   projectFact: { id: "pi/project-fact", version: 1 },
@@ -95,6 +115,11 @@ export interface HostMemoryBindingFactory {
 }
 
 export interface HostMemoryBindingFactoryOptions {
+  /**
+   * Called before every MemoryStore operation and again before each write.
+   * Returning `undefined`, or an assertion with different authority, fails
+   * the call closed. Required to issue a workspace-scoped binding.
+   */
   readonly revalidate?: (
     binding: HostMemoryBindingAssertion,
   ) =>

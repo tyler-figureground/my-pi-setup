@@ -1,3 +1,17 @@
+/**
+ * Scheduled Agent executor contract: the seam through which the platform
+ * Scheduler runs one Schedule Occurrence as a `scheduled` child without
+ * importing the subagents extension.
+ *
+ * subagents binds its executor (`subagents/src/scheduled-agent.ts`) to
+ * `pi.events` with `bindScheduledAgentExecutor`; `platform/src/composition.ts`
+ * looks it up with `scheduledAgentExecutorFor` and hands it to the Scheduler
+ * (`platform/src/automation/scheduler/`). Extensions load as isolated modules,
+ * so a call crosses as a versioned, claim-once message on a private event
+ * channel; an unclaimed call rejects as "executor is unavailable". At most one
+ * executor per bus. See docs/architecture/phase-7-automation.md ("Scheduler").
+ */
+
 import type { ResolvedAgentProfile } from "./agent-profile.ts";
 
 export interface ScheduledAgentRequest {
@@ -144,6 +158,10 @@ function remoteExecutor(eventBus: EventBusLike): ScheduledAgentExecutor {
   };
 }
 
+/**
+ * Serve `executor` on this bus. Throws if one is already bound (locally or by
+ * another extension). Returns an idempotent unbind function.
+ */
 export function bindScheduledAgentExecutor(
   eventBus: object,
   executor: ScheduledAgentExecutor,
@@ -181,6 +199,10 @@ export function bindScheduledAgentExecutor(
   };
 }
 
+/**
+ * The executor bound to this bus: the local instance if bound through this
+ * module copy, else an event-bus proxy, else `undefined` when none is bound.
+ */
 export function scheduledAgentExecutorFor(eventBus: object) {
   const local = bindings.get(eventBus)?.executor;
   if (local || !isEventBusLike(eventBus)) return local;

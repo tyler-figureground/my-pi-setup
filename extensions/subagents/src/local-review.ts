@@ -1,3 +1,17 @@
+/**
+ * Managed Local Review reviewer: the `ReviewerAdapter` that subagents binds
+ * for the platform `LocalReview` module (`../index.ts` via
+ * `platform/src/review/reviewer-service.ts`).
+ *
+ * Builds one bounded prompt from the captured Review Target (diff <= 128 KiB,
+ * file context <= 64 KiB, whole prompt <= 256 KiB) that fences diff and files
+ * as untrusted data, then runs it as a `review`-role child under a synthetic
+ * managed profile: empty tool allowlist, no project resources or context
+ * files, 2 turns, 3 minutes. Output must be strict JSON `{"findings":[...]}`;
+ * only that envelope is checked here - the platform validates each candidate
+ * into a Review Finding. See docs/architecture/phase-4-language-review.md.
+ */
+
 import { createHash } from "node:crypto";
 import type { ReviewerAdapter } from "../../platform/src/review/index.ts";
 import type { ParentContext, SpawnTask } from "./domain.ts";

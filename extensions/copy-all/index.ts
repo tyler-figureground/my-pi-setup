@@ -1,3 +1,12 @@
+/**
+ * copy-all extension: registers the `/copy-all` command, which waits for the
+ * agent to go idle and copies every user and assistant message on the current
+ * session branch to the clipboard as "ROLE:" sections.
+ *
+ * Only text blocks are copied (images become "[image]"); tool results, custom
+ * entries, and empty messages are skipped.
+ */
+
 import {
   copyToClipboard,
   type ExtensionAPI,

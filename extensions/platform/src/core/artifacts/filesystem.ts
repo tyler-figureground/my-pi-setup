@@ -1,3 +1,16 @@
+/**
+ * Durable ArtifactStore adapter. Layout under `root`: `bodies/<sha256>` and
+ * `metadata/<sha256>.json`, both written create-new (never overwritten);
+ * bodies are re-hashed on every read. Every operation, reads included, holds
+ * the cross-process store lock from `persistence.ts`. `export` refuses
+ * targets inside the store; `putBatch` rolls back only the files it created;
+ * `collect` also sweeps orphan bodies, corrupt metadata, and stale `.tmp`
+ * files. `src/composition.ts` gives each Project Identity its own root.
+ *
+ * See: docs/architecture/platform-foundation.md,
+ * docs/architecture/phase-9-artifacts.md
+ */
+
 import { lstat, readdir, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { success } from "../result.ts";

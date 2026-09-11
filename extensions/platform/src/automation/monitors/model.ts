@@ -1,3 +1,16 @@
+/**
+ * Reactive Monitor domain model: source kinds (terminal, file, poll,
+ * WebSocket), matcher, revisioned `MonitorCommand`, snapshots, and the
+ * injected ports (`MonitorSourceFactory`, `MonitorDelivery`,
+ * `MonitorAuthority`). Types only; `index.ts` implements `MonitorRegistry`.
+ *
+ * Sources never see the TriggerEngine: they emit to `index.ts`, which
+ * redacts, matches, and publishes. Everything a source emits is untrusted;
+ * deliveries are typed `trust: "untrusted"` and `authority: "none"`, and
+ * only an evidence Artifact reference reaches the result session.
+ * See: docs/architecture/phase-7-automation.md (MonitorRegistry)
+ */
+
 import type {
   ArtifactMetadata,
   ArtifactStore,
@@ -85,6 +98,7 @@ export interface MonitorSourceEvent {
   readonly type: string;
   readonly payload: JsonObject;
   readonly occurredAt?: number;
+  /** `index.ts` drops an event naming its own monitor (self-trigger guard). */
   readonly causedByMonitorId?: string;
 }
 

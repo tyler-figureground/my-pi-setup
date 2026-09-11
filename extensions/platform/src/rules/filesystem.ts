@@ -1,3 +1,18 @@
+/**
+ * Filesystem `RuleCatalogStorage` for Lazy Rules: bounded Markdown discovery
+ * and no-follow reads beneath the user and trusted-project rule roots.
+ *
+ * Scans are deterministic (sorted entries) and capped at 4096 entries, 1024
+ * directories, and depth 32. Reads refuse links and non-regular files,
+ * require an already-canonical path, open with O_NOFOLLOW where available,
+ * and fail if the file's dev/inode or canonical path changes during the
+ * read. Reads stop at the caller's byte limit; full bodies must be strict
+ * UTF-8.
+ *
+ * Backs `createRuleCatalog` in rules/index.ts; used by src/wiring/rules.ts.
+ * See: docs/architecture/phase-2-policy-rules-hooks.md
+ */
+
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
 import path from "node:path";

@@ -1,3 +1,16 @@
+/**
+ * Domain-separated SHA-256 digests over canonical JSON (object keys sorted,
+ * keys with `undefined` values dropped, array order kept).
+ *
+ * Source of command digests (`authority.ts`), node and revision digests
+ * (`validation.ts`), evidence IDs (`evidence.ts`), and Attempt, event, and
+ * delivery keys (`engine.ts`); `persistence.ts` canonicalizes transaction
+ * payloads with it. Changing the encoding or a domain string silently changes
+ * identities already stored, so a retried request would no longer match its
+ * recorded command digest.
+ * See: docs/security/phase-8-threat-model.md (Graph or transition corruption)
+ */
+
 import { createHash } from "node:crypto";
 
 /** Key-order independent encoding so digests depend on meaning, not typing order. */

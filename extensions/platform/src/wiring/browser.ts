@@ -1,3 +1,19 @@
+/**
+ * Browser Session wiring: adapts `BrowserControl` (`src/browser/`) to Pi.
+ *
+ * Registers tools `browser_pages`, `browser_observe`, `browser_action`, the
+ * `/browser` command (status, credential-store, credential-remove), and the
+ * `platform:browser` status item; `start` adds the tools to the active set
+ * and `stop` removes them. An `approval_required` Browser Action is shown in
+ * `ctx.ui.confirm` and retried once with direct-user authority issued by
+ * `composition.ts`; without UI it fails. `credential-store` takes the secret
+ * from a named env var, deletes it from `process.env`, and shows only the
+ * opaque Credential Reference. Gated by the `browser` flag (Parent only);
+ * `start` is called only when a configured Chrome/Edge executable exists.
+ *
+ * See: docs/architecture/phase-5-mcp-browser.md
+ */
+
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";

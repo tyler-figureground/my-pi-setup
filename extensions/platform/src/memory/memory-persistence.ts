@@ -1,3 +1,18 @@
+/**
+ * Internal persistence seam behind `MemoryStore`, plus the deterministic
+ * in-memory adapter used by interface tests.
+ *
+ * `MemoryPersistenceAdapter` receives records that memory/index.ts has
+ * already redacted, scoped, and validated. Adapters own atomic commit of the
+ * record, its revisions, Contradiction Links, content-free idempotency
+ * receipts, and staged import previews, and they re-check exact and near
+ * duplicates at commit time. `create` and `saveReceipt` reject a reused
+ * request ID whose operation or fingerprint differs (`revision_conflict`).
+ *
+ * Production adapter: sqlite-memory-persistence.ts (memory.sqlite + FTS5).
+ * See: docs/adr/0008-build-persistent-memory-on-node-sqlite-fts5.md
+ */
+
 import { success, type JsonObject, type Outcome } from "../core/result.ts";
 import { contradictionClaim, isConservativeNearDuplicate } from "./analysis.ts";
 import type { MemoryRecord } from "./model.ts";

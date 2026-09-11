@@ -1,3 +1,14 @@
+/**
+ * Reads one local file for `/artifacts create` (16 MiB default cap). The
+ * caller shows the result for direct user confirmation before storing it in
+ * the core `ArtifactStore`.
+ *
+ * Rejects symlinks and non-regular files, then compares dev/inode identity
+ * and canonical path before, during, and after the read, so a file swapped
+ * mid-read fails instead of importing different bytes. Returns the body and
+ * the canonical basename only.
+ */
+
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { basename } from "node:path";

@@ -1,3 +1,32 @@
+/**
+ * Reactive Monitor wiring: adapts `MonitorRegistry`
+ * (`src/automation/monitors/`) to Pi.
+ *
+ * Registers tools `monitor_inspect` and `monitor_change` and commands
+ * `/monitor` and `/monitors`. This is a trust boundary: sources and matchers
+ * are re-validated here (exact keys, bounded sizes, terminal sources
+ * session-only, no URL, credential, command, or header fields in poll input,
+ * no secret-looking matcher text) and delivery is always pinned to the
+ * current session. Mutations need the Parent role, TUI/RPC `ctx.ui.confirm`,
+ * and a revision plus definition-digest recheck after the prompt; Plan Mode
+ * leaves only `monitor_inspect` active. Gate: `monitors` flag, trusted
+ * project, active Session Broker; `composition.ts` creates this only after
+ * the registry opens.
+ *
+ * Map:
+ * - helpers: `tokenize`, `sanitize`, `containsSensitiveText`
+ * - trust-boundary validation: `normalizeSource`, `normalizeMatcher`
+ * - output projection: `safeSource`, `safeMatcher`, `safeMonitor`,
+ *   `inspectionText`
+ * - input decoding: `decodeInspectQuery`, `decodeToolCommand`
+ * - slash-command grammar: `parseMonitorCommand`, `parseMonitorsQuery`
+ * - `createMonitorCapability`: `authorize`, `mutate` (confirm, stale checks)
+ * - tool schemas, `monitor_inspect`, `monitor_change`, `/monitor`, `/monitors`
+ * - returned `start` / `stop`
+ *
+ * See: docs/architecture/phase-7-automation.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {

@@ -1,3 +1,12 @@
+/**
+ * Failure constructor and publication-handle validator shared by the Phase 9
+ * publisher operations (`publisher.ts`, `publish-operation.ts`,
+ * `refresh-operation.ts`).
+ *
+ * `publisherFailure` defaults `retryable` to false; callers opt in explicitly.
+ * Handles are checked here before any publication-repository lookup.
+ */
+
 import type {
   ArtifactPublisherError,
   ArtifactPublisherOutcome,

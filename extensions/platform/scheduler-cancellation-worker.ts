@@ -1,3 +1,16 @@
+/**
+ * Test-only child process, not runtime code. `scheduler.test.ts` ("non-claimant
+ * pause aborts exact claimant child across native Node processes") spawns it
+ * as the claimant Scheduler; the test then pauses the Schedule from its own
+ * process and expects this process's running executor to be aborted and the
+ * cancellation acknowledged.
+ *
+ * Args: db path, artifact root, marker file, owner id. Uses the real clock.
+ * The stub executor writes `STARTED:<owner>` to the marker, then waits for its
+ * abort signal, writes `ABORTED:<owner>`, and settles as cancelled; the
+ * process then closes and prints `{"cancelled":true}`. Exit 2 = bad args.
+ */
+
 import { appendFileSync } from "node:fs";
 import type { ResolvedAgentProfile } from "../shared/agent-profile.ts";
 import type { ScheduledAgentExecutor } from "../shared/scheduled-agent.ts";

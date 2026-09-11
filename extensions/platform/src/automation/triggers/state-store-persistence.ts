@@ -1,3 +1,29 @@
+/**
+ * Production TriggerPersistencePort on the shared StateStore, built by
+ * `src/composition.ts` so `restart-only` Trigger Events survive a restart
+ * and are claimed by one process at a time.
+ *
+ * Layout: event records wrapped in a host HMAC envelope
+ * (`record-authentication.ts`), one delivery record per event and binding,
+ * a quarantine collection, and one StateStore Lease per event whose fence
+ * gates every attempt, completion, release, and quarantine. Each write is a
+ * single transaction with a content-derived ID, so retries are replay-safe.
+ * A record failing its HMAC is handed to the engine as corrupt (the engine
+ * quarantines it); a missing key is a retryable read failure. Records idle
+ * for 30 days are pruned lazily by `store`/`claimPage`, at most one
+ * 128-record pass per hour.
+ * Map:
+ * - collection names, retention constants, key and transaction-ID digests
+ * - `decodeDeliveryState` / `validAttemptRequest`: stored and request shapes
+ * - `mapStateError`: StateStore `LEASE_LOST` becomes `FENCE_REJECTED`
+ * - `createStateStoreTriggerPersistence`: HMAC envelope encode/decode,
+ *   retrying `transact`, lease reads, `claimExisting`, hourly `maintain`
+ * - port methods in order: `store`, `claimPage`, `beginAttempt`,
+ *   `completeAttempt`, `releaseClaim`, `quarantine`
+ * See: docs/adr/0002-state-store-node-sqlite.md,
+ * docs/architecture/phase-7-automation.md (TriggerEngine)
+ */
+
 import { createHash } from "node:crypto";
 import { failure, success, type JsonObject } from "../../core/result.ts";
 import type {
@@ -171,6 +197,7 @@ function mapStateError(
   return persistenceFailure(fallback, error.message, error.retryable);
 }
 
+/** Throws `TypeError` without an authenticator or with out-of-range retries. */
 export function createStateStoreTriggerPersistence(
   state: StateStore,
   options: StateStoreTriggerPersistenceOptions,

@@ -1,3 +1,14 @@
+/**
+ * Decoder for the `schedulerSettings` block of `platform.json`: Schedule
+ * count, concurrency, default timeout, and occurrence Lease TTL.
+ *
+ * Out-of-range or unknown fields keep the `base` value and add a diagnostic
+ * instead of failing the file. A project source may only keep or lower a
+ * value and may never change `leaseTtlMs`. Decoded by `src/config.ts`, each
+ * source layered on the last; `index.ts` re-checks the ranges at startup.
+ * See: docs/phase-7-configuration.md (Scheduler settings)
+ */
+
 import type { PlatformDiagnostic } from "../../flags.ts";
 
 export interface PlatformSchedulerConfiguration {

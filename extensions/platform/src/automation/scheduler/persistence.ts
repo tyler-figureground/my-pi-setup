@@ -1,3 +1,26 @@
+/**
+ * Scheduler durable storage on the shared StateStore: Schedule definitions
+ * (durable, or session-scoped per creator session), idempotent request
+ * receipts, cross-process cancellation records, and one Lease per Schedule
+ * Occurrence. Collections and transaction IDs are namespaced by a Project
+ * Identity digest.
+ *
+ * Mechanism only: `index.ts` decides every claim, renewal, and release. A
+ * stored record that fails revalidation (including a foreign project or a
+ * role other than `scheduled`) fails closed as `STORAGE_FAILED`. Receipts
+ * are capped behind a versioned gate record; admission evicts the oldest
+ * receipt, but never one whose cancellation is still unacknowledged.
+ * Map:
+ * - `Persisted*` shapes, then validators (`validSnapshot` and friends)
+ * - `decodeDefinition` (derives a legacy `definitionGeneration`),
+ *   `decodeRequest`
+ * - `scheduleCommandDigest`: key-sorted digest for requestId idempotency
+ * - `createSchedulerPersistence`: namespaces, request admission gate,
+ *   readers, `cleanupSession`, cancellation writes, and the
+ *   commit, claim, renew, and release transactions
+ * See: docs/architecture/phase-7-automation.md (Scheduler)
+ */
+
 import { createHash } from "node:crypto";
 import type { JsonObject } from "../../core/result.ts";
 import type {
@@ -387,6 +410,7 @@ function canonicalIntent(value: unknown): unknown {
   );
 }
 
+/** SHA-256 of key-sorted JSON, so equal intents digest equally. */
 export function scheduleCommandDigest(command: unknown) {
   return createHash("sha256")
     .update(JSON.stringify(canonicalIntent(command)))

@@ -1,3 +1,12 @@
+/**
+ * Public barrel for StateStore: the interface, its limits, and both adapters.
+ * Production composes `createSqliteStateStore` (ADR 0002);
+ * `createMemoryStateStore` is the in-process adapter tests use behind the
+ * same interface.
+ *
+ * See: docs/adr/0002-state-store-node-sqlite.md
+ */
+
 export { createMemoryStateStore } from "./memory-state-store.ts";
 export { createSqliteStateStore } from "./sqlite-state-store.ts";
 export type { SqliteStateStoreOptions } from "./sqlite-state-store.ts";

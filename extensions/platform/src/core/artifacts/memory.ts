@@ -1,3 +1,10 @@
+/**
+ * In-memory ArtifactStore adapter with the filesystem adapter's validation,
+ * dedupe, quota, expiry, and paging rules; nothing persists. Used by tests
+ * and test fixtures. `export` still writes a real file via `exporter.ts`, and
+ * `putBatch` restores a full snapshot on failure.
+ */
+
 import {
   artifactBody,
   artifactError,

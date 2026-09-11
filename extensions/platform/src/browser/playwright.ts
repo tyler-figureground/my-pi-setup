@@ -1,3 +1,34 @@
+/**
+ * Production `BrowserAdapter` on `playwright-core`: launches the host's
+ * Chrome/Edge (never downloads one) as a headless persistent context on the
+ * dedicated profile, and exposes pages only by adapter id.
+ *
+ * Trust boundary: page content is hostile; policy lives in `index.ts` and is
+ * enforced here at the wire. Every request routes through `authorizeUrl`;
+ * non-GET requests need a one-shot, page-bound, 5 s permit that exists only
+ * while an action runs; WebSockets are closed, service workers blocked,
+ * WebRTC APIs removed, proxies disabled, and DNS pinned with
+ * `--host-resolver-rules`. Actions run on the exact `ElementHandle` prepared
+ * at approval time; a replaced node fails instead of retargeting. On a
+ * degraded shutdown the profile lease is kept, so no one reuses a profile
+ * that may still have a live owner.
+ *
+ * Map:
+ * - Helpers: abort, deadline, context-close retry, profile-release wait
+ * - `acquireProfileLease`: atomic hard-link lease with process-start
+ *   identity and stale-owner recovery
+ * - `createPlaywrightBrowserAdapter` / `start`: launch flags, init script,
+ *   request and WebSocket routing, initial page cleanup
+ * - `boundedText`, `boundedPush`: diagnostic rings (512 records each)
+ * - `createConnection`: page tracking (max 16) and download permits
+ * - `targetIdentity`: approval digest over URL, body, handlers, and form
+ * - `observe`, `classifyAction`, `act`
+ * - `close`: Windows process-tree termination, then lease release
+ *
+ * See: docs/adr/0007-build-browser-control-on-playwright-core.md,
+ * docs/architecture/phase-5-mcp-browser.md
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import {
   access,

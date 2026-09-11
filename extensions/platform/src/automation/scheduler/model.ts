@@ -1,3 +1,16 @@
+/**
+ * Scheduler domain model: Schedule kinds, Schedule Occurrence snapshots,
+ * the revisioned `ScheduleCommand`, host binding, and the injected ports
+ * (`HostAuthority`, `ResultDelivery`, `SchedulerClock`, the scheduled-agent
+ * executor). Types only; `index.ts` implements `Scheduler`.
+ *
+ * A stored binding always carries `executionRole: "scheduled"` and a pinned
+ * Agent Profile digest. Command input names only a profile, prompt, timing,
+ * policy, and Credential References, never role, project, cwd, or result
+ * recipient. Results travel as Artifact references, not bodies.
+ * See: docs/architecture/phase-7-automation.md (Scheduler)
+ */
+
 export interface OneShotScheduleInput {
   readonly kind: "one-shot";
   readonly at: string;

@@ -1,3 +1,21 @@
+/**
+ * LifecycleSupervisor (seam: `acquire`, `shutdown`): owns every timer,
+ * watcher, socket, process, and client a session runtime starts, so reload
+ * and session replacement share one shutdown path. `src/composition.ts`
+ * creates one per `session_start`, for every Execution Role.
+ *
+ * Invariants: resource ids are unique - the same resource object shares one
+ * acquisition, a different object with that id is a conflict; a start that
+ * settles after timeout or shutdown is closed late, never leaked; `shutdown`
+ * is idempotent, aborts pending starts, closes leased resources in reverse
+ * acquisition order under per-resource and global deadlines (defaults 30 s
+ * acquire, 5 s close, 30 s shutdown), and reports failures in a `degraded`
+ * ShutdownReport instead of throwing. `acquireHandle` adds individually
+ * releasable resources.
+ *
+ * See: docs/architecture/platform-foundation.md
+ */
+
 export type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
 export type LifecycleCloseCause = "shutdown" | "release" | "acquire-timeout";
 

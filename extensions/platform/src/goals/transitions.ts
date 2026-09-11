@@ -1,3 +1,16 @@
+/**
+ * Goal, Goal Node, and Goal Attempt state tables, the disposition mapping, and
+ * `deriveGoalState`, the rule that turns node states plus the evidence gate
+ * into a Goal state.
+ *
+ * Pure; callers enforce the tables. `engine.ts` checks Goal and node moves,
+ * and its `refreshGoal` is the only production caller of `deriveGoalState`.
+ * `edits.ts` checks dispositions and Unknown Attempt resolution.
+ * `attemptTransitionAllowed` has no production caller; `engine.ts` writes
+ * Attempt phases directly.
+ * See: docs/architecture/phase-8-goal-mode.md (Domain)
+ */
+
 import type {
   GoalAttemptPhase,
   GoalDisposition,

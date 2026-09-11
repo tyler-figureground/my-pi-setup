@@ -1,3 +1,17 @@
+/**
+ * Identity-safe Windows process-tree inspection and termination, shared by
+ * components that spawn children: the MCP adapter, the Playwright browser,
+ * hook processes, background terminals, and the Codex subagent backend.
+ *
+ * A process identity is PID plus creation time (`startedAt`: FILETIME / 10000,
+ * i.e. milliseconds since 1601, as a decimal string). Every kill re-reads the
+ * live start time first, so a reused PID is never terminated; snapshot tree
+ * kills re-snapshot afterward to catch late children. Runs fixed
+ * PowerShell/CIM scripts without a shell, with bounded output and timeouts.
+ * Off Windows most calls are no-ops (liveness uses signal 0; command-line
+ * discovery throws).
+ */
+
 import { spawn, type ChildProcess } from "node:child_process";
 
 export interface WindowsProcessIdentity {

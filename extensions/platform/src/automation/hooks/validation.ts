@@ -1,3 +1,27 @@
+/**
+ * Validation and redaction rules shared by the hook runtimes (`engine.ts`,
+ * `phase7.ts`) and the YAML loader (`config.ts`): limits, event capability
+ * sets, per-action rules, and log and diagnostic redaction. Pure, no I/O.
+ *
+ * Load-time rules encode what Pi can enforce: only gate events may fail
+ * closed; `policy` actions must fail closed and are limited to tool, input,
+ * user-bash, and session-preflight events; `notify` and `status` must fail
+ * open; `context` works only on `before_agent_start` and `context`;
+ * `command` is refused on `before_agent_start`; named `http`, `mcp`, and
+ * `agent` actions may not carry raw headers or credentials. Untrusted
+ * provenance never validates.
+ * Map:
+ * - `defaultLimits` / `resolveLimits`: hook, dispatch, config, and log caps
+ * - event capability sets, then `sanitizeText` / `redact` /
+ *   `containsSensitiveKey`
+ * - `isRecord` / `measurePlainData`: getter-free; cycles and repeated
+ *   references are rejected
+ * - `validateMatcher` / `validateAction`: the per-action rules above
+ * - `validateRegistration`: one hook plus provenance
+ * - `isPlainPayload`: bound for event payloads
+ * See: docs/migrations/phase-7-declarative-hooks.md (Failure policy)
+ */
+
 import { stripVTControlCharacters } from "node:util";
 import { isProxy } from "node:util/types";
 import {
@@ -89,6 +113,7 @@ export function sanitizeText(value: string) {
   );
 }
 
+/** `sanitizeText` plus masking of secret assignments, bearer tokens, keys. */
 export function redact(value: string) {
   return sanitizeText(value)
     .replace(sensitiveAssignment, "$1=[REDACTED]")
@@ -586,6 +611,10 @@ function validateAction(
   return errors;
 }
 
+/**
+ * A structured clone on success; any error yields `registration:
+ * undefined` plus the diagnostics.
+ */
 export function validateRegistration(
   registration: unknown,
   limits: ReturnType<typeof resolveLimits>,

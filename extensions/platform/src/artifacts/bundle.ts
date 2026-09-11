@@ -1,3 +1,18 @@
+/**
+ * Artifact bundle export/import: one JSON file carrying up to 1,000 Artifacts
+ * (metadata plus base64 bodies) under a SHA-256 manifest digest.
+ *
+ * Export never overwrites: it writes a 0600 temp file and hard-links it into
+ * place, and refuses any symlinked or non-directory ancestor. Import opens a
+ * bounded regular file (`O_NOFOLLOW` where the platform has it) and verifies
+ * the manifest digest, every body hash, and all size limits before committing
+ * anything through `ArtifactStore.putBatch` - the core store in
+ * `src/core/artifacts/`, not the Phase 9 publisher. Driven by `/artifacts
+ * bundle-export|bundle-import` in `src/wiring/artifacts-command.ts`.
+ *
+ * See: docs/architecture/phase-9-artifacts.md
+ */
+
 import { constants } from "node:fs";
 import { link, lstat, open, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";

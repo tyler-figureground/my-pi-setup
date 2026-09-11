@@ -1,3 +1,22 @@
+/**
+ * Pi-backed `SessionDeliveryAdapter`: makes one Mailbox Message visible in
+ * the recipient's Pi transcript and returns the evidence the SessionBroker
+ * records as a Delivery Receipt.
+ *
+ * Delivery appends a displayed `platform-session-inbox` custom message with
+ * `triggerTurn: false`, then requires exactly one matching entry in both the
+ * live session and the fsynced, strictly re-parsed session JSONL (same
+ * message ID, position, and payload SHA-256) before returning `accepted`. A
+ * retry finds that entry and returns `already-present`, never a second copy.
+ * Follow-up/steer modes add a hidden best-effort notification only after the
+ * receipt exists; it carries `authority: "none"` and is never the receipt.
+ * Delivery pauses during compaction, tree navigation, and shutdown.
+ *
+ * Created in src/composition.ts; Pi lifecycle events are forwarded by
+ * src/wiring/messaging.ts.
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { createHash } from "node:crypto";
 import {
   closeSync,

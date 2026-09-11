@@ -1,3 +1,30 @@
+/**
+ * Cross-session messaging wiring: adapts `SessionBroker` (`src/messaging/`)
+ * to Pi.
+ *
+ * Registers tools `session_list` and `session_send`, TUI-only commands
+ * `/sessions` and `/messages` (list, or `send` after `ctx.ui.confirm`), and
+ * the `platform-session-inbox` renderer that badges every Mailbox Message
+ * untrusted, authority none. Every call re-checks `CapabilityPolicy`; `start`
+ * activates only `session_list` in Plan Mode. Pi session events are forwarded
+ * to the session's `PiSessionDeliveryAdapter`. `start` rejects any non-Parent
+ * Execution Role; `sessionBroker()` is how `composition.ts` hands the broker
+ * to Monitors, Scheduler, and Goal Mode. Gated by the `messaging` flag plus a
+ * trusted project.
+ *
+ * Map:
+ * - `capUtf8` / `sanitize` - bounded, optionally secret-redacted text
+ * - activation and guards: `activateAllowedTools`, `authorizeTool`,
+ *   `authorizeOperation`, `ensureCurrent`
+ * - delivery event forwarding: `forwardDeliveryEvent` and its `pi.on` block
+ * - `/sessions`, `/messages` commands (`parseSessions`, `parseMessageQuery`)
+ * - `session_list`, `session_send` tools
+ * - `platform-session-inbox` message renderer
+ * - returned `start` / `stop` / `sessionBroker`
+ *
+ * See: docs/architecture/phase-6-messaging-memory.md
+ */
+
 import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -1,3 +1,15 @@
+/**
+ * `RunController`: the per-run budget and cancellation owner for one workflow
+ * run, created by `index.ts`.
+ *
+ * Every agent call a workflow makes goes through `schedule`, which enforces
+ * at most 32 calls per run and at most 4 concurrently (an internal FIFO
+ * semaphore), and ties each task to the run signal plus its own invocation
+ * signal. A foreground run also aborts with its parent signal. `settle` seals
+ * the run against new calls and waits up to 8 s for in-flight tasks,
+ * returning `false` if that deadline passes.
+ */
+
 const DEFAULT_CONCURRENCY = 4;
 export const MAX_AGENT_CALLS = 32;
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;

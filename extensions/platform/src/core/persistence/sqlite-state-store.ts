@@ -1,3 +1,26 @@
+/**
+ * Durable StateStore on built-in `node:sqlite` (ADR 0002). Composition opens
+ * it at `<agentDir>/state/platform.sqlite`, shared by every Pi process using
+ * that agent dir.
+ *
+ * Each call opens a short-lived connection and closes it before returning,
+ * so no handle survives reload or blocks Windows cleanup. Writes run under
+ * `BEGIN IMMEDIATE` for cross-process serialization, with a busy timeout
+ * (default 5 s). Construction migrates the schema, enables WAL, and returns an
+ * Outcome instead of throwing; files are chmod 0600 on POSIX.
+ *
+ * Map:
+ * - validation of identifiers, metadata, and transaction size
+ * - row decoders; backup file-family helpers (create-new, verified)
+ * - `migrations` v1-v5: records, events, receipts, leases, then stream heads,
+ *   event-ID tombstones, and record heads that keep counters monotonic
+ * - `applyMutation`: one StateMutation inside the open transaction
+ * - `createAdapter`: transact, query, compact, export, diagnose
+ * - `createSqliteStateStore`: option checks, migrate, WAL
+ *
+ * See: docs/adr/0002-state-store-node-sqlite.md
+ */
+
 import {
   chmodSync,
   linkSync,

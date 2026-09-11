@@ -1,3 +1,15 @@
+/**
+ * Production `MonitorSourceFactory`: dispatches each Reactive Monitor to its
+ * terminal, filesystem, poll, or WebSocket source factory. Built by
+ * `src/composition.ts` and handed to `createMonitorRegistry` (`index.ts`).
+ *
+ * The filesystem factory always exists; the others exist only when
+ * composition supplies their options (a terminal observation source, named
+ * poll adapters, allowed WebSocket origins). Opening an unavailable kind
+ * rejects rather than falling back.
+ * See: docs/architecture/phase-7-automation.md (MonitorRegistry)
+ */
+
 import {
   createFileSystemMonitorSourceFactory,
   type FileSystemMonitorSourceOptions,

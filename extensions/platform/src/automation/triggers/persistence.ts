@@ -1,3 +1,18 @@
+/**
+ * TriggerEngine durable-storage port: the claim, attempt, and receipt
+ * protocol for `restart-only` Trigger Events, the durable record schema,
+ * and a non-durable in-memory implementation. The production port is
+ * `state-store-persistence.ts`.
+ *
+ * Each stored event is held under a Lease whose fence every later call must
+ * present. Per binding, `beginAttempt` answers `started`,
+ * `already-delivered` (a receipt exists), or `ambiguous` (an earlier
+ * attempt never completed), so replay never silently re-delivers.
+ * `snapshotTriggerDurableRecord` is the single gate for record shape: exact
+ * keys, 48 KiB, matching payload digest, and no secret-looking payload.
+ * See: docs/architecture/phase-7-automation.md (TriggerEngine)
+ */
+
 import { createHash, timingSafeEqual } from "node:crypto";
 import { failure, success } from "../../core/result.ts";
 import type { JsonObject, ModuleError, Outcome } from "../../core/result.ts";
@@ -159,10 +174,15 @@ function containsSecret(value: unknown, depth = 0): boolean {
   );
 }
 
+/** SHA-256 hex of `JSON.stringify(payload)`: key-order sensitive. */
 export function triggerPayloadDigest(payload: JsonObject) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
+/**
+ * Deep copy of `value` when it is a valid durable record, else `undefined`.
+ * Also the pre-store safety check: secret-looking payloads are refused.
+ */
 export function snapshotTriggerDurableRecord(value: unknown) {
   if (
     !isPlainData(value, { maxDepth: 20, maxNodes: 10_000 }) ||
@@ -241,6 +261,7 @@ export function snapshotTriggerDurableRecord(value: unknown) {
     : undefined;
 }
 
+/** In-process port (default 4,096 records); nothing survives the process. */
 export function createMemoryTriggerPersistence(
   options: { readonly maxRecords?: number } = {},
 ) {

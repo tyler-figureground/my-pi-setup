@@ -1,3 +1,15 @@
+/**
+ * Test-only child process, not runtime code.
+ * `trigger-persistence.integration.test.ts` spawns it
+ * (`node --experimental-strip-types`) to claim Trigger Event records from a
+ * shared SQLite StateStore in a separate process: two racing claimants must
+ * get exactly one claim, and a crashed claimant's Lease is recoverable only
+ * after it expires.
+ *
+ * Args: db path, claimant id, fixed `now`, lease-until, 64-hex HMAC key.
+ * Claims one page (limit 1) and prints the result as JSON. Exit 2 = bad args.
+ */
+
 import { createSqliteStateStore } from "./src/core/persistence/index.ts";
 import { createStateStoreTriggerPersistence } from "./src/automation/triggers/state-store-persistence.ts";
 import { createHmacTriggerRecordAuthenticator } from "./src/automation/triggers/record-authentication.ts";
