@@ -42,6 +42,7 @@ export interface McpServerDefinition {
     readonly include: readonly string[];
     readonly exclude: readonly string[];
     readonly effects?: Readonly<Record<string, OperationKind>>;
+    readonly defaultEffect?: OperationKind;
   };
   readonly protocol?: "legacy" | "auto" | "2026-07-28";
   readonly credentialReference?: string;
@@ -616,6 +617,7 @@ export function createToolFederation(
         );
       const effect =
         match.slot.definition.tools.effects?.[match.tool.name] ??
+        match.slot.definition.tools.defaultEffect ??
         "remote-write";
       const destination =
         match.slot.definition.transport.kind === "http"

@@ -21,7 +21,10 @@ test("Phase 5 config loads global and trusted-project MCP/browser settings witho
         {
           id: "local",
           transport: { kind: "stdio", command: "fixture", args: ["--stdio"] },
-          tools: { effects: { lookup: "network-read" } },
+          tools: {
+            effects: { lookup: "network-read" },
+            defaultEffect: "local-write",
+          },
         },
       ],
       browserSettings: {
@@ -65,6 +68,12 @@ test("Phase 5 config loads global and trusted-project MCP/browser settings witho
       untrusted.mcpServers.map(({ id }) => id),
       ["local"],
     );
+    assert.deepEqual(untrusted.mcpServers[0]?.tools, {
+      include: ["*"],
+      exclude: [],
+      effects: { lookup: "network-read" },
+      defaultEffect: "local-write",
+    });
     assert.deepEqual(untrusted.browser, {
       executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
       profileName: "phase5",
