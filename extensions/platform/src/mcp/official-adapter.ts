@@ -27,19 +27,44 @@ import type {
 
 const CONNECT_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+// Each Windows tree snapshot spawns PowerShell and enumerates every process
+// through WMI (~0.5s). Rest between snapshots so connected sessions do not
+// saturate WMI and push each other's inspections into timeouts.
+const DESCENDANT_TRACKING_IDLE_MS = 1_500;
 
 class OwnedStdioClientTransport extends StdioClientTransport {
   spawnedPid?: number;
   rootIdentity?: Promise<WindowsProcessIdentity | undefined>;
   private retained?: WindowsProcessTreeSnapshot;
   private tracker?: NodeJS.Timeout;
+  private tracking = false;
+  private closing = false;
   private capturing = false;
+  private readonly snapshotTree: (
+    pid: number,
+  ) => Promise<WindowsProcessTreeSnapshot>;
+  private readonly trackingIdleMs: number;
+
+  constructor(
+    server: ConstructorParameters<typeof StdioClientTransport>[0],
+    tracking: {
+      readonly snapshotTree?: (
+        pid: number,
+      ) => Promise<WindowsProcessTreeSnapshot>;
+      readonly trackingIdleMs?: number;
+    } = {},
+  ) {
+    super(server);
+    this.snapshotTree = tracking.snapshotTree ?? snapshotWindowsProcessTree;
+    this.trackingIdleMs =
+      tracking.trackingIdleMs ?? DESCENDANT_TRACKING_IDLE_MS;
+  }
 
   private async capture(pid: number, expected?: WindowsProcessIdentity) {
     if (this.capturing) return;
     this.capturing = true;
     try {
-      const snapshot = await snapshotWindowsProcessTree(pid);
+      const snapshot = await this.snapshotTree(pid);
       if (
         expected &&
         snapshot.root &&
@@ -63,10 +88,28 @@ class OwnedStdioClientTransport extends StdioClientTransport {
     }
   }
 
+  // Tracking is best-effort accumulation: a failed or timed-out inspection
+  // skips one round. Left unhandled, the rejection kills the whole pi process
+  // (Node escalates unhandled rejections to uncaught exceptions).
+  private track(pid: number, expected: WindowsProcessIdentity) {
+    if (!this.tracking) return;
+    this.tracker = setTimeout(() => {
+      void this.capture(pid, expected)
+        .catch(() => undefined)
+        .then(() => this.track(pid, expected));
+    }, this.trackingIdleMs);
+    this.tracker.unref();
+  }
+
+  private stopTracking() {
+    this.tracking = false;
+    if (this.tracker) clearTimeout(this.tracker);
+    this.tracker = undefined;
+  }
+
   async takeRetainedSnapshot() {
     const root = await this.rootIdentity;
-    if (this.tracker) clearInterval(this.tracker);
-    this.tracker = undefined;
+    this.stopTracking();
     while (this.capturing)
       await new Promise((resolve) => setTimeout(resolve, 10));
     if (root) await this.capture(root.pid, root);
@@ -77,24 +120,32 @@ class OwnedStdioClientTransport extends StdioClientTransport {
     await super.start();
     const pid = this.pid;
     if (pid) this.spawnedPid = pid;
-    if (process.platform === "win32" && pid)
+    if (process.platform === "win32" && pid) {
       this.rootIdentity = (async () => {
         const deadline = Date.now() + 2_000;
         while (Date.now() < deadline) {
-          const snapshot = await snapshotWindowsProcessTree(pid);
+          const snapshot = await this.snapshotTree(pid);
           if (snapshot.root) {
             this.retained = snapshot;
-            this.tracker = setInterval(
-              () => void this.capture(pid, snapshot.root),
-              25,
-            );
-            this.tracker.unref();
+            this.tracking = !this.closing;
+            this.track(pid, snapshot.root);
             return snapshot.root;
           }
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
         return undefined;
       })();
+      // connect() awaits this only after the MCP handshake, which can outlast
+      // an inspection timeout. Observe it now; awaiters still see the failure.
+      void this.rootIdentity.catch(() => undefined);
+    }
+  }
+
+  override async close() {
+    // Also blocks a root snapshot that lands after close from starting tracking.
+    this.closing = true;
+    this.stopTracking();
+    await super.close();
   }
 }
 
@@ -362,3 +413,7 @@ export function createOfficialMcpAdapter(
     },
   };
 }
+
+export const officialMcpAdapterTestSeams = {
+  OwnedStdioClientTransport,
+};

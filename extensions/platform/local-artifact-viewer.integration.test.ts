@@ -61,6 +61,15 @@ async function openSession(shareUrl: string) {
   };
 }
 
+// Windows reuses the loopback ephemeral port for the next viewer immediately,
+// so the fetch connection pool can still hold a socket to the server that just
+// shut down. A POST is never retried after a reset, so drain the pool by
+// yielding until the closed sockets are observed before the next test binds.
+async function closeViewer(viewer: { close(): Promise<void> }) {
+  await viewer.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
 test("loopback viewer exchanges fragment capability and isolates interactive HTML", async () => {
   const viewer = createLocalArtifactPublicationAdapter({ clock: () => 100 });
   try {
@@ -122,7 +131,7 @@ test("loopback viewer exchanges fragment capability and isolates interactive HTM
     );
     assert.match(await refreshed.text(), /REFRESHED BODY/);
   } finally {
-    await viewer.close();
+    await closeViewer(viewer);
   }
 });
 
@@ -176,6 +185,6 @@ test("loopback viewer rejects cross-site exchange, wrong host, expiry, and revok
     assert.equal(status.ok, true);
     if (status.ok) assert.equal(status.value.state, "revoked");
   } finally {
-    await viewer.close();
+    await closeViewer(viewer);
   }
 });

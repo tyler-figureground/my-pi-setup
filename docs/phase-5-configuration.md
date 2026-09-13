@@ -49,7 +49,7 @@ This registers status/loader tools but starts no transport or browser. Empty bro
 }
 ```
 
-STDIO environment references and all credential configuration are user-managed only. Project config may define trusted commands but cannot request environment secrets. Unknown tool effects default to protected remote write.
+STDIO environment references and all credential configuration are user-managed only. Project config may define trusted commands but cannot request environment secrets. Unknown tool effects default to protected remote write. Set `tools.defaultEffect` (for example `"local-write"` for a server that only drives local apps) to classify every tool missing from `effects`; explicit `effects` entries still win.
 
 ## MCP HTTP bearer
 
