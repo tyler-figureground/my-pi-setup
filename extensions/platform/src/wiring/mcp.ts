@@ -13,6 +13,10 @@ const loaderSchema = Type.Object(
   { additionalProperties: false },
 );
 
+interface ApprovalUi {
+  select(title: string, options: string[]): Promise<string | undefined>;
+}
+
 export interface McpCapabilityOptions {
   readonly issueAuthority?: () => ExternalUserAuthorityToken;
 }
@@ -56,15 +60,35 @@ export function createMcpCapability(
   let statusUi:
     { setStatus(key: string, value: string | undefined): void } | undefined;
   const dynamicTools = new Map<string, string>();
+  // Servers the user trusted for the rest of this session. Replaced on stop()
+  // so trust never outlives the session that granted it.
+  let trustedServers = new Set<string>();
+  // Serializes approval prompts so calls queued behind a "trust" answer skip
+  // the dialog instead of stacking duplicates.
+  let approvals: Promise<unknown> = Promise.resolve();
+
+  const approve = (tool: ActivatedFederatedTool, ui: ApprovalUi) => {
+    const trusted = trustedServers;
+    const decision = approvals.then(async () => {
+      if (trusted.has(tool.serverId)) return true;
+      const allowOnce = "Allow once";
+      const trustSession = `Trust ${tool.serverId} for this session`;
+      const choice = await ui.select(
+        `Approve MCP tool? ${tool.serverId}/${tool.name} may change an external system.`,
+        [allowOnce, trustSession, "Deny"],
+      );
+      if (choice === trustSession) trusted.add(tool.serverId);
+      return choice === allowOnce || choice === trustSession;
+    });
+    approvals = decision.catch(() => undefined);
+    return decision;
+  };
 
   const invoke = async (
     tool: ActivatedFederatedTool,
     parameters: JsonObject,
     signal: AbortSignal | undefined,
-    ctx: {
-      hasUI: boolean;
-      ui?: { confirm(title: string, message: string): Promise<boolean> };
-    },
+    ctx: { hasUI: boolean; ui?: ApprovalUi },
   ) => {
     if (!federation) throw new Error("MCP federation is unavailable.");
     let result = await federation.invoke(
@@ -74,10 +98,7 @@ export function createMcpCapability(
     if (!result.ok && result.error.code === "approval_required") {
       if (!ctx.hasUI || !ctx.ui || !options.issueAuthority)
         throw new Error(result.error.message);
-      const confirmed = await ctx.ui.confirm(
-        "Approve MCP tool?",
-        `${tool.serverId}/${tool.name} may change an external system. Allow once?`,
-      );
+      const confirmed = await approve(tool, ctx.ui);
       if (!confirmed) throw new Error("MCP tool call denied by user.");
       result = await federation.invoke(
         {
@@ -254,6 +275,8 @@ export function createMcpCapability(
     async stop() {
       const current = federation;
       federation = undefined;
+      trustedServers = new Set();
+      approvals = Promise.resolve();
       authorization = undefined;
       oauthServers = [];
       statusUi?.setStatus("platform:mcp", undefined);
