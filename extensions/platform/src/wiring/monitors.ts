@@ -21,6 +21,12 @@ import type {
 } from "../core/policy/index.ts";
 
 const MONITOR_TOOLS = ["monitor_inspect", "monitor_change"] as const;
+const jsonScalarSchemas = () => [
+  Type.Null(),
+  Type.Boolean(),
+  Type.Number(),
+  Type.String({ maxLength: 8_192 }),
+];
 const ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$";
 const CREDENTIAL_REFERENCE_PATTERN =
   "^credential:[A-Za-z0-9][A-Za-z0-9._-]{0,223}$";
@@ -922,26 +928,25 @@ export function createMonitorCapability(options: MonitorCapabilityOptions) {
           minimum: 1,
           maximum: Number.MAX_SAFE_INTEGER,
         }),
+        // Advertised as a bounded, non-recursive JSON value. The cyclic
+        // $ref form this replaced overflowed z.ai's server-side schema
+        // walker (HTTP 200 carrying java.lang.StackOverflowError, no SSE
+        // chunks), which surfaced as "Stream ended without finish_reason"
+        // for every GLM turn. Arbitrary-depth input is still accepted and
+        // validated at runtime by isJsonValue/hasForbiddenPollInput in
+        // normalizeSource; this schema only describes the shape to models.
         input: Type.Optional(
           Type.Record(
             Type.String({ minLength: 1, maxLength: 128 }),
-            Type.Cyclic(
-              {
-                JsonValue: Type.Union([
-                  Type.Null(),
-                  Type.Boolean(),
-                  Type.Number(),
-                  Type.String({ maxLength: 8_192 }),
-                  Type.Array(Type.Ref("JsonValue"), { maxItems: 64 }),
-                  Type.Record(
-                    Type.String({ minLength: 1, maxLength: 128 }),
-                    Type.Ref("JsonValue"),
-                    { maxProperties: 64 },
-                  ),
-                ]),
-              },
-              "JsonValue",
-            ),
+            Type.Union([
+              ...jsonScalarSchemas(),
+              Type.Array(Type.Union(jsonScalarSchemas()), { maxItems: 64 }),
+              Type.Record(
+                Type.String({ minLength: 1, maxLength: 128 }),
+                Type.Union(jsonScalarSchemas()),
+                { maxProperties: 64 },
+              ),
+            ]),
             { maxProperties: 64 },
           ),
         ),
