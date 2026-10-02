@@ -90,6 +90,9 @@ interface ActiveHooksRuntime {
 const MAX_PAYLOAD_NODES = 512;
 const MAX_PAYLOAD_DEPTH = 6;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
+// Reserve room inside TriggerEngine's 64 KiB payload limit for the invocation
+// wrapper (including cwd). Raw text accounting does not include JSON escaping.
+const MAX_SERIALIZED_PAYLOAD_BYTES = 48 * 1024;
 const MAX_STRING_BYTES = 8 * 1024;
 const MAX_COLLECTION_ENTRIES = 64;
 const STATUS_PREFIX = "platform-hook:";
@@ -249,6 +252,13 @@ function eventPayload(event: unknown) {
   ) {
     return { payload: {}, bounded: budget.bounded } as const;
   }
+  if (
+    Buffer.byteLength(JSON.stringify(converted)) > MAX_SERIALIZED_PAYLOAD_BYTES
+  ) {
+    // Observers receive a bounded marker; gate events deny closed below rather
+    // than evaluating policy against a payload whose content was discarded.
+    return { payload: { truncated: "[BOUNDED]" }, bounded: true } as const;
+  }
   return {
     payload: converted as Readonly<Record<string, PlainData>>,
     bounded: budget.bounded,
@@ -384,6 +394,14 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
     if (!runtime || !runtime.acceptingEffects) return { context: [] };
     const converted = eventPayload(event);
     if (converted.bounded && gateEvents.has(eventName as NativeHookEventName)) {
+      // No policy can inspect this event when it has no configured hooks.
+      // Do not reject ordinary large prompts, writes, or compaction payloads
+      // on behalf of a nonexistent policy. Never dispatch truncated gate data.
+      // Include suspended hooks: their fail-closed protection still applies.
+      if (
+        !runtime.hooks.inspect().hooks.some((hook) => hook.event === eventName)
+      )
+        return { context: [] };
       return {
         context: [],
         block: {

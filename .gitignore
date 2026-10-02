@@ -12,6 +12,12 @@ sessions/
 /.pi/plans/
 auth.json
 settings.json
+!config/settings.json
+/platform.json
+/config/machine.local.json
+/platform.json.bak-*
+/npm/
+/skills/herdr/
 trust.json
 models.json
 models-store.json

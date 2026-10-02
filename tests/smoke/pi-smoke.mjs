@@ -35,6 +35,28 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-phase-0-smoke-"));
 const agentDir = path.join(tempRoot, "agent");
 const logPath = path.join(tempRoot, "lifecycle.jsonl");
 fs.mkdirSync(agentDir, { recursive: true });
+// Exercise the full tool contract independently of private user preferences,
+// credentials, installed packages, and persistent platform state.
+const repositoryAgentDir = path.join(tempRoot, "repository-agent");
+fs.mkdirSync(repositoryAgentDir);
+fs.symlinkSync(
+  path.join(root, "extensions"),
+  path.join(repositoryAgentDir, "extensions"),
+  process.platform === "win32" ? "junction" : "dir",
+);
+const platformConfig = JSON.parse(
+  fs.readFileSync(path.join(root, "config/platform.json"), "utf8"),
+);
+platformConfig.monitors = true;
+platformConfig.mcpServers = [];
+// Registration is lazy; no browser is launched by this smoke test.
+platformConfig.browserSettings.executablePath = process.execPath;
+platformConfig.browserSettings.allowedOrigins = [];
+fs.writeFileSync(
+  path.join(repositoryAgentDir, "platform.json"),
+  JSON.stringify(platformConfig),
+  "utf8",
+);
 
 const commonArgs = [
   cli,
@@ -226,7 +248,7 @@ async function smokeRepositoryExtensions() {
     ],
     {
       cwd: os.tmpdir(),
-      env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
+      env: { ...baseEnv, PI_CODING_AGENT_DIR: repositoryAgentDir },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     },
@@ -379,7 +401,7 @@ async function smokePlatformRpc() {
     ],
     {
       cwd: os.tmpdir(),
-      env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
+      env: { ...baseEnv, PI_CODING_AGENT_DIR: repositoryAgentDir },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     },

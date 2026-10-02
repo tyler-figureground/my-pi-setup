@@ -165,6 +165,132 @@ hooks:
   });
 });
 
+test("large native events stay within TriggerEngine serialized payload bounds", async () => {
+  await withFixture(async (directory) => {
+    const trigger = createTriggerEngine({ hostId: "hooks-large-host" });
+    const harness = createPiHarness();
+    const notifications: string[] = [];
+    const ctx = createContext(directory, notifications);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir: directory,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-large-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    try {
+      await capability.start(
+        { project, projectTrusted: true, ctx },
+        { type: "session_start", reason: "startup" },
+      );
+      // Native provider requests and streamed messages can fill the raw byte
+      // budget. JSON escaping and the invocation wrapper add further bytes.
+      for (const text of ["x".repeat(8192), "\u0000".repeat(8192)]) {
+        await harness.emit(
+          "before_provider_request",
+          {
+            type: "before_provider_request",
+            payload: Array.from({ length: 16 }, () => text),
+          },
+          ctx,
+        );
+      }
+      assert.deepEqual(notifications, []);
+      const deliveries = trigger.engine
+        .inspect()
+        .history.filter(({ type }) => type === "hook:before_provider_request");
+      assert.equal(deliveries.length, 2);
+      assert.ok(
+        deliveries.every(({ outcomes }) =>
+          outcomes.every((status) => status === "delivered"),
+        ),
+      );
+      const largeToolEvent = {
+        type: "tool_call",
+        toolName: "write",
+        input: { content: "\u0000".repeat(8192) },
+      };
+      assert.deepEqual(await harness.emit("tool_call", largeToolEvent, ctx), [
+        undefined,
+      ]);
+      for (const event of ["input", "session_before_compact"]) {
+        assert.deepEqual(
+          await harness.emit(
+            event,
+            { type: event, text: "x".repeat(9000) },
+            ctx,
+          ),
+          [undefined],
+        );
+      }
+      assert.deepEqual(notifications, []);
+
+      // A hook for another event must not turn large writes into false denials.
+      await writeFile(
+        path.join(directory, "hooks.yaml"),
+        `version: 2
+hooks:
+  - id: input-policy
+    event: input
+    priority: 0
+    match: {}
+    actions: [{ type: policy, decision: deny, reason: fixture-denial }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+        "utf8",
+      );
+      await harness.commands.get("hooks")!("reload", ctx);
+      assert.equal(capability.inspect().hooks.length, 1);
+      notifications.length = 0;
+      assert.deepEqual(await harness.emit("tool_call", largeToolEvent, ctx), [
+        undefined,
+      ]);
+      const deniedInput = await harness.emit(
+        "input",
+        { type: "input", source: "text", text: "x".repeat(9000) },
+        ctx,
+      );
+      assert.deepEqual(deniedInput, [{ action: "handled" }]);
+      assert.match(notifications[0]!, /safety bounds/);
+
+      // Reloading a real gate restores fail-closed behavior immediately.
+      const configPath = path.join(directory, "hooks.yaml");
+      const config = await readFile(configPath, "utf8");
+      await writeFile(
+        configPath,
+        config.replace("event: input", "event: tool_call"),
+        "utf8",
+      );
+      await harness.commands.get("hooks")!("reload", ctx);
+      const blocked = await harness.emit("tool_call", largeToolEvent, ctx);
+      assert.equal((blocked[0] as { block?: boolean })?.block, true);
+      await unlink(configPath);
+      await harness.commands.get("hooks")!("reload", ctx);
+      assert.equal(capability.inspect().hooks.length, 0);
+      assert.deepEqual(await harness.emit("tool_call", largeToolEvent, ctx), [
+        undefined,
+      ]);
+    } finally {
+      await capability.stop("quit", {
+        type: "session_shutdown",
+        reason: "quit",
+      });
+      await trigger.close();
+    }
+  });
+});
+
 test("production wiring keeps global hooks when project starts untrusted", async () => {
   await withFixture(async (directory) => {
     const agentDir = path.join(directory, "agent");
