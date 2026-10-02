@@ -12,11 +12,9 @@ import {
   type PinnedFetchAuthorization,
 } from "../external/pinned-fetch.ts";
 import {
-  snapshotWindowsProcessTree,
-  terminateWindowsProcessTreeSnapshot,
-  type WindowsProcessIdentity,
-  type WindowsProcessTreeSnapshot,
-} from "../core/processes/windows-tree.ts";
+  createWindowsKillOnCloseJob,
+  type WindowsKillOnCloseJob,
+} from "../core/processes/windows-job.ts";
 import type {
   McpCallResult,
   McpConnection,
@@ -28,75 +26,67 @@ import type {
 const CONNECT_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
-class OwnedStdioClientTransport extends StdioClientTransport {
-  spawnedPid?: number;
-  rootIdentity?: Promise<WindowsProcessIdentity | undefined>;
-  private retained?: WindowsProcessTreeSnapshot;
-  private tracker?: NodeJS.Timeout;
-  private capturing = false;
+type CreateKillOnCloseJob = () => Promise<WindowsKillOnCloseJob>;
 
-  private async capture(pid: number, expected?: WindowsProcessIdentity) {
-    if (this.capturing) return;
-    this.capturing = true;
-    try {
-      const snapshot = await snapshotWindowsProcessTree(pid);
-      if (
-        expected &&
-        snapshot.root &&
-        snapshot.root.startedAt !== expected.startedAt
-      )
-        return;
-      if (!snapshot.root && !this.retained) return;
-      const root = this.retained?.root ?? snapshot.root;
-      const descendants = new Map<string, WindowsProcessIdentity>();
-      for (const identity of [
-        ...(this.retained?.descendants ?? []),
-        ...snapshot.descendants,
-      ])
-        descendants.set(`${identity.pid}:${identity.startedAt}`, identity);
-      this.retained = {
-        ...(root ? { root } : {}),
-        descendants: [...descendants.values()],
-      };
-    } finally {
-      this.capturing = false;
-    }
+class OwnedStdioClientTransport extends StdioClientTransport {
+  private job?: WindowsKillOnCloseJob;
+  private readonly createJob: CreateKillOnCloseJob;
+
+  constructor(
+    server: ConstructorParameters<typeof StdioClientTransport>[0],
+    createJob: CreateKillOnCloseJob = createWindowsKillOnCloseJob,
+  ) {
+    super(server);
+    this.createJob = createJob;
   }
 
-  async takeRetainedSnapshot() {
-    const root = await this.rootIdentity;
-    if (this.tracker) clearInterval(this.tracker);
-    this.tracker = undefined;
-    while (this.capturing)
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    if (root) await this.capture(root.pid, root);
-    return this.retained ?? { descendants: [] };
+  /** True once the spawned server is contained by a kill-on-close job. */
+  get ownsProcessTree() {
+    return this.job !== undefined;
   }
 
   override async start() {
-    await super.start();
+    if (process.platform !== "win32") return super.start();
+    // Create the job before spawning so the server joins it synchronously
+    // after CreateProcess, before it has had time to start descendants.
+    const job = await this.createJob();
+    const started = super.start();
     const pid = this.pid;
-    if (pid) this.spawnedPid = pid;
-    if (process.platform === "win32" && pid)
-      this.rootIdentity = (async () => {
-        const deadline = Date.now() + 2_000;
-        while (Date.now() < deadline) {
-          const snapshot = await snapshotWindowsProcessTree(pid);
-          if (snapshot.root) {
-            this.retained = snapshot;
-            this.tracker = setInterval(
-              () => void this.capture(pid, snapshot.root),
-              25,
-            );
-            this.tracker.unref();
-            return snapshot.root;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        return undefined;
-      })();
+    if (!pid) {
+      job.close();
+      return started;
+    }
+    try {
+      job.assign(pid);
+    } catch (error) {
+      job.close();
+      await started.catch(() => undefined);
+      await settleWithin(this.close(), 5_000).catch(() => undefined);
+      throw new Error(
+        `MCP STDIO server process ${pid} could not join a Windows job object: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    this.job = job;
+    await started;
+  }
+
+  /** Kills the server and every descendant, then releases the job. */
+  terminateProcessTree() {
+    const job = this.job;
+    this.job = undefined;
+    if (!job) return;
+    try {
+      job.terminate();
+    } finally {
+      job.close();
+    }
   }
 }
+
+export const officialMcpAdapterTestSeams = {
+  OwnedStdioClientTransport,
+};
 
 export interface OfficialMcpAdapterOptions {
   readonly authorizeUrl?: (
@@ -170,7 +160,7 @@ async function settleWithin(operation: Promise<unknown>, timeoutMs: number) {
 function clientConnection(
   client: Client,
   transport: { close(): Promise<void> },
-  processTree?: () => Promise<WindowsProcessTreeSnapshot>,
+  terminateProcessTree?: () => void,
   terminateRemote?: () => Promise<void>,
 ): McpConnection {
   let closed = false;
@@ -213,14 +203,6 @@ function clientConnection(
       if (closed) return;
       closed = true;
       const failures: unknown[] = [];
-      let snapshot: WindowsProcessTreeSnapshot | undefined;
-      if (processTree) {
-        try {
-          snapshot = await processTree();
-        } catch (error) {
-          failures.push(error);
-        }
-      }
       if (terminateRemote) {
         try {
           await settleWithin(terminateRemote(), 5_000);
@@ -238,9 +220,11 @@ function clientConnection(
       } catch (error) {
         failures.push(error);
       }
-      if (snapshot) {
+      // After a graceful close, reap whatever the server left behind,
+      // including descendants whose own parent already exited.
+      if (terminateProcessTree) {
         try {
-          await terminateWindowsProcessTreeSnapshot(snapshot);
+          terminateProcessTree();
         } catch (error) {
           failures.push(error);
         }
@@ -284,36 +268,29 @@ export function createOfficialMcpAdapter(
           stderr: "pipe",
           maxBufferSize: 4 * 1024 * 1024,
         });
-        const spawnedRoot = () =>
-          transport.rootIdentity ?? Promise.resolve(undefined);
         try {
           await client.connect(transport, {
             signal,
             timeout: CONNECT_TIMEOUT_MS,
           });
-          if (process.platform === "win32") {
-            const root = await spawnedRoot();
-            if (!root)
-              throw new Error(
-                "MCP STDIO root creation identity is unavailable.",
-              );
-          }
+          if (process.platform === "win32" && !transport.ownsProcessTree)
+            throw new Error(
+              "MCP STDIO server process tree is not contained by a Windows job object.",
+            );
           return clientConnection(
             client,
             transport,
             process.platform === "win32"
-              ? () => transport.takeRetainedSnapshot()
+              ? () => transport.terminateProcessTree()
               : undefined,
           );
         } catch (error) {
-          const retained =
-            process.platform === "win32"
-              ? await transport.takeRetainedSnapshot().catch(() => undefined)
-              : undefined;
-          if (retained)
-            await terminateWindowsProcessTreeSnapshot(retained).catch(
-              () => undefined,
-            );
+          try {
+            transport.terminateProcessTree();
+          } catch {
+            // The job handle is released regardless; close() below still
+            // stops the root process.
+          }
           await settleWithin(transport.close(), 5_000).catch(() => undefined);
           throw new Error(
             `Could not connect MCP STDIO server ${definition.id}: ${errorMessage(error)}`,

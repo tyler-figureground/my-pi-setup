@@ -5,10 +5,73 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { chromium, type BrowserContext } from "playwright-core";
 import { createPlaywrightBrowserAdapter } from "./src/browser/playwright.ts";
 
 const chromePath = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const chromeTest = existsSync(chromePath) ? test : test.skip;
+
+for (const headless of [undefined, false]) {
+  chromeTest(
+    `real browser launches and closes with headless=${headless ?? "default true"}`,
+    async (t) => {
+      const profile = await mkdtemp(path.join(tmpdir(), "pi-browser-visible-"));
+      const server = createServer((_request, response) => {
+        response.setHeader("content-type", "text/html");
+        response.end(
+          "<!doctype html><title>Visible browser fixture</title><h1>Isolated browser</h1>",
+        );
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const origin = `http://127.0.0.1:${address.port}`;
+      const launch = chromium.launchPersistentContext.bind(chromium);
+      let context: BrowserContext | undefined;
+      const spy = t.mock.method(
+        chromium,
+        "launchPersistentContext",
+        async (...[directory, options]: Parameters<typeof launch>) => {
+          assert.equal(directory, profile);
+          assert.equal(options?.headless, headless ?? true);
+          context = await launch(directory, options);
+          return context;
+        },
+      );
+      let connection;
+      try {
+        connection = await createPlaywrightBrowserAdapter().start({
+          executablePath: chromePath,
+          profileDirectory: profile,
+          ...(headless === undefined ? {} : { headless }),
+          serviceWorkers: "block",
+          authorizeUrl: async (url) => new URL(url).origin === origin,
+        });
+        assert.equal(spy.mock.callCount(), 1);
+        assert.deepEqual(await connection.listPages(), []);
+        const page = await connection.openPage(origin);
+        assert.equal(page.title, "Visible browser fixture");
+        assert.equal(context?.pages().length, 1);
+        assert.equal(context?.browser()?.isConnected(), true);
+        await connection.close();
+        assert.equal(context?.browser()?.isConnected(), false);
+        assert.equal(
+          existsSync(path.join(profile, ".pi-browser-profile-lease.json")),
+          false,
+        );
+      } finally {
+        await connection?.close();
+        spy.mock.restore();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+        await rm(profile, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 chromeTest(
   "real Playwright adapter uses an isolated profile and returns AI accessibility refs",

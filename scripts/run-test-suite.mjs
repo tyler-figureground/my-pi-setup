@@ -11,6 +11,7 @@ const unit = [
   "extensions/background-terminals/prompt.test.ts",
   "extensions/background-terminals/ps.test.ts",
   "extensions/background-terminals/result-delivery.test.ts",
+  "extensions/background-terminals/running-widget.test.ts",
   "extensions/firecrawl-search/index.test.ts",
   "extensions/git-info/changed-files-view.test.ts",
   "extensions/git-info/refresh-coordinator.test.ts",
@@ -120,6 +121,7 @@ const integration = [
   "extensions/platform/lifecycle-supervisor.integration.test.ts",
   "extensions/platform/mcp-http.integration.test.ts",
   "extensions/platform/mcp-official.integration.test.ts",
+  "extensions/platform/mcp-official-job.integration.test.ts",
   "extensions/platform/memory-quality.test.ts",
   "extensions/platform/memory-sqlite.integration.test.ts",
   "extensions/platform/messaging-pi-delivery.test.ts",
@@ -271,6 +273,7 @@ async function main() {
       "--experimental-strip-types",
       ...unit,
       "tests/run-test-suite.test.mjs",
+      "tests/setup.test.mjs",
     ]);
   } else if (suite === "integration") {
     await run(

@@ -3725,3 +3725,82 @@ test("hourly messaging maintenance bounds heartbeat transaction receipts", async
   }
   await lifecycle.shutdown("quit");
 });
+
+test("heartbeat receipts expire after an hour while other broker receipts keep a day", async () => {
+  let now = 0;
+  const state = createMemoryStateStore({ now: () => now });
+  const brokerReceipt = await state.transact({
+    transactionId: "session-broker.send:retention-fixture",
+    operations: [],
+  });
+  assert.equal(brokerReceipt.ok, true);
+  const lifecycle = createLifecycleSupervisor();
+  const module = createSessionBrokerModule({
+    state,
+    artifacts: createInMemoryArtifactStore({ clock: () => now }),
+    lifecycle,
+    clock: () => now,
+    limits: {
+      heartbeatMs: 1,
+      sessionTtlMs: 90 * 24 * 60 * 60 * 1_000,
+    },
+  });
+  const attached = await module.attach(
+    {
+      piSessionId: "heartbeat-short-retention",
+      proof: issueHostSessionProof(),
+      executionRole: "parent",
+      project: project("project-one"),
+      cwd: "C:/project-one",
+      exposure: {
+        discoverableBy: "same-project",
+        acceptsFrom: "same-project",
+      },
+    },
+    delivery("heartbeat-short-retention"),
+  );
+  assert.equal(attached.ok, true);
+  if (!attached.ok) return;
+
+  const growthDeadline = Date.now() + 2_000;
+  let before = await state.diagnose();
+  while (
+    before.ok &&
+    before.value.counts.transactions < 25 &&
+    Date.now() < growthDeadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    before = await state.diagnose();
+  }
+  assert.equal(before.ok, true);
+  if (!before.ok) return;
+  assert.equal(before.value.counts.transactions >= 25, true);
+
+  // Past the heartbeat window and the hourly maintenance gate, well inside
+  // the one-day idempotency window.
+  now = 2 * 60 * 60 * 1_000;
+  const cleanupDeadline = Date.now() + 2_000;
+  let after = await state.diagnose();
+  while (
+    after.ok &&
+    after.value.counts.transactions >= before.value.counts.transactions / 2 &&
+    Date.now() < cleanupDeadline
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    after = await state.diagnose();
+  }
+  assert.equal(after.ok, true);
+  if (after.ok) {
+    assert.equal(
+      after.value.counts.transactions < before.value.counts.transactions / 2,
+      true,
+    );
+  }
+  await lifecycle.shutdown("quit");
+
+  const replayed = await state.transact({
+    transactionId: "session-broker.send:retention-fixture",
+    operations: [],
+  });
+  assert.equal(replayed.ok && replayed.value.replayed, true);
+});

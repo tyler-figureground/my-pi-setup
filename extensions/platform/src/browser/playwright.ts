@@ -221,7 +221,7 @@ export function createPlaywrightBrowserAdapter(): BrowserAdapter {
         options.profileDirectory,
         {
           executablePath: options.executablePath,
-          headless: true,
+          headless: options.headless ?? true,
           timeout: START_TIMEOUT_MS,
           serviceWorkers: options.serviceWorkers,
           acceptDownloads: true,
@@ -290,28 +290,47 @@ export function createPlaywrightBrowserAdapter(): BrowserAdapter {
         await context.addInitScript(() => {
           let eventGeneration = 0;
           const eventTarget = EventTarget.prototype;
-          const originalAdd = eventTarget.addEventListener;
-          const originalRemove = eventTarget.removeEventListener;
-          Object.defineProperty(eventTarget, "addEventListener", {
-            configurable: false,
-            writable: false,
-            value: function (
-              ...args: Parameters<EventTarget["addEventListener"]>
-            ) {
-              eventGeneration += 1;
-              return originalAdd.apply(this, args);
-            },
-          });
-          Object.defineProperty(eventTarget, "removeEventListener", {
-            configurable: false,
-            writable: false,
-            value: function (
-              ...args: Parameters<EventTarget["removeEventListener"]>
-            ) {
-              eventGeneration += 1;
-              return originalRemove.apply(this, args);
-            },
-          });
+          const apply = Reflect.apply;
+          const defineProperty = Object.defineProperty;
+          const instrument = (
+            owner: EventTarget,
+            name: "addEventListener" | "removeEventListener",
+            initialValue: unknown,
+          ) => {
+            // Each wrapper captures its own delegate. A site's saved previous
+            // method must not recurse through a later replacement.
+            const wrap = (delegate: unknown) =>
+              typeof delegate === "function"
+                ? function (this: EventTarget, ...args: unknown[]) {
+                    eventGeneration += 1;
+                    return apply(delegate, this, args);
+                  }
+                : delegate;
+            let current = wrap(initialValue);
+            defineProperty(owner, name, {
+              configurable: false,
+              enumerable: true,
+              get: () => current,
+              set: function (this: EventTarget, replacement: unknown) {
+                // Assignments are behavior changes too, including restoration
+                // of an earlier method. Never expose an untracked callable.
+                eventGeneration += 1;
+                if (this === owner) current = wrap(replacement);
+                // Inherited assignment must not replace every target's method.
+                else instrument(this, name, replacement);
+              },
+            });
+          };
+          instrument(
+            eventTarget,
+            "addEventListener",
+            eventTarget.addEventListener,
+          );
+          instrument(
+            eventTarget,
+            "removeEventListener",
+            eventTarget.removeEventListener,
+          );
           Object.defineProperty(globalThis, "__piBrowserEventGeneration", {
             configurable: false,
             enumerable: false,
@@ -361,8 +380,15 @@ export function createPlaywrightBrowserAdapter(): BrowserAdapter {
           });
           await context.routeWebSocket(/.*/, (route) => route.close());
         }
+        // Headed Chromium exits when its last window closes. Keep one blank
+        // startup page unowned until the first requested page exists.
+        const startupPage =
+          options.headless === false ? await context.newPage() : undefined;
         await Promise.all(
-          context.pages().map((page) => page.close().catch(() => undefined)),
+          context
+            .pages()
+            .filter((page) => page !== startupPage)
+            .map((page) => page.close().catch(() => undefined)),
         );
         const processIdentities =
           process.platform === "win32"
@@ -376,6 +402,7 @@ export function createPlaywrightBrowserAdapter(): BrowserAdapter {
           options.profileDirectory,
           processIdentities,
           approvalState,
+          startupPage,
         );
       } catch (error) {
         try {
@@ -430,6 +457,7 @@ function createConnection(
     mutation?: { page: Page; expiresAt: number; remaining: number };
     download?: { page: Page; expiresAt: number; remaining: number };
   },
+  startupPage?: Page,
 ): BrowserAdapterConnection {
   const pages = new Map<string, TrackedPage>();
   const pageIds = new WeakMap<Page, string>();
@@ -622,6 +650,8 @@ function createConnection(
     async openPage(url, signal) {
       signal?.throwIfAborted();
       const page = await context.newPage();
+      await startupPage?.close();
+      startupPage = undefined;
       const { id } = track(page);
       try {
         await page.goto(url, {

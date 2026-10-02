@@ -83,8 +83,24 @@ const GOAL_STATE_NAMES = [
   "cancelled",
 ] as const satisfies readonly GoalState[];
 
+/** Profile a plain-objective `/goal <objective>` submits through. */
+const DEFAULT_GOAL_PROFILE = "goal-worker";
+const COMMAND_VERBS = new Set([
+  "submit",
+  "pause",
+  "resume",
+  "cancel",
+  "resolve",
+  "dispose",
+  "edit-objective",
+  "edit-node",
+  "edit-deps",
+  "edit-criteria",
+  "restart",
+]);
 const COMMAND_USAGE = [
   "Usage:",
+  `/goal <objective>   (shorthand: auto id, profile ${DEFAULT_GOAL_PROFILE})`,
   "/goal submit <goal-id> <profile> [tokens <n>] [cost <micros>] -- <objective>",
   "/goal pause|resume|cancel <goal-id> <expected-revision> [-- <reason>]",
   "/goal resolve <goal-id> <expected-revision> <node-id> <attempt-number> <succeeded|failed|cancelled> -- <reason>",
@@ -170,6 +186,36 @@ function findPromptSeparator(raw: string) {
 
 function tokenize(raw: string) {
   return raw.split(/\s+/).filter((token) => token.length > 0);
+}
+
+/**
+ * A structured control command names a known verb followed by a Goal id and
+ * either a profile (submit) or an expected revision. Anything else is read as
+ * a plain objective, so prose that happens to open with a verb still submits.
+ */
+function isStructuredGoalCommand(tokens: readonly string[]) {
+  const [verb, goalId, third] = tokens;
+  if (!verb || !COMMAND_VERBS.has(verb) || !ID.test(goalId ?? "")) return false;
+  return verb === "submit"
+    ? ID.test(third ?? "")
+    : unsignedInteger(third, true) !== undefined;
+}
+
+/** Readable, collision-resistant Goal id derived from a plain objective. */
+function shorthandGoalId(objective: string, requestId: string) {
+  let slug = objective
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join("-");
+  if (!/^[a-z]/.test(slug)) slug = slug ? `goal-${slug}` : "goal";
+  slug = slug.slice(0, 48).replace(/-+$/, "");
+  const suffix = createHash("sha256")
+    .update(`${requestId}\0${objective}`)
+    .digest("hex")
+    .slice(0, 6);
+  return `${slug}-${suffix}`;
 }
 
 function unsignedInteger(value: string | undefined, zero = false) {
@@ -1015,6 +1061,19 @@ export function createGoalCapability(options: GoalCapabilityOptions) {
   const parseGoalCommand = (raw: string, requestId: string): GoalCommand => {
     const separator = findPromptSeparator(raw);
     const tokens = tokenize(separator ? raw.slice(0, separator.start) : raw);
+    if (!isStructuredGoalCommand(tokens)) {
+      // `/goal <objective>` or `/goal -- <objective>`: submit through the
+      // default profile. The exact command still goes through confirmation.
+      const objective = raw
+        .trim()
+        .replace(/^--(\s+|$)/, "")
+        .trim();
+      if (objective.length === 0) throw new Error(COMMAND_USAGE);
+      return parseGoalCommand(
+        `submit ${shorthandGoalId(objective, requestId)} ${DEFAULT_GOAL_PROFILE} -- ${objective}`,
+        requestId,
+      );
+    }
     let trailing = separator ? raw.slice(separator.end).trim() : "";
     if (Buffer.byteLength(trailing) > GOAL_LIMITS.maxPromptLength)
       throw new Error(COMMAND_USAGE);
@@ -1571,6 +1630,10 @@ export function createGoalCapability(options: GoalCapabilityOptions) {
         throw new Error(
           "/goal requires direct TUI or RPC confirmation; JSON and print modes are not accepted.",
         );
+      if (raw.trim().length === 0) {
+        ctx.ui.notify(COMMAND_USAGE, "info");
+        return;
+      }
       await ctx.waitForIdle();
       const command = parseGoalCommand(
         raw,

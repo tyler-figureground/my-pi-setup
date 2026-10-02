@@ -1,5 +1,9 @@
 # my pi setup
 
+Personal Pi customization source: [tyler-figureground/my-pi-setup](https://github.com/tyler-figureground/my-pi-setup).
+
+For another computer, keep this checkout separate from private Pi data. See [installation](SETUP.md) and [release updates](docs/runbooks/portable-install.md). No credentials or session data should be copied into Git.
+
 This setup is fairly opinionated, it:
 
 - sets up github dark default as the theme

@@ -1,0 +1,31 @@
+{
+  "planMode": true,
+  "hooks": true,
+  "rules": true,
+  "profiles": true,
+  "workspaces": true,
+  "languageIntelligence": true,
+  "review": true,
+  "mcp": true,
+  "browser": false,
+  "messaging": true,
+  "memory": true,
+  "monitors": true,
+  "scheduler": true,
+  "goals": true,
+  "artifacts": true,
+  "mcpServers": [],
+  "messagingSettings": {
+    "discoverableBy": "same-project",
+    "acceptsFrom": "same-project"
+  },
+  "memorySettings": {
+    "defaultScope": "project",
+    "automaticRecall": false,
+    "automaticExtraction": false
+  },
+  "hookActions": {
+    "http": [],
+    "mcp": []
+  }
+}

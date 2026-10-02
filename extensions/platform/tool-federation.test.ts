@@ -517,3 +517,70 @@ test("ToolFederation assigns distinct ids to punctuation-normalized server names
   if (!search.ok) return;
   assert.equal(new Set(search.value.tools.map(({ id }) => id)).size, 2);
 });
+
+test("ToolFederation applies a server defaultEffect to unlisted tools while explicit effects still win", async () => {
+  const calls: string[] = [];
+  let mode: "normal" | "plan" = "normal";
+  const definition = server("local");
+  const federation = createToolFederation({
+    servers: [
+      {
+        ...definition,
+        tools: {
+          include: ["*"],
+          exclude: [],
+          effects: { publish_report: "remote-write" },
+          defaultEffect: "local-write",
+        },
+      },
+    ],
+    controls: createExternalIntegrationControls({
+      authority: { verify: (token) => token.value === "direct-user" },
+    }),
+    context: { actor: "parent", mode: () => mode },
+    adapter: {
+      async connect(): Promise<McpConnection> {
+        return {
+          async listTools() {
+            return ["mutate", "publish_report"].map((name) => ({
+              name,
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {},
+              },
+            }));
+          },
+          async callTool(request) {
+            calls.push(request.name);
+            return { content: [] };
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+
+  const local = await federation.invoke({
+    toolId: "local__mutate",
+    arguments: {},
+  });
+  assert.equal(local.ok, true);
+
+  const remote = await federation.invoke({
+    toolId: "local__publish_report",
+    arguments: {},
+  });
+  assert.equal(remote.ok, false);
+  if (!remote.ok) assert.equal(remote.error.code, "approval_required");
+  assert.deepEqual(calls, ["mutate"]);
+
+  mode = "plan";
+  const planned = await federation.invoke({
+    toolId: "local__mutate",
+    arguments: {},
+  });
+  assert.equal(planned.ok, false);
+  if (!planned.ok) assert.equal(planned.error.code, "policy_denied");
+  assert.deepEqual(calls, ["mutate"]);
+});

@@ -24,6 +24,7 @@
     "@parcel/watcher": "2.6.0",
     "cron-parser": "5.10.0",
     "diff": "8.0.4",
+    "koffi": "3.2.1",
     "marked": "18.0.10",
     "minimatch": "10.2.5",
     "playwright-core": "1.62.1",

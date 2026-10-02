@@ -67,6 +67,7 @@ export interface BrowserAdapter {
     options: {
       readonly profileDirectory: string;
       readonly executablePath: string;
+      readonly headless?: boolean;
       readonly serviceWorkers: "block";
       readonly authorizeUrl?: (
         url: string,
@@ -207,6 +208,7 @@ export interface BrowserControlOptions {
   readonly credentialScope?: string;
   readonly profileDirectory: string;
   readonly executablePath: string;
+  readonly headless?: boolean;
   readonly allowedOrigins: readonly string[];
   readonly allowLoopback: boolean;
   readonly controls: ExternalIntegrationControls;
@@ -318,6 +320,7 @@ export function createBrowserControl(
         {
           profileDirectory: options.profileDirectory,
           executablePath: options.executablePath,
+          headless: options.headless ?? true,
           serviceWorkers: "block",
           hostResolverRules,
           authorizeUrl: async (url, networkRequest, requestSignal) => {

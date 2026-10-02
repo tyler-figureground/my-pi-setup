@@ -166,7 +166,7 @@ test("filesystem activation canonicalizes path parents before pattern matching",
       activated.diagnostics.filter(
         ({ code }) => code === "activation_path_outside_project",
       ).length,
-      2,
+      1,
     );
   } finally {
     await detachDirectoryLink(linked);

@@ -575,6 +575,10 @@ export function createRuleCatalog(options: RuleCatalogOptions): RuleCatalog {
         } else {
           lexical = path.resolve(inputPath);
         }
+        // References outside this catalog's scope are normal (for example,
+        // shared-drive documents). Do not probe them or apply project rules.
+        // In-scope links still undergo canonical containment checks below.
+        if (!isContained(canonicalRoot, lexical)) continue;
         try {
           const canonical = await options.storage.canonicalize(lexical);
           if (!isContained(canonicalRoot, canonical)) {

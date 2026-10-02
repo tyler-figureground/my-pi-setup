@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyPlan, planInstall } from "../../scripts/setup.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -35,6 +36,13 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-phase-0-smoke-"));
 const agentDir = path.join(tempRoot, "agent");
 const logPath = path.join(tempRoot, "lifecycle.jsonl");
 fs.mkdirSync(agentDir, { recursive: true });
+const repositoryAgentDir = path.join(tempRoot, "repository-agent");
+applyPlan(planInstall(root, repositoryAgentDir));
+const platformPath = path.join(repositoryAgentDir, "platform.json");
+const platform = JSON.parse(fs.readFileSync(platformPath, "utf8"));
+// Exercise the full public surface without granting any browser origins.
+platform.browser = true;
+fs.writeFileSync(platformPath, JSON.stringify(platform), "utf8");
 
 const commonArgs = [
   cli,
@@ -52,6 +60,10 @@ const commonArgs = [
 ];
 const baseEnv = {
   ...process.env,
+  HOME: tempRoot,
+  USERPROFILE: tempRoot,
+  LOCALAPPDATA: path.join(tempRoot, "local"),
+  XDG_STATE_HOME: path.join(tempRoot, "state"),
   PI_CODING_AGENT_DIR: agentDir,
   PI_OFFLINE: "1",
   PI_SKIP_VERSION_CHECK: "1",
@@ -226,7 +238,7 @@ async function smokeRepositoryExtensions() {
     ],
     {
       cwd: os.tmpdir(),
-      env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
+      env: { ...baseEnv, PI_CODING_AGENT_DIR: repositoryAgentDir },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     },
@@ -379,7 +391,7 @@ async function smokePlatformRpc() {
     ],
     {
       cwd: os.tmpdir(),
-      env: { ...baseEnv, PI_CODING_AGENT_DIR: root },
+      env: { ...baseEnv, PI_CODING_AGENT_DIR: repositoryAgentDir },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     },

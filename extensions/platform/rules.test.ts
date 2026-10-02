@@ -384,8 +384,30 @@ test("activation matches renamed worktree-relative paths and rejects canonical e
     escaped.diagnostics.filter(
       ({ code }) => code === "activation_path_outside_project",
     ).length,
-    2,
+    1,
   );
+});
+
+test("external references are quiet non-matches and do not touch external storage", async () => {
+  const storage = memoryStorage({}, []);
+  const canonicalized: string[] = [];
+  const catalog = createRuleCatalog({
+    project,
+    locations: { projectTrusted: true },
+    storage: {
+      ...storage,
+      async canonicalize(candidate) {
+        canonicalized.push(candidate);
+        throw new Error("External storage must not be consulted");
+      },
+    },
+  });
+  const result = await catalog.activate({
+    paths: [path.resolve(projectRoot, "../external/PROJECT.md"), "../external/note.md"],
+    contextEpoch: "external",
+  });
+  assert.deepEqual(result, { rules: [], diagnostics: [] });
+  assert.deepEqual(canonicalized, []);
 });
 
 test("relative activation resolves from session cwd while matching from worktree root", async () => {

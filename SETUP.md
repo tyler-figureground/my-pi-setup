@@ -1,8 +1,25 @@
 # Setup
 
-Requires Node.js 22.19.0 or newer.
+## Recommended: separate source and private state
 
-Clone or copy this repository to `~/.pi/agent`, then install root and extension-local dependencies:
+Requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` for the locked dependencies, plus Git and npm.
+
+Clone this repository outside `~/.pi/agent`, then run:
+
+```sh
+npm run setup -- --dry-run
+npm run setup
+npm run setup:doctor
+npm run test:setup:smoke
+```
+
+Setup installs the pinned Pi command, installs locked dependencies, registers the checkout as a local Pi package, and preserves existing settings. Fresh browser access stays disabled until configured locally.
+
+See [portable installation and updates](docs/runbooks/portable-install.md) for prerequisites, provider login, release updates, backups, and migration boundaries. Installer changes must be published before these commands work from a GitHub clone.
+
+## Legacy in-place installation
+
+Existing installations inside `~/.pi/agent` can keep that layout. Do not run the new installer in place; it refuses automatic migration. To maintain existing root and extension-local dependencies:
 
 ```sh
 cd ~/.pi/agent

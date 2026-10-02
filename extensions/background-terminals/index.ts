@@ -58,6 +58,7 @@ import {
 } from "./src/observation-service.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
+import { createRunningWidget } from "./src/ui/running-widget.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -104,18 +105,9 @@ export default function (pi: ExtensionAPI) {
         ui.setWidget(WIDGET_KEY, undefined);
         return;
       }
-      ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-        const line =
-          theme.fg("warning", "■ ") +
-          theme.fg(
-            "text",
-            `${running} background terminal${running === 1 ? "" : "s"} running`,
-          ) +
-          theme.fg("dim", " • ") +
-          theme.fg("accent", "/ps") +
-          theme.fg("dim", " to view");
-        return { render: () => [line], invalidate: () => {} };
-      });
+      ui.setWidget(WIDGET_KEY, (_tui, theme) =>
+        createRunningWidget(running, theme),
+      );
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
     }

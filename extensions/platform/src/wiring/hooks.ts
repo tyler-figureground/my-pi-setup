@@ -255,6 +255,27 @@ function eventPayload(event: unknown) {
   } as const;
 }
 
+function triggerInvocation(
+  event: (typeof declarativeHookEvents)[number],
+  payload: Readonly<Record<string, PlainData>>,
+  cwd: string,
+  unattended: boolean,
+) {
+  const invocation = { event, payload, cwd, unattended };
+  if (Buffer.byteLength(JSON.stringify(invocation)) <= MAX_PAYLOAD_BYTES) {
+    return { invocation, bounded: false } as const;
+  }
+  return {
+    invocation: {
+      event,
+      payload: { bounded: true },
+      cwd,
+      unattended,
+    },
+    bounded: true,
+  } as const;
+}
+
 function sourcesFor(
   agentDir: string,
   project: ResolvedProjectIdentity,
@@ -382,8 +403,26 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   ): Promise<HookResponse> => {
     const runtime = active;
     if (!runtime || !runtime.acceptingEffects) return { context: [] };
+    if (
+      !runtime.hooks
+        .inspect()
+        .hooks.some(
+          ({ event: configuredEvent }) => configuredEvent === eventName,
+        )
+    ) {
+      return { context: [] };
+    }
     const converted = eventPayload(event);
-    if (converted.bounded && gateEvents.has(eventName as NativeHookEventName)) {
+    const triggerPayload = triggerInvocation(
+      eventName,
+      converted.payload,
+      ctx.cwd,
+      unattended,
+    );
+    if (
+      (converted.bounded || triggerPayload.bounded) &&
+      gateEvents.has(eventName as NativeHookEventName)
+    ) {
       return {
         context: [],
         block: {
@@ -392,12 +431,7 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
         },
       };
     }
-    const invocation = {
-      event: eventName,
-      payload: converted.payload,
-      cwd: ctx.cwd,
-      unattended,
-    };
+    const invocation = triggerPayload.invocation;
     if (runtime.triggerPublisher) {
       const publisher = deliveryContexts.getStore() ?? runtime.triggerPublisher;
       const published = await eventContexts.run(ctx, () =>

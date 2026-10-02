@@ -32,6 +32,11 @@ const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const RECORD_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 // Internal transaction idempotency is bounded separately from mailbox receipts.
 const TRANSACTION_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
+// Heartbeat transaction IDs are unique per renewal and never replayed, so their
+// receipts buy no idempotency. At one per session every few seconds they were
+// >99% of the transactions table; keep only a short diagnostic tail.
+const HEARTBEAT_TRANSACTION_PREFIX = "session-broker.heartbeat:";
+const HEARTBEAT_RECEIPT_RETENTION_MS = 60 * 60 * 1_000;
 const MAINTENANCE_BATCH_SIZE = 64;
 const MAINTENANCE_MAX_PAGES = 64;
 const COMPACTION_BATCH_SIZE = 1_000;
@@ -1222,6 +1227,21 @@ export function createSessionBrokerModule(
       afterOutboundRetentionPosition = last.position;
     }
 
+    const heartbeatsBefore = clock() - HEARTBEAT_RECEIPT_RETENTION_MS;
+    for (let pass = 0; pass < COMPACTION_MAX_PASSES; pass += 1) {
+      const compacted = await options.state.compact({
+        transactionsBefore: heartbeatsBefore,
+        transactionIdPrefixes: [HEARTBEAT_TRANSACTION_PREFIX],
+        limit: COMPACTION_BATCH_SIZE,
+      });
+      if (
+        !compacted.ok ||
+        compacted.value.deletedTransactions < COMPACTION_BATCH_SIZE
+      ) {
+        break;
+      }
+    }
+
     const transactionsBefore = clock() - TRANSACTION_RECEIPT_RETENTION_MS;
     for (let pass = 0; pass < COMPACTION_MAX_PASSES; pass += 1) {
       const compacted = await options.state.compact({
@@ -1411,7 +1431,7 @@ export function createSessionBrokerModule(
           online: true,
         };
         const refreshed = await options.state.transact({
-          transactionId: `session-broker.heartbeat:${incarnation}:${id()}`,
+          transactionId: `${HEARTBEAT_TRANSACTION_PREFIX}${incarnation}:${id()}`,
           operations: [
             {
               type: "renew-lease",

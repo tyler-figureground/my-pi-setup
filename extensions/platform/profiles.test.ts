@@ -167,6 +167,37 @@ test("ProfileCatalog reload publishes a new immutable generation without mutatin
   }
 });
 
+test("ProfileCatalog reload keeps the generation when no profile changed", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(
+      path.join(f.agentDir, "agents", "steady.yaml"),
+      "name: steady\ndescription: Steady\nbackend: pi\nrole: goal-worker\ninstructions: { inline: steady }\nskills: []\n",
+      "utf8",
+    );
+    const catalog = createProfileCatalog({ agentDir: f.agentDir });
+    const context = { projectRoot: f.projectRoot, projectTrusted: false };
+    await catalog.reload(context);
+    const pinned = catalog.resolve("steady");
+    assert.equal(pinned.ok, true);
+    if (!pinned.ok) return;
+    const again = await catalog.revalidate!("steady", context);
+    assert.equal(again.ok, true);
+    if (!again.ok) return;
+    assert.equal(catalog.inspect().generation, 1);
+    assert.equal(
+      again.value.identity.catalogGeneration,
+      pinned.value.identity.catalogGeneration,
+    );
+    assert.equal(
+      again.value.identity.contentDigest,
+      pinned.value.identity.contentDigest,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("ProfileCatalog rejects a trusted-project agents junction outside project root", async () => {
   const f = await fixture();
   try {

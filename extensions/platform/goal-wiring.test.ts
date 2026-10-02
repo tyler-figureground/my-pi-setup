@@ -478,6 +478,46 @@ test("/goal submit builds one bounded core command under direct user authority",
   assert.equal(notices.length, 1);
 });
 
+test("/goal <plain objective> submits through the default goal-worker profile", async () => {
+  const wired = createHarness({ requestId: () => "command-1" });
+  await wired.capability.start(wired.binding);
+  const confirmations: string[] = [];
+  const notices: string[] = [];
+  const command = wired.commands.get("goal")!;
+
+  await command.handler(
+    "Restart the flaky login tests and fix them",
+    uiContext(confirmations, notices),
+  );
+  await command.handler(
+    "-- 42 things to tidy",
+    uiContext(confirmations, notices),
+  );
+
+  assert.equal(wired.calls.length, 2);
+  const [first, second] = wired.calls.map(({ command: value }) => value);
+  assert.equal(first!.type, "submit");
+  if (first!.type !== "submit" || second!.type !== "submit") return;
+  assert.match(first.goalId, /^restart-the-flaky-login-[a-f0-9]{6}$/);
+  assert.equal(first.objective, "Restart the flaky login tests and fix them");
+  assert.equal(first.nodes[0]!.profileName, "goal-worker");
+  assert.equal(first.nodes[0]!.prompt, first.objective);
+  assert.match(second.goalId, /^goal-42-things-to-tidy-[a-f0-9]{6}$/);
+  assert.equal(second.objective, "42 things to tidy");
+  assert.equal(confirmations.length, 2);
+});
+
+test("bare /goal shows usage without failing or reaching the engine", async () => {
+  const wired = createHarness();
+  await wired.capability.start(wired.binding);
+  const notices: string[] = [];
+  await wired.commands.get("goal")!.handler("   ", uiContext([], notices));
+  assert.equal(wired.calls.length, 0);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!, /\/goal <objective>/);
+  assert.match(notices[0]!, /Usage:/);
+});
+
 test("approval tokens verify only for the exact command, binding, and lifetime", async () => {
   const wired = createHarness({
     async observe() {

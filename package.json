@@ -1,4 +1,29 @@
 {
+  "name": "tyler-pi-setup",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "extensions/ask-user",
+      "extensions/background-terminals",
+      "extensions/copy-all",
+      "extensions/file-search",
+      "extensions/firecrawl-search",
+      "extensions/git-info",
+      "extensions/model-info",
+      "extensions/platform",
+      "extensions/spark-strict-tools",
+      "extensions/subagents",
+      "extensions/summaries",
+      "extensions/ui-customization",
+      "extensions/workflows"
+    ],
+    "skills": [
+      "skills"
+    ],
+    "themes": [
+      "themes"
+    ]
+  },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
@@ -14,9 +39,14 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
+    "setup": "node scripts/setup.mjs install",
+    "setup:doctor": "node scripts/setup.mjs doctor",
+    "setup:update": "node scripts/setup.mjs update",
+    "test:setup": "node --test tests/setup.test.mjs",
+    "test:setup:smoke": "node tests/smoke/portable-setup.mjs",
     "check": "tsc --noEmit",
     "format": "prettier --write \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"*.json\"",
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"*.json\"",

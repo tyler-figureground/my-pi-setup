@@ -165,6 +165,84 @@ hooks:
   });
 });
 
+test("large observational events stay within TriggerEngine payload bounds", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: observe-large-message
+    event: message_end
+    priority: 0
+    match: {}
+    actions: [{ type: notify, message: observed, level: info }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: open
+`,
+      "utf8",
+    );
+    const trigger = createTriggerEngine({ hostId: "hooks-large-event-host" });
+    const harness = createPiHarness();
+    const notifications: string[] = [];
+    const ctx = createContext(directory, notifications);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-large-event-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    await capability.start(
+      { project, projectTrusted: true, ctx },
+      { type: "session_start", reason: "startup" },
+    );
+
+    await harness.emit(
+      "message_end",
+      {
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          content: Array.from({ length: 64 }, () => ({
+            type: "text",
+            text: "x".repeat(8 * 1024),
+          })),
+        },
+      },
+      ctx,
+    );
+
+    assert.ok(
+      trigger.engine
+        .inspect()
+        .history.some(({ type }) => type === "hook:message_end"),
+    );
+    assert.equal(
+      notifications.includes(
+        "Hook dispatch failed within TriggerEngine safety bounds.",
+      ),
+      false,
+    );
+    await capability.stop("quit", {
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    await trigger.close();
+  });
+});
+
 test("production wiring keeps global hooks when project starts untrusted", async () => {
   await withFixture(async (directory) => {
     const agentDir = path.join(directory, "agent");

@@ -67,6 +67,27 @@ async function repositoryFixture() {
   };
 }
 
+test("WorkspaceManager default ids always satisfy the workspace id contract", async () => {
+  const f = await repositoryFixture();
+  try {
+    const manager = createWorkspaceManager({
+      project: f.project,
+      projectTrusted: true,
+      workspaceRoot: f.workspaceRoot,
+      stateStore: createMemoryStateStore(),
+    });
+    // A bare UUID starts with a digit ~62% of the time; retry enough to catch it.
+    for (let index = 0; index < 8; index++) {
+      const created = await manager.create({ base: { kind: "current-head" } });
+      assert.equal(created.ok, true, created.ok ? "" : created.error.message);
+      if (!created.ok) return;
+      assert.match(created.value.workspaceId, /^[a-z][a-z0-9-]{0,63}$/);
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("failed cleanup preserves shared junction target and leaves workspace blocked", async () => {
   const f = await repositoryFixture();
   try {

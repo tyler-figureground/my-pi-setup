@@ -61,6 +61,7 @@ Browser non-GET requests, including HEAD and OPTIONS, are blocked unless one ori
 
 - Search starts only enabled configured servers and is lazy until first search.
 - STDIO config receives a safe base environment; configured variables are user-only `${ENV_NAME}` references.
+- On Windows each STDIO server joins a kill-on-close Job Object (via `koffi`) immediately after spawn; a server that cannot join is refused. Close terminates the job after the graceful SDK close, so orphaned descendants die too, and the tree dies with pi if pi crashes. No process polling.
 - HTTP and OAuth use address-pinned clients with redirects disabled.
 - Catalog failures are isolated per server.
 - Tool IDs retain readable names where already canonical and add a stable hash when normalization would collide.
@@ -79,7 +80,7 @@ Vault binding includes integration, server id, MCP origin, and a SHA-256 fingerp
 
 Browser profiles are scoped by agent directory plus stable project identity, then profile name. A private atomic lease prevents concurrent use and carries process start identity for stale-owner recovery. Profile lease is retained on degraded shutdown.
 
-Playwright launches host Chrome/Edge without downloading a browser. Initial blank pages close. Context page events track popups; `BrowserControl` adopts only allowlisted pages and closes denied pages. Persistent cookies remain inside that project/profile identity. Separate Impeccable profiles coexist; same-profile collisions fail before launch.
+Playwright launches host Chrome/Edge without downloading a browser. Initial blank pages close. User-managed `browserSettings.headless` defaults to `true`; `false` launches a visible window without changing policy or profile identity. In visible mode, one unowned blank startup page remains until the first requested page opens, preventing Chromium from exiting when its last window closes. Context page events track popups; `BrowserControl` adopts only allowlisted pages and closes denied pages. Persistent cookies remain inside that project/profile identity. Separate Impeccable profiles coexist; same-profile collisions fail before launch.
 
 Approval scope hashes page id, adapter page id, action, ref/input digest, effect, destination, classifier reason, live URL, and a Playwright accessibility-document digest. After user delay or credential/artifact lookup, document identity, target classification, and live origin are rechecked. Real actions use a fixed `ElementHandle`; detached/replaced nodes fail instead of retargeting.
 

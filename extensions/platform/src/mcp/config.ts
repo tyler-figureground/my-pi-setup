@@ -169,6 +169,7 @@ function decodeOne(
   let include = ["*"];
   let exclude: string[] = [];
   let decodedEffects: Record<string, OperationKind> | undefined;
+  let defaultEffect: OperationKind | undefined;
   if (object.tools !== undefined) {
     if (
       !object.tools ||
@@ -178,7 +179,8 @@ function decodeOne(
       throw new Error("MCP tools config must be an object.");
     const tools = object.tools as Record<string, unknown>;
     const toolsUnknown = Object.keys(tools).filter(
-      (key) => !["include", "exclude", "effects"].includes(key),
+      (key) =>
+        !["include", "exclude", "effects", "defaultEffect"].includes(key),
     );
     if (toolsUnknown.length > 0)
       throw new Error(
@@ -202,6 +204,11 @@ function decodeOne(
           throw new Error("MCP tool effect is invalid.");
         decodedEffects[name] = effect as OperationKind;
       }
+    }
+    if (tools.defaultEffect !== undefined) {
+      if (!effects.has(tools.defaultEffect as OperationKind))
+        throw new Error("MCP tool defaultEffect is invalid.");
+      defaultEffect = tools.defaultEffect as OperationKind;
     }
   }
   let oauth: McpOAuthServer | undefined;
@@ -279,6 +286,7 @@ function decodeOne(
       include,
       exclude,
       ...(decodedEffects ? { effects: decodedEffects } : {}),
+      ...(defaultEffect ? { defaultEffect } : {}),
     },
     ...(typeof object.credentialReference === "string"
       ? { credentialReference: object.credentialReference }

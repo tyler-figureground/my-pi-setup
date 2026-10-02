@@ -533,6 +533,32 @@ test("platform wiring composes plan mode, lazy rules, hooks, persistence, trust,
       systemPrompt: "base",
       systemPromptOptions: {},
     });
+    const notificationsBeforeExternal = harness.notifications.length;
+    const externalNote = path.join(directory, "shared drive", "Project note.md");
+    await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "external-read",
+      toolName: "read",
+      input: { path: externalNote },
+    });
+    await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "external-search",
+      toolName: "rg",
+      input: { path: externalNote },
+      content: [{
+        type: "text",
+        text: [`${externalNote}:1:# Project`, ...Array.from(
+          { length: 185 },
+          (_, index) => `${externalNote}-${index + 2}-Context with docs/guide.md`,
+        )].join("\n"),
+      }],
+      details: {},
+      isError: false,
+    });
+    assert.equal(harness.notifications.length, notificationsBeforeExternal,
+      "external reads and search context must not emit rule errors or false cap warnings");
+
     await harness.emit("tool_result", {
       type: "tool_result",
       toolCallId: "many-search-results",

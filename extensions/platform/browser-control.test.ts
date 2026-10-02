@@ -92,6 +92,7 @@ test("BrowserControl starts lazily with its dedicated profile and exposes only o
     {
       profileDirectory: "C:/phase5/browser-profile",
       executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+      headless: true,
       serviceWorkers: "block",
       hostResolverRules: [{ hostname: "127.0.0.1", address: "127.0.0.1" }],
       authorizeUrl: "function",

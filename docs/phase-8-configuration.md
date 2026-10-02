@@ -45,16 +45,25 @@ name: goal-builder
 description: Bounded implementation worker
 backend: pi
 role: goal-worker
-workspace: isolated
+workspacePolicy: isolated
+instructions:
+  inline: Work only toward the node prompt and report concrete evidence.
+skills: []
+# Isolated Pi profiles need an explicit list drawn from
+# read, write, edit, grep, find, ls, rg, fd (bash is always denied).
+allowedTools: [read, write, edit, grep, find, ls, rg, fd]
 maxTurns: 12
-timeout: 15m
+timeoutMs: 900000
 ```
+
+Profiles live in `~/.pi/agent/agents/*.yaml` (user) or `<project>/.pi/agents/*.yaml` (trusted project). Use `workspacePolicy: current` when the worker needs a shell to run tests; it then edits the live checkout.
 
 Profile name, source, catalog generation, and content digest are pinned at submission and revalidated before dispatch. Drift blocks the node.
 
 ## Controls
 
 ```text
+/goal <objective>            # shorthand: auto id, profile goal-worker
 /goal submit <goal-id> <profile> -- <objective>
 /goals id <goal-id> history
 /goal pause <goal-id> <revision> -- <reason>

@@ -3,6 +3,7 @@ import type { PlatformDiagnostic } from "../flags.ts";
 export interface PlatformBrowserConfiguration {
   readonly executablePath: string;
   readonly profileName: string;
+  readonly headless: boolean;
   readonly allowedOrigins: readonly string[];
   readonly allowLoopback: boolean;
 }
@@ -11,6 +12,7 @@ export const defaultPlatformBrowserConfiguration: PlatformBrowserConfiguration =
   Object.freeze({
     executablePath: "",
     profileName: "phase5",
+    headless: true,
     allowedOrigins: [],
     allowLoopback: false,
   });
@@ -59,6 +61,7 @@ export function decodeBrowserConfiguration(
       ![
         "executablePath",
         "profileName",
+        "headless",
         "allowedOrigins",
         "allowLoopback",
       ].includes(key),
@@ -70,14 +73,23 @@ export function decodeBrowserConfiguration(
     });
   let executablePath = base.executablePath;
   let profileName = base.profileName;
+  let headless = base.headless;
   if (scope === "project") {
-    for (const field of ["executablePath", "profileName"])
+    for (const field of ["executablePath", "profileName", "headless"])
       if (value[field] !== undefined)
         diagnostics.push({
           path: `browserSettings.${field}`,
           message: `${field} is user-managed and cannot be changed by project config.`,
         });
   } else {
+    if (value.headless !== undefined) {
+      if (typeof value.headless !== "boolean")
+        diagnostics.push({
+          path: "browserSettings.headless",
+          message: "headless must be boolean.",
+        });
+      else headless = value.headless;
+    }
     if (value.executablePath !== undefined) {
       if (
         typeof value.executablePath !== "string" ||
@@ -141,7 +153,13 @@ export function decodeBrowserConfiguration(
     browser:
       diagnostics.length > 0
         ? base
-        : { executablePath, profileName, allowedOrigins, allowLoopback },
+        : {
+            executablePath,
+            profileName,
+            headless,
+            allowedOrigins,
+            allowLoopback,
+          },
     diagnostics,
   };
 }

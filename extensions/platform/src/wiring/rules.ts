@@ -109,7 +109,7 @@ function toolPaths(event: {
   return boundActivationPaths(paths);
 }
 
-function toolResultPaths(event: {
+export function toolResultPaths(event: {
   toolName: string;
   content: readonly { type: string; text?: string }[];
   details?: unknown;
@@ -135,8 +135,11 @@ function toolResultPaths(event: {
       .slice(0, 64 * 1024);
     for (const line of text.split(/\r?\n/).slice(0, 256)) {
       const trimmed = line.trim();
-      const rgPath = /^(.+?):\d+(?::\d+)?:/.exec(trimmed)?.[1];
-      const candidate = rgPath ?? trimmed;
+      // Search rows carry either :line: matches or -line- context. Never
+      // interpret unrecognized search output (including error prose) as paths.
+      const searchOutput = ["rg", "grep"].includes(event.toolName);
+      const searchPath = /^(.+?)(?::\d+(?::\d+)?:|-\d+-)/.exec(trimmed)?.[1];
+      const candidate = searchOutput ? searchPath : trimmed;
       if (
         candidate &&
         candidate.length <= 4_096 &&

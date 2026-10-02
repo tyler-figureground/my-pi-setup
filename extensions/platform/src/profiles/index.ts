@@ -546,6 +546,7 @@ export function createProfileCatalog(
   let profiles: readonly ResolvedAgentProfile[] = [];
   let currentDiagnostics: readonly ProfileDiagnostic[] = [];
   let generation = 0;
+  let fingerprint = "";
   const catalog: ProfileCatalog = {
     async reload(context) {
       const diagnostics: ProfileDiagnostic[] = [];
@@ -595,11 +596,26 @@ export function createProfileCatalog(
         }
         byName.set(profile.identity.name, profile);
       }
-      profiles = Object.freeze(
-        [...byName.values()].sort((a, b) =>
-          a.identity.name.localeCompare(b.identity.name),
-        ),
+      const next = [...byName.values()].sort((a, b) =>
+        a.identity.name.localeCompare(b.identity.name),
       );
+      // A generation names catalog content, not a reload count. Revalidation
+      // reloads before every Goal/Schedule dispatch and compares the pinned
+      // generation, so bumping it on an unchanged reload blocked every pin.
+      const nextFingerprint = JSON.stringify({
+        profiles: next.map((profile) => [
+          profile.identity.name,
+          profile.identity.source.scope,
+          profile.identity.source.path,
+          profile.identity.contentDigest,
+        ]),
+        diagnostics,
+      });
+      if (generation > 0 && nextFingerprint === fingerprint) {
+        return { generation, profiles, diagnostics: currentDiagnostics };
+      }
+      fingerprint = nextFingerprint;
+      profiles = Object.freeze(next);
       currentDiagnostics = Object.freeze(diagnostics);
       generation = nextGeneration;
       return { generation, profiles, diagnostics: currentDiagnostics };

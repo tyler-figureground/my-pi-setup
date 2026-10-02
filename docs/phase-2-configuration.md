@@ -79,6 +79,8 @@ Commands:
 
 `/rules` shows source, active state, and activation reason. Rule bodies are absent from startup context and load only after a matching canonical project path appears. One activation injects at most 16 rules and 256 KiB.
 
+References outside the current project (such as shared-drive documents) are quiet non-matches, not rule errors. They do not load that external project's rules. Paths inside the project still undergo canonical checks; symlink or junction escapes remain errors. Search match and context rows count once per extracted filename, not once per output line.
+
 ## Declarative hooks
 
 Put YAML configuration in:

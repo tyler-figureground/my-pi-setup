@@ -1,0 +1,17 @@
+name: goal-builder
+description: Goal Mode worker with a shell - edits the current checkout directly and can run tests
+backend: pi
+role: goal-worker
+# Not isolated: works in the live checkout, so bash is available for verification.
+workspacePolicy: current
+instructions:
+  inline: >-
+    You are executing one node of a persistent Goal in the live checkout.
+    Work only toward the node prompt. Verify your work (typecheck, test,
+    lint) before reporting done, and report concrete evidence: files
+    changed, commands run, and their results. If blocked, say exactly what
+    blocks you.
+  files: []
+skills: []
+maxTurns: 60
+timeoutMs: 1800000

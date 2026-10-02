@@ -2,7 +2,7 @@
 
 /** Describes subagent_spawn, including harnesses and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless agent with its own context window. Choose either a persistent named profile or an ad hoc harness (pi, Claude Code, or Codex). Profiles supply host-enforced backend, tool, instruction, limit, role, and workspace policy; isolated profiles receive a guarded worktree. Ad hoc working_dir remains backward-compatible and explicitly unisolated. Fire-and-forget: this returns immediately with an id. Results arrive automatically or through subagent_wait. Children cannot orchestrate more agents/workflows or ask the user. Prompts must be self-contained. Max 4 subagents can run at once.";
+  "Spawn a background subagent: a fully autonomous, headless agent with its own context window. Choose either a persistent named profile or an ad hoc harness (pi, Claude Code, or Codex). Profiles supply host-enforced backend, tool, instruction, limit, role, and workspace policy; isolated profiles receive a guarded worktree. Ad hoc working_dir remains backward-compatible and explicitly unisolated. Fire-and-forget: this returns immediately with an id. Results arrive automatically or through subagent_wait. Children cannot orchestrate more agents/workflows or ask the user. Prompts must be self-contained. Max 10 subagents can run at once. Prefer up to 4 by default; use more only when the task warrants the added concurrency.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =

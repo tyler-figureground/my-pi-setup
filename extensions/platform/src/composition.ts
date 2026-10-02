@@ -1210,6 +1210,7 @@ export function createPlatformExtension(
                 configuration.browser.profileName,
               ),
               executablePath,
+              headless: configuration.browser.headless,
               allowedOrigins: configuration.browser.allowedOrigins,
               allowLoopback: configuration.browser.allowLoopback,
               controls: externalControls,

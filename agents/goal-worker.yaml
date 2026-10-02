@@ -1,0 +1,26 @@
+name: goal-worker
+description: Default Goal Mode worker - one Goal node in an isolated guarded worktree, file tools only (no shell)
+backend: pi
+role: goal-worker
+workspacePolicy: isolated
+instructions:
+  inline: >-
+    You are executing one node of a persistent Goal. Work only toward the
+    node prompt. You have no shell in this isolated workspace, so you cannot
+    run tests; say which verification commands should be run. Report
+    concrete evidence: files changed and why. If blocked, say exactly what
+    blocks you.
+  files: []
+skills: []
+# Isolated Pi profiles may only use these; bash/powershell are always denied.
+allowedTools:
+  - read
+  - write
+  - edit
+  - grep
+  - find
+  - ls
+  - rg
+  - fd
+maxTurns: 40
+timeoutMs: 900000

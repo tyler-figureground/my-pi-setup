@@ -601,7 +601,9 @@ export function createWorkspaceManager(
   options: WorkspaceManagerOptions,
 ): WorkspaceManager {
   const now = options.now ?? Date.now;
-  const makeId = options.id ?? (() => randomUUID());
+  // Prefixed: WORKSPACE_ID requires a leading letter and a bare UUID often
+  // starts with a digit.
+  const makeId = options.id ?? (() => `ws-${randomUUID()}`);
   const requestedRoot = path.resolve(options.workspaceRoot);
   const operationOwner = JSON.stringify({
     pid: process.pid,

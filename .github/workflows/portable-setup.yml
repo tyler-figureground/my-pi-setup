@@ -1,0 +1,39 @@
+name: Portable setup
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fresh-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+      npm_config_prefix: ${{ runner.temp }}/pi-prefix
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.15.0"
+          cache: npm
+      - name: Preview fresh installation
+        run: npm run setup -- --dry-run
+      - name: Install into isolated agent directory and command prefix
+        run: npm run setup
+      - name: Check installed Pi version
+        run: npm run setup:doctor
+      - name: Installer regression tests
+        run: npm run test:setup
+      - name: Typecheck
+        run: npm run check
+      - name: Fresh-home Pi startup
+        run: npm run test:setup:smoke

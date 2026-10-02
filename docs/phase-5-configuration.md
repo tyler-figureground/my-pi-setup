@@ -12,6 +12,7 @@ Phase 5 config lives in user `platform.json` and trusted-project `.pi/platform.j
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "profileName": "phase5",
+    "headless": true,
     "allowedOrigins": [],
     "allowLoopback": false
   }
@@ -49,7 +50,7 @@ This registers status/loader tools but starts no transport or browser. Empty bro
 }
 ```
 
-STDIO environment references and all credential configuration are user-managed only. Project config may define trusted commands but cannot request environment secrets. Unknown tool effects default to protected remote write.
+STDIO environment references and all credential configuration are user-managed only. Project config may define trusted commands but cannot request environment secrets. Unknown tool effects default to protected remote write. Set `tools.defaultEffect` (for example `"local-write"` for a server that only drives local apps) to classify every tool missing from `effects`; explicit `effects` entries still win.
 
 ## MCP HTTP bearer
 
@@ -121,6 +122,7 @@ Authorization URLs and callback codes stay in direct UI/command handling, not mo
   "browserSettings": {
     "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "profileName": "phase5",
+    "headless": false,
     "allowedOrigins": [
       "http://127.0.0.1:5173",
       "https://staging.example.com"
@@ -130,7 +132,11 @@ Authorization URLs and callback codes stay in direct UI/command handling, not mo
 }
 ```
 
-Executable path and profile name are user-managed. Trusted-project config may add exact origins and enable loopback for a local dev server, but cannot redirect the platform to another profile. The production profile path is additionally scoped by agent directory and stable project identity.
+Executable path, profile name, and `headless` are user-managed. `headless` accepts only a JSON boolean and defaults to `true` (no visible window). Set `browserSettings.headless` to `false` in user `platform.json` to show the dedicated browser window, then `/reload`. The browser still starts lazily on first open; reload closes the previous browser session. A graphical desktop is required for visible mode. Trusted-project config cannot override this setting.
+
+Visible mode preserves the same dedicated profile, origin restrictions, request filtering, and tool approval requirements. It does not attach to your personal browser or bypass protected-action approvals. Manual interaction remains subject to browser request filtering; showing a window does not authorize form submissions.
+
+Trusted-project config may add exact origins and enable loopback for a local dev server, but cannot redirect the platform to another profile. The production profile path is additionally scoped by agent directory and stable project identity.
 
 Tools:
 
