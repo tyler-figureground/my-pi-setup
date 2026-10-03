@@ -32,7 +32,9 @@
       },
       "protocol": "legacy",
       "tools": {
-        "include": ["*"],
+        "include": [
+          "*"
+        ],
         "exclude": [],
         "defaultEffect": "local-write",
         "effects": {
@@ -174,9 +176,19 @@
     "allowedOrigins": [
       "https://calendar.google.com",
       "https://accounts.google.com",
-      "https://services.napacounty.gov"
+      "https://services.napacounty.gov",
+      "https://www.newegg.com",
+      "https://c1.neweggimages.com",
+      "https://promotions.newegg.com",
+      "https://secure.newegg.com",
+      "https://replit.com",
+      "https://cdn.replit.com",
+      "https://github.com",
+      "http://localhost:5000",
+      "https://eager-elephant-94.clerk.accounts.dev"
     ],
-    "allowLoopback": false
+    "allowLoopback": true,
+    "headless": false
   },
   "messagingSettings": {
     "discoverableBy": "same-project",
