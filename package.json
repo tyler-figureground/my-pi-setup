@@ -25,9 +25,9 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.84.3",
-    "@earendil-works/pi-coding-agent": "0.84.3",
-    "@earendil-works/pi-tui": "0.84.3",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-tui": "0.87.1",
     "acorn": "^8.17.0",
     "firecrawl": "^4.30.0",
     "typebox": "^1.3.6"
@@ -48,8 +48,11 @@
     "test:setup": "node --test tests/setup.test.mjs",
     "test:setup:smoke": "node tests/smoke/portable-setup.mjs",
     "check": "tsc --noEmit",
-    "format": "prettier --write \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"*.json\"",
-    "format:check": "prettier --check \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"*.json\"",
+    "config:check": "node scripts/sync-config.mjs --check",
+    "config:apply": "node scripts/sync-config.mjs --apply",
+    "test:config": "node --test tests/sync-config.test.mjs",
+    "format": "prettier --write \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"config/*.json\" \"*.json\"",
+    "format:check": "prettier --check \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"config/*.json\" \"*.json\"",
     "format:changed": "node scripts/format-changed.mjs",
     "install:extensions": "node scripts/install-extension-dependencies.mjs",
     "install:extensions:ci": "node scripts/install-extension-dependencies.mjs --ci",

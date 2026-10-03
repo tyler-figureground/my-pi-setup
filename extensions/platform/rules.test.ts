@@ -403,7 +403,10 @@ test("external references are quiet non-matches and do not touch external storag
     },
   });
   const result = await catalog.activate({
-    paths: [path.resolve(projectRoot, "../external/PROJECT.md"), "../external/note.md"],
+    paths: [
+      path.resolve(projectRoot, "../external/PROJECT.md"),
+      "../external/note.md",
+    ],
     contextEpoch: "external",
   });
   assert.deepEqual(result, { rules: [], diagnostics: [] });

@@ -1,0 +1,9 @@
+extensions/herdr-*.ts
+# Generated/private machine configuration
+platform.json
+settings.json
+auth.json
+trust.json
+models.json
+models-store.json
+config/machine.local.json

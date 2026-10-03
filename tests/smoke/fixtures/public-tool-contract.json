@@ -128,15 +128,43 @@
             "download"
           ]
         },
-        "url": { "type": "string", "maxLength": 8192 },
-        "pageId": { "type": "string", "maxLength": 128 },
-        "ref": { "type": "string", "maxLength": 32 },
-        "value": { "type": "string", "maxLength": 65536 },
-        "credentialReference": { "type": "string", "maxLength": 256 },
-        "artifactId": { "type": "string", "maxLength": 64 },
-        "key": { "type": "string", "maxLength": 128 },
-        "deltaY": { "type": "integer", "minimum": -10000, "maximum": 10000 },
-        "state": { "type": "string", "enum": ["visible", "hidden"] }
+        "url": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "pageId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "credentialReference": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "artifactId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "deltaY": {
+          "type": "integer",
+          "minimum": -10000,
+          "maximum": 10000
+        },
+        "state": {
+          "type": "string",
+          "enum": ["visible", "hidden"]
+        }
       },
       "additionalProperties": false
     }
@@ -157,7 +185,11 @@
             "network"
           ]
         },
-        "pageId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        "pageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
       },
       "additionalProperties": false
     }
@@ -594,13 +626,13 @@
           "properties": {
             "line": {
               "type": "integer",
-              "description": "Zero-based line.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based line."
             },
             "character": {
               "type": "integer",
-              "description": "Zero-based UTF-16 character.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based UTF-16 character."
             }
           }
         }
@@ -636,13 +668,13 @@
           "properties": {
             "line": {
               "type": "integer",
-              "description": "Zero-based line.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based line."
             },
             "character": {
               "type": "integer",
-              "description": "Zero-based UTF-16 character.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based UTF-16 character."
             }
           }
         }
@@ -669,13 +701,13 @@
           "properties": {
             "line": {
               "type": "integer",
-              "description": "Zero-based line.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based line."
             },
             "character": {
               "type": "integer",
-              "description": "Zero-based UTF-16 character.",
-              "minimum": 0
+              "minimum": 0,
+              "description": "Zero-based UTF-16 character."
             }
           }
         }
@@ -710,8 +742,16 @@
       "type": "object",
       "required": ["query"],
       "properties": {
-        "query": { "type": "string", "minLength": 1, "maxLength": 1024 },
-        "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
       },
       "additionalProperties": false
     }
@@ -797,7 +837,10 @@
               "type": "object",
               "required": ["kind", "terminalId"],
               "properties": {
-                "kind": { "type": "string", "const": "terminal" },
+                "kind": {
+                  "type": "string",
+                  "const": "terminal"
+                },
                 "terminalId": {
                   "type": "string",
                   "minLength": 1,
@@ -815,13 +858,18 @@
               "type": "object",
               "required": ["kind", "root"],
               "properties": {
-                "kind": { "type": "string", "const": "file" },
+                "kind": {
+                  "type": "string",
+                  "const": "file"
+                },
                 "root": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 32768
                 },
-                "recursive": { "type": "boolean" }
+                "recursive": {
+                  "type": "boolean"
+                }
               },
               "additionalProperties": false
             },
@@ -829,7 +877,10 @@
               "type": "object",
               "required": ["kind", "adapter", "intervalMs"],
               "properties": {
-                "kind": { "type": "string", "const": "poll" },
+                "kind": {
+                  "type": "string",
+                  "const": "poll"
+                },
                 "adapter": {
                   "type": "string",
                   "minLength": 1,
@@ -845,30 +896,65 @@
                   "type": "object",
                   "patternProperties": {
                     "^.*$": {
-                      "$defs": {
-                        "JsonValue": {
-                          "$id": "JsonValue",
-                          "anyOf": [
-                            { "type": "null" },
-                            { "type": "boolean" },
-                            { "type": "number" },
-                            { "type": "string", "maxLength": 8192 },
-                            {
-                              "type": "array",
-                              "items": { "$ref": "JsonValue" },
-                              "maxItems": 64
-                            },
-                            {
-                              "type": "object",
-                              "patternProperties": {
-                                "^.*$": { "$ref": "JsonValue" }
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "maxLength": 8192
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "null"
                               },
-                              "maxProperties": 64
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "maxLength": 8192
+                              }
+                            ]
+                          },
+                          "maxItems": 64
+                        },
+                        {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "maxLength": 8192
+                                }
+                              ]
                             }
-                          ]
+                          },
+                          "maxProperties": 64
                         }
-                      },
-                      "$ref": "JsonValue"
+                      ]
                     }
                   },
                   "maxProperties": 64
@@ -886,7 +972,10 @@
               "type": "object",
               "required": ["kind", "url"],
               "properties": {
-                "kind": { "type": "string", "const": "websocket" },
+                "kind": {
+                  "type": "string",
+                  "const": "websocket"
+                },
                 "url": {
                   "type": "string",
                   "minLength": 6,
@@ -909,7 +998,10 @@
               "type": "object",
               "required": ["kind", "value"],
               "properties": {
-                "kind": { "type": "string", "const": "literal" },
+                "kind": {
+                  "type": "string",
+                  "const": "literal"
+                },
                 "value": {
                   "type": "string",
                   "minLength": 1,
@@ -928,7 +1020,10 @@
               "type": "object",
               "required": ["kind", "field", "equals"],
               "properties": {
-                "kind": { "type": "string", "const": "field" },
+                "kind": {
+                  "type": "string",
+                  "const": "field"
+                },
                 "field": {
                   "type": "string",
                   "minLength": 1,
@@ -937,10 +1032,19 @@
                 },
                 "equals": {
                   "anyOf": [
-                    { "type": "string", "maxLength": 4096 },
-                    { "type": "number" },
-                    { "type": "boolean" },
-                    { "type": "null" }
+                    {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -1064,7 +1168,11 @@
               "type": "string",
               "enum": ["one-shot", "interval", "cron"]
             },
-            "at": { "type": "string", "minLength": 20, "maxLength": 64 },
+            "at": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 64
+            },
             "anchor": {
               "type": "string",
               "minLength": 20,
@@ -1098,7 +1206,11 @@
           "maxLength": 128,
           "pattern": "^[a-z][a-z0-9-]{0,127}$"
         },
-        "prompt": { "type": "string", "minLength": 1, "maxLength": 262144 },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        },
         "credentialReferences": {
           "type": "array",
           "items": {
@@ -1119,7 +1231,11 @@
               "minimum": 1000,
               "maximum": 3600000
             },
-            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "maxRetries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
             "maxOutputBytes": {
               "type": "integer",
               "minimum": 1,
@@ -1147,14 +1263,20 @@
           "type": "string",
           "enum": ["active", "paused", "blocked"]
         },
-        "includeHistory": { "type": "boolean" },
+        "includeHistory": {
+          "type": "boolean"
+        },
         "afterId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[a-z][a-z0-9-]{0,127}$"
         },
-        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        }
       },
       "additionalProperties": false
     }

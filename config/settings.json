@@ -1,0 +1,7 @@
+{
+  "theme": "github-dark-default",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "defaultThinkingLevel": "medium",
+  "packages": ["npm:pi-provider-kimi-code@0.6.12"]
+}

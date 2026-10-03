@@ -171,6 +171,10 @@ export function createRulesCapability(options: RulesCapabilityOptions) {
     diagnostics: readonly { code: string; message: string }[],
   ) => {
     for (const diagnostic of diagnostics) {
+      // Activation candidates come from ordinary prompts and tool results.
+      // Outside-project paths are expected, not rule configuration failures.
+      // The catalog still rejects them and retains inspection diagnostics.
+      if (diagnostic.code === "activation_path_outside_project") continue;
       context.ui.notify(
         `Rule ${diagnosticText(diagnostic.code, diagnostic.message)}`,
         diagnostic.code.includes("ignored") ? "warning" : "error",

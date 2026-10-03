@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyPlan, planInstall } from "../../scripts/setup.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,13 +35,28 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-phase-0-smoke-"));
 const agentDir = path.join(tempRoot, "agent");
 const logPath = path.join(tempRoot, "lifecycle.jsonl");
 fs.mkdirSync(agentDir, { recursive: true });
+// Exercise the full tool contract independently of private user preferences,
+// credentials, installed packages, and persistent platform state.
 const repositoryAgentDir = path.join(tempRoot, "repository-agent");
-applyPlan(planInstall(root, repositoryAgentDir));
-const platformPath = path.join(repositoryAgentDir, "platform.json");
-const platform = JSON.parse(fs.readFileSync(platformPath, "utf8"));
-// Exercise the full public surface without granting any browser origins.
-platform.browser = true;
-fs.writeFileSync(platformPath, JSON.stringify(platform), "utf8");
+fs.mkdirSync(repositoryAgentDir);
+fs.symlinkSync(
+  path.join(root, "extensions"),
+  path.join(repositoryAgentDir, "extensions"),
+  process.platform === "win32" ? "junction" : "dir",
+);
+const platformConfig = JSON.parse(
+  fs.readFileSync(path.join(root, "config/platform.json"), "utf8"),
+);
+platformConfig.monitors = true;
+platformConfig.mcpServers = [];
+// Registration is lazy; no browser is launched by this smoke test.
+platformConfig.browserSettings.executablePath = process.execPath;
+platformConfig.browserSettings.allowedOrigins = [];
+fs.writeFileSync(
+  path.join(repositoryAgentDir, "platform.json"),
+  JSON.stringify(platformConfig),
+  "utf8",
+);
 
 const commonArgs = [
   cli,
@@ -310,6 +324,20 @@ async function smokeRepositoryExtensions() {
     )
     .map(({ name, parameters }) => ({ name, parameters }))
     .sort((left, right) => left.name.localeCompare(right.name));
+  // Intentional schema changes: rerun with UPDATE_TOOL_CONTRACT=1 and review the diff.
+  if (process.env.UPDATE_TOOL_CONTRACT === "1") {
+    fs.writeFileSync(
+      path.join(
+        root,
+        "tests",
+        "smoke",
+        "fixtures",
+        "public-tool-contract.json",
+      ),
+      `${JSON.stringify(actualToolContract, null, 2)}\n`,
+      "utf8",
+    );
+  }
   assert.deepEqual(
     actualToolContract,
     publicToolContract,

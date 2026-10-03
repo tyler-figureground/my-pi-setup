@@ -11,7 +11,7 @@ const unit = [
   "extensions/background-terminals/prompt.test.ts",
   "extensions/background-terminals/ps.test.ts",
   "extensions/background-terminals/result-delivery.test.ts",
-  "extensions/background-terminals/running-widget.test.ts",
+  "extensions/background-terminals/widget.test.ts",
   "extensions/firecrawl-search/index.test.ts",
   "extensions/git-info/changed-files-view.test.ts",
   "extensions/git-info/refresh-coordinator.test.ts",
@@ -111,6 +111,7 @@ const integration = [
   "extensions/git-info/process.test.ts",
   "extensions/platform/artifact-store.integration.test.ts",
   "extensions/platform/local-artifact-viewer.integration.test.ts",
+  "extensions/platform/browser-events.integration.test.ts",
   "extensions/platform/browser-playwright.integration.test.ts",
   "extensions/platform/credential-vault.integration.test.ts",
   "extensions/platform/goal-killed-parent.integration.test.ts",
@@ -143,6 +144,7 @@ const integration = [
   "extensions/platform/review-test-evidence.test.ts",
   "extensions/platform/review.test.ts",
   "extensions/platform/rules.integration.test.ts",
+  "extensions/platform/rules-wiring.test.ts",
   "extensions/platform/scheduler.test.ts",
   "extensions/platform/session-broker.test.ts",
   "extensions/platform/state-store.integration.test.ts",
@@ -274,6 +276,7 @@ async function main() {
       ...unit,
       "tests/run-test-suite.test.mjs",
       "tests/setup.test.mjs",
+      "tests/sync-config.test.mjs",
     ]);
   } else if (suite === "integration") {
     await run(

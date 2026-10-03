@@ -1,10 +1,32 @@
 # Setup
 
-## Recommended: separate source and private state
+Requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`. Use the `main` branch of `https://github.com/tyler-figureground/my-pi-setup` on every computer.
+
+## Sync another computer
+
+Clone to `~/.pi/agent` on a new computer. For an existing checkout, preserve local source edits on a separate branch or stash before switching branches. Back up machine configuration outside Git instead of committing it; see the migration notes below. Never overwrite an existing agent directory.
+
+```sh
+cd ~/.pi/agent
+git fetch origin
+git switch main
+git pull --ff-only origin main
+npm ci --ignore-scripts
+npm run install:extensions:ci
+npm run config:apply
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
+npm run config:check
+```
+
+Install uv, Chrome/Edge, and clone Pyvoid first. See [`config/README.md`](config/README.md) for machine-path overrides, migration from tracked `platform.json`, backups, and parity limits. Run the block again after future updates, using the CLI version pinned in the root `package.json`. Authenticate providers locally with `/login`; no credentials are synced.
+
+Restart Pi afterward. Existing sessions can `/reload` for code changes; start a new session for shared model/thinking defaults. These commands update this computer only; run them on each other computer.
+
+## Alternative: install outside `~/.pi/agent`
 
 Requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` for the locked dependencies, plus Git and npm.
 
-Clone this repository outside `~/.pi/agent`, then run:
+For a fresh computer that should keep source and private state apart, clone this repository outside `~/.pi/agent`, then run:
 
 ```sh
 npm run setup -- --dry-run
@@ -17,9 +39,9 @@ Setup installs the pinned Pi command, installs locked dependencies, registers th
 
 See [portable installation and updates](docs/runbooks/portable-install.md) for prerequisites, provider login, release updates, backups, and migration boundaries. Installer changes must be published before these commands work from a GitHub clone.
 
-## Legacy in-place installation
+## Dependencies only
 
-Existing installations inside `~/.pi/agent` can keep that layout. Do not run the new installer in place; it refuses automatic migration. To maintain existing root and extension-local dependencies:
+Do not run `npm run setup` inside an in-place `~/.pi/agent` clone; it refuses automatic migration. To maintain existing root and extension-local dependencies:
 
 ```sh
 cd ~/.pi/agent
@@ -54,7 +76,7 @@ When changing Effect, update every extension manifest in the same change, regene
 
 ## Capability platform
 
-`platform.json` enables plan mode, lazy rules, completed declarative Hooks, profiles, guarded workspaces, language intelligence, local review, MCP federation, dedicated browser control, cross-session messaging, explicit persistent Memory, Reactive Monitors, Scheduled Prompts, and persistent Goal Mode, and shareable interactive Artifacts:
+`config/platform.json` is the shared template; `npm run config:apply` generates the private root `platform.json`. The current baseline disables Reactive Monitors and includes the Pyvoid tool server and approved browser origins. Refer to that template for current values; the following is a generic capability example:
 
 ```json
 {
@@ -173,7 +195,7 @@ The `file-search` extension registers `fd` and `rg` as model tools. No setup is 
 
 ## Theme
 
-Add the included theme to `~/.pi/agent/settings.json` while keeping your existing settings:
+`npm run config:apply` sets the included theme and shared model defaults while keeping unrelated local settings. The equivalent theme setting is:
 
 ```json
 {

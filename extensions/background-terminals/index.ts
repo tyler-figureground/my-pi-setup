@@ -58,7 +58,7 @@ import {
 } from "./src/observation-service.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
-import { createRunningWidget } from "./src/ui/running-widget.ts";
+import { createTerminalWidget } from "./src/ui/widget.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -106,7 +106,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ui.setWidget(WIDGET_KEY, (_tui, theme) =>
-        createRunningWidget(running, theme),
+        createTerminalWidget(running, theme),
       );
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
