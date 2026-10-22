@@ -8,15 +8,16 @@ Clone to `~/.pi/agent` on a new computer. For an existing checkout, preserve loc
 
 ```sh
 cd ~/.pi/agent
-git fetch origin
+git fetch https://github.com/tyler-figureground/my-pi-setup.git main
 git switch main
-git pull --ff-only origin main
+git pull --ff-only https://github.com/tyler-figureground/my-pi-setup.git main
 npm ci --ignore-scripts
-npm run install:extensions:ci
 npm run config:apply
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
 npm run config:check
 ```
+
+The fork URL is written out because some checkouts keep the upstream `davis7dotsh/my-pi-setup` as `origin`; pulling `origin main` there fetches the wrong history. Check `git remote -v` and prefer a remote named after the fork.
 
 Install uv, Chrome/Edge, and clone Pyvoid first. See [`config/README.md`](config/README.md) for machine-path overrides, migration from tracked `platform.json`, backups, and parity limits. Run the block again after future updates, using the CLI version pinned in the root `package.json`. Authenticate providers locally with `/login`; no credentials are synced.
 
@@ -41,24 +42,39 @@ See [portable installation and updates](docs/runbooks/portable-install.md) for p
 
 ## Dependencies only
 
-Do not run `npm run setup` inside an in-place `~/.pi/agent` clone; it refuses automatic migration. To maintain existing root and extension-local dependencies:
+Do not run `npm run setup` inside an in-place `~/.pi/agent` clone; it refuses automatic migration. All dependencies live in the hoisted root tree:
 
 ```sh
 cd ~/.pi/agent
 npm install
-npm run install:extensions
 ```
 
 For a lockfile-reproducible clean install:
 
 ```sh
-npm ci
-npm run install:extensions:ci
+npm ci --ignore-scripts
 ```
+
+## Dependencies
+
+All extension dependencies are hoisted into the single root `node_modules` tree; per-extension installs are intentionally absent. Extension `package.json` manifests stay as documentation, but when adding or bumping a dependency:
+
+1. Add the exact version to the root `package.json` (dependencies for runtime, devDependencies for tests/types).
+2. Keep `effect`, `@effect/platform-node`, `@effect/platform-node-shared`, and `@effect/vitest` on one exact version, enforced by the root `overrides` (npm floats `^4.0.0-beta.x` ranges to incompatible stable builds).
+3. `npm install` at the root, then `npm run check`.
+
+For a lockfile-reproducible clean install on a new machine:
+
+```sh
+cd ~/.pi/agent
+npm ci --ignore-scripts
+```
+
+One root install replaces the old per-extension install loop: it removed ~11 duplicated `node_modules` trees (~52,000 files) that made every Pi startup pay a multi-second module-resolution stat storm on Windows.
 
 ## Dependency updates
 
-Keep direct Pi packages on the exact installed CLI generation. Keep `effect`, `@effect/platform-node`, and `@effect/vitest` on one exact version across extension manifests.
+Keep direct Pi packages on the exact installed CLI generation. Keep the effect family on one exact version across the root manifest via `overrides`.
 
 ```sh
 pi --version
@@ -66,13 +82,13 @@ npm install --save-exact \
   @earendil-works/pi-ai@<pi-version> \
   @earendil-works/pi-coding-agent@<pi-version> \
   @earendil-works/pi-tui@<pi-version>
-npm run install:extensions
+npm install
 npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-tui
 npm run check
 npm test
 ```
 
-When changing Effect, update every extension manifest in the same change, regenerate every extension lockfile with one npm version, then verify each tree with `npm ls effect`.
+When changing the effect family, update the root manifest and `overrides` together, then verify the tree with `npm ls effect @effect/platform-node @effect/platform-node-shared`.
 
 ## Capability platform
 

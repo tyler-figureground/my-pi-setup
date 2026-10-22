@@ -16,6 +16,9 @@ sessions/
 /.pi/plans/
 auth.json
 settings.json
+*.bak
+*.bak-*
+crashes.json
 !config/settings.json
 /platform.json
 /config/machine.local.json
