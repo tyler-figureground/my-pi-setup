@@ -79,6 +79,7 @@
     "test:setup:smoke": "node tests/smoke/portable-setup.mjs",
     "check": "tsc --noEmit",
     "config:check": "node scripts/sync-config.mjs --check",
+    "sync": "git pull --ff-only https://github.com/tyler-figureground/my-pi-setup.git main && npm install --ignore-scripts && npm run config:apply && npm run config:check",
     "config:apply": "node scripts/sync-config.mjs --apply",
     "test:config": "node --test tests/sync-config.test.mjs",
     "format": "prettier --write \"extensions/**/*.{ts,cjs,json}\" \"tests/**/*.{ts,mjs,json}\" \"scripts/**/*.mjs\" \"config/*.json\" \"*.json\"",

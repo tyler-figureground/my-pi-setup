@@ -29,6 +29,8 @@ test("machine paths follow the current home and installed executables", () => {
     UV: "/usr/bin/uv",
     BROWSER: "/usr/bin/google-chrome",
     PYVOID_ROOT: "/home/other-user/Documents/GitHub/Pyvoid",
+    PYVOID_PRESENT: true,
+    SHELL_PATH: "/bin/bash",
   });
   const windows = resolveMachinePaths({
     home: "D:/Users/Other",
@@ -38,6 +40,7 @@ test("machine paths follow the current home and installed executables", () => {
   });
   assert.equal(windows.UV, "D:/Tools/uv.exe");
   assert.equal(windows.PYVOID_ROOT, "D:/Users/Other/Documents/GitHub/Pyvoid");
+  assert.equal(windows.SHELL_PATH, "C:/Program Files/Git/bin/bash.exe");
   assert.ok(!JSON.stringify(windows).includes("YOLOTRON"));
   assert.throws(
     () =>
@@ -69,6 +72,8 @@ test("machine overrides only permit paths, and missing dependencies fail clearly
     UV: overrides.uv,
     BROWSER: overrides.browser,
     PYVOID_ROOT: overrides.pyvoidRoot,
+    PYVOID_PRESENT: true,
+    SHELL_PATH: "/bin/bash",
   });
   assert.throws(
     () => resolveMachinePaths({ ...machine, overrides: { monitors: true } }),
@@ -82,25 +87,44 @@ test("machine overrides only permit paths, and missing dependencies fail clearly
     () => resolveMachinePaths({ ...machine, overrides: { uv: "./uv" } }),
     /must be absolute/,
   );
+  // Nothing installed: pyvoid absent so uv is not required; only the
+  // browser prerequisite fails.
   assert.throws(
     () => resolveMachinePaths({ ...machine, exists: () => false }),
-    /Install uv/,
-  );
-  assert.throws(
-    () =>
-      resolveMachinePaths({
-        ...machine,
-        exists: (file) => file.endsWith("uv"),
-      }),
     /Install Chrome/,
   );
+  // Only Chrome exists: resolves without uv because Pyvoid is absent.
+  const chromeOnly = resolveMachinePaths({
+    ...machine,
+    exists: (file) => file.endsWith("chrome"),
+  });
+  assert.equal(chromeOnly.PYVOID_PRESENT, false);
+  assert.equal(chromeOnly.BROWSER, "/usr/bin/google-chrome");
+  // uv missing while Pyvoid is present: hard failure.
   assert.throws(
     () =>
       resolveMachinePaths({
         ...machine,
-        exists: (file) => !file.endsWith("mcp_server"),
+        exists: (file) => !file.includes("uv"),
       }),
-    /Clone Pyvoid/,
+    /Install uv/,
+  );
+  // Pyvoid absent: paths resolve without the Revit integration.
+  const pyvoidNoUv = resolveMachinePaths({
+    ...machine,
+    exists: (file) => !file.endsWith("mcp_server"),
+  });
+  assert.equal(pyvoidNoUv.PYVOID_PRESENT, false);
+  assert.deepEqual(
+    resolveMachinePaths({
+      ...machine,
+      overrides: { shellPath: "/custom/bash" },
+    }).SHELL_PATH,
+    "/custom/bash",
+  );
+  assert.throws(
+    () => resolveMachinePaths({ ...machine, overrides: { shellPath: "bash" } }),
+    /must be absolute/,
   );
 });
 
@@ -169,6 +193,7 @@ test("check is read-only; apply backs up, preserves local settings and credentia
         defaultModel: "shared-model",
         sessionDir: "private-sessions",
         lastChangelogVersion: "local",
+        shellPath: "/bin/bash",
       },
     );
     assert.equal(
@@ -225,6 +250,45 @@ test("atomic config writes preserve existing data and clean up after failure", a
     assert.deepEqual(JSON.parse(await readFile(file, "utf8")), {
       replacement: true,
     });
+  });
+});
+
+test("pyvoid-less machines drop the pyvoid-revit server and keep others", async () => {
+  await fixture(async (directory) => {
+    await writeFile(
+      path.join(directory, "config/platform.json"),
+      JSON.stringify({
+        mcpServers: [
+          {
+            id: "pyvoid-revit",
+            transport: { kind: "stdio", command: "{{UV}}" },
+          },
+          { id: "other", transport: { kind: "stdio", command: "node" } },
+        ],
+      }),
+    );
+    await syncConfig({
+      directory,
+      machine: { ...machine, exists: (file) => !file.endsWith("mcp_server") },
+      apply: true,
+    });
+    const rendered = JSON.parse(
+      await readFile(path.join(directory, "platform.json"), "utf8"),
+    );
+    assert.deepEqual(
+      rendered.mcpServers.map((server) => server.id),
+      ["other"],
+    );
+    // With Pyvoid present, both servers render.
+    await rm(path.join(directory, "platform.json"));
+    await syncConfig({ directory, machine, apply: true });
+    const full = JSON.parse(
+      await readFile(path.join(directory, "platform.json"), "utf8"),
+    );
+    assert.deepEqual(
+      full.mcpServers.map((server) => server.id),
+      ["pyvoid-revit", "other"],
+    );
   });
 });
 

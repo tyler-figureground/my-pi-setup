@@ -29,7 +29,7 @@ export function resolveMachinePaths({
   exists = existsSync,
 } = {}) {
   const unknown = Object.keys(overrides).filter(
-    (key) => !["uv", "pyvoidRoot", "browser"].includes(key),
+    (key) => !["uv", "pyvoidRoot", "browser", "shellPath"].includes(key),
   );
   if (unknown.length)
     throw new Error(`Unknown machine setting: ${unknown.join(", ")}`);
@@ -99,22 +99,35 @@ export function resolveMachinePaths({
             "/usr/bin/microsoft-edge",
           ];
   const browser = overrides.browser ?? first(browserCandidates);
+  const shellCandidates =
+    platform === "win32"
+      ? [
+          join(env.PROGRAMFILES ?? "C:/Program Files", "Git/bin/bash.exe"),
+          join(
+            env.LOCALAPPDATA ?? join(home, "AppData/Local"),
+            "Programs/Git/bin/bash.exe",
+          ),
+        ]
+      : ["/bin/bash", "/usr/bin/bash"];
+  const shellPath = overrides.shellPath ?? first(shellCandidates);
   const pyvoidRoot =
     overrides.pyvoidRoot ?? join(home, "Documents/GitHub/Pyvoid");
-  if (!uv || !exists(uv))
+  const pyvoidPresent = exists(join(pyvoidRoot, "mcp_server"));
+  // uv only drives the Pyvoid MCP server; a code-only machine without Revit
+  // integration does not need it. Chrome/Edge stays required for the shared
+  // browser capability.
+  if (pyvoidPresent && (!uv || !exists(uv)))
     throw new Error("Install uv or set uv in config/machine.local.json.");
   if (!browser || !exists(browser))
     throw new Error(
       "Install Chrome/Edge or set browser in config/machine.local.json.",
     );
-  if (!exists(join(pyvoidRoot, "mcp_server")))
-    throw new Error(
-      "Clone Pyvoid or set pyvoidRoot in config/machine.local.json.",
-    );
   return {
-    UV: uv,
+    UV: uv ?? "uv",
     BROWSER: browser,
     PYVOID_ROOT: pyvoidRoot.replaceAll("\\", "/"),
+    PYVOID_PRESENT: pyvoidPresent,
+    SHELL_PATH: shellPath ?? null,
   };
 }
 
@@ -163,13 +176,27 @@ export async function syncConfig({
     path.join(directory, "config/machine.local.json"),
     true,
   );
-  const replacements = resolveMachinePaths({ ...machine, overrides });
+  const resolved = resolveMachinePaths({ ...machine, overrides });
+  const { PYVOID_PRESENT, SHELL_PATH, ...replacements } = resolved;
   const sharedSettings = await readObject(
     path.join(directory, "config/settings.json"),
   );
-  const sharedPlatform = await readObject(
+  let sharedPlatform = await readObject(
     path.join(directory, "config/platform.json"),
   );
+  if (!PYVOID_PRESENT) {
+    // Revit integration is Windows+Pyvoid only; code-only machines (for
+    // example a Linux laptop) render the shared platform without it.
+    console.warn(
+      "note: Pyvoid not found; rendering platform.json without the pyvoid-revit MCP server.",
+    );
+    const servers = Array.isArray(sharedPlatform.mcpServers)
+      ? sharedPlatform.mcpServers.filter(
+          (server) => server?.id !== "pyvoid-revit",
+        )
+      : [];
+    sharedPlatform = { ...sharedPlatform, mcpServers: servers };
+  }
   const settingsPath = path.join(directory, "settings.json");
   const platformPath = path.join(directory, "platform.json");
   const settings = await readObject(settingsPath, true);
@@ -178,7 +205,11 @@ export async function syncConfig({
     {
       file: settingsPath,
       current: settings,
-      value: { ...settings, ...sharedSettings },
+      value: {
+        ...settings,
+        ...sharedSettings,
+        ...(SHELL_PATH ? { shellPath: SHELL_PATH } : {}),
+      },
     },
     {
       file: platformPath,

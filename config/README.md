@@ -11,14 +11,14 @@ npm run config:apply
 
 Check reports drift without writing anything. Apply:
 
-- Resolves the current home directory, installed uv, and Chrome/Edge.
-- Defaults Pyvoid to `~/Documents/GitHub/Pyvoid` and requires its `mcp_server` directory.
+- Resolves the current home directory, installed uv, Chrome/Edge, and the shell.
+- Defaults Pyvoid to `~/Documents/GitHub/Pyvoid` and requires its `mcp_server` directory **only when present machines want Revit integration**; when Pyvoid is absent, apply renders `platform.json` without the `pyvoid-revit` MCP server instead of failing, and uv is not required. Chrome/Edge stays required.
 - Replaces platform configuration with the shared template. Machine policy overrides are deliberately unsupported.
-- Merges shared settings into existing settings. Shared keys win; unrelated local keys remain.
+- Merges shared settings into existing settings. Shared keys win; unrelated local keys remain. The resolved `shellPath` (Git Bash on Windows, `/bin/bash` elsewhere) is written as a local settings key.
 - Backs up changed destinations under ignored `state/config-backups/`, then replaces each file atomically.
 - Never reads or copies authentication, environment secrets, trust state, or conversations.
 
-Missing prerequisites stop the apply before either configuration file changes. Install uv, Chrome/Edge, and Pyvoid first. Revit integration requires Windows, Revit, and the Pyvoid add-in; installing the same config cannot supply those dependencies.
+Missing prerequisites (browser) stop the apply before either configuration file changes. Pyvoid and uv are optional: Windows machines with Revit clone Pyvoid; code-only machines (for example the Linux XPS) apply without the Revit MCP server. Revit integration requires Windows, Revit, and the Pyvoid add-in; installing the same config cannot supply those dependencies.
 
 For nonstandard installation locations, create ignored `config/machine.local.json`:
 
@@ -26,11 +26,12 @@ For nonstandard installation locations, create ignored `config/machine.local.jso
 {
   "uv": "D:/Tools/uv.exe",
   "pyvoidRoot": "D:/Source/Pyvoid",
-  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe"
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "shellPath": "/usr/bin/bash"
 }
 ```
 
-Only these three keys are accepted; values must be absolute paths. Omit keys that should be auto-detected.
+Only these four keys are accepted; values must be absolute paths. Omit keys that should be auto-detected.
 
 ## What stays consistent
 

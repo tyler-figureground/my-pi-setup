@@ -19,7 +19,7 @@ npm run config:check
 
 The fork URL is written out because some checkouts keep the upstream `davis7dotsh/my-pi-setup` as `origin`; pulling `origin main` there fetches the wrong history. Check `git remote -v` and prefer a remote named after the fork.
 
-Install uv, Chrome/Edge, and clone Pyvoid first. See [`config/README.md`](config/README.md) for machine-path overrides, migration from tracked `platform.json`, backups, and parity limits. Run the block again after future updates, using the CLI version pinned in the root `package.json`. Authenticate providers locally with `/login`; no credentials are synced.
+Install Chrome/Edge (Chromium counts on Linux). Pyvoid and uv are required only for Revit integration; code-only machines such as the Linux XPS apply shared config without the `pyvoid-revit` MCP server and a warning note. See [`config/README.md`](config/README.md) for machine-path overrides, migration from tracked `platform.json`, backups, and parity limits. Run the block again after future updates, using the CLI version pinned in the root `package.json`. Authenticate providers locally with `/login`; no credentials are synced.
 
 Restart Pi afterward. Existing sessions can `/reload` for code changes; start a new session for shared model/thinking defaults. These commands update this computer only; run them on each other computer.
 
