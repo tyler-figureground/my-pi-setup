@@ -349,6 +349,57 @@ test("ToolFederation keeps large sanitized MCP output in an artifact and bounds 
   }
 });
 
+test("ToolFederation preserves MCP image data instead of truncating its base64", async () => {
+  const artifacts = createInMemoryArtifactStore();
+  const imageData = Buffer.alloc(117_129, 7).toString("base64");
+  const federation = createToolFederation({
+    servers: [server("images")],
+    artifacts,
+    controls: createExternalIntegrationControls(),
+    adapter: {
+      async connect(): Promise<McpConnection> {
+        return {
+          async listTools() {
+            return [
+              {
+                name: "lookup",
+                inputSchema: { type: "object", properties: {} },
+              },
+            ];
+          },
+          async callTool() {
+            return {
+              content: [
+                { type: "image", data: imageData, mimeType: "image/png" },
+                { type: "text", text: '{"view_id":646075}' },
+              ] as const,
+            };
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+
+  const result = await federation.invoke({
+    toolId: "images__lookup",
+    arguments: {},
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.value.content, [
+    { type: "image", data: imageData, mimeType: "image/png" },
+    { type: "text", text: '{"view_id":646075}' },
+  ]);
+  assert.equal(result.value.truncations, 0);
+  assert.equal(Buffer.from(imageData, "base64").length, 117_129);
+  assert.equal(
+    JSON.stringify(result.value.content).includes("[TRUNCATED]"),
+    false,
+  );
+  assert.equal(typeof result.value.artifactId, "string");
+});
+
 test("ToolFederation remembers an authoritative empty catalog", async () => {
   let listings = 0;
   const federation = createToolFederation({
