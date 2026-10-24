@@ -167,6 +167,56 @@ export async function writeJsonAtomic(file, value) {
   }
 }
 
+// Shared models.json overlays ride with the repository; machine-local model
+// definitions (for example a local llama.cpp server) stay in the root file.
+// Shared providers are upserted, and inside a provider shared keys win:
+// provider-level fields replace, `models` entries replace by id (new ids
+// append), and `modelOverrides` merge per key.
+export function mergeModelsConfig(root, shared) {
+  if (!shared || typeof shared !== "object" || Array.isArray(shared))
+    throw new Error("Expected config/models.json to contain a JSON object.");
+  const unknown = Object.keys(shared).filter((key) => key !== "providers");
+  if (unknown.length)
+    throw new Error(`Unknown models.json key(s): ${unknown.join(", ")}`);
+  const merged = { ...(root ?? {}) };
+  const providers = { ...(merged.providers ?? {}) };
+  for (const [id, sharedProvider] of Object.entries(shared.providers ?? {})) {
+    const rootProvider = providers[id];
+    if (!rootProvider || typeof rootProvider !== "object") {
+      providers[id] = sharedProvider;
+      continue;
+    }
+    const combined = { ...rootProvider };
+    for (const [key, value] of Object.entries(sharedProvider)) {
+      if (
+        key === "models" &&
+        Array.isArray(value) &&
+        Array.isArray(rootProvider.models)
+      ) {
+        const byId = new Map(
+          rootProvider.models.map((model) => [model.id, model]),
+        );
+        for (const model of value) byId.set(model.id, model);
+        combined.models = [...byId.values()];
+      } else if (
+        key === "modelOverrides" &&
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        rootProvider.modelOverrides &&
+        typeof rootProvider.modelOverrides === "object"
+      ) {
+        combined.modelOverrides = { ...rootProvider.modelOverrides, ...value };
+      } else {
+        combined[key] = value;
+      }
+    }
+    providers[id] = combined;
+  }
+  merged.providers = providers;
+  return merged;
+}
+
 export async function syncConfig({
   directory = root,
   apply = false,
@@ -217,6 +267,17 @@ export async function syncConfig({
       value: renderTemplate(sharedPlatform, replacements),
     },
   ];
+  const sharedModelsPath = path.join(directory, "config/models.json");
+  if (existsSync(sharedModelsPath)) {
+    const sharedModels = await readObject(sharedModelsPath);
+    const modelsPath = path.join(directory, "models.json");
+    const models = await readObject(modelsPath, true);
+    expected.push({
+      file: modelsPath,
+      current: models,
+      value: mergeModelsConfig(models, sharedModels),
+    });
+  }
   const changed = expected.filter(
     ({ file, current, value }) =>
       !existsSync(file) || !isDeepStrictEqual(current, value),

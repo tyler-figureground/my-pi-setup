@@ -27,6 +27,7 @@ crashes.json
 /skills/herdr/
 trust.json
 models.json
+!config/models.json
 models-store.json
 extensions/summaries/config.private.json
 extensions/summaries/config.private.json.*.tmp
