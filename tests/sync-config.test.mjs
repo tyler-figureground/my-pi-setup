@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  mergeModelsConfig,
   renderTemplate,
   resolveMachinePaths,
   syncConfig,
@@ -289,6 +290,115 @@ test("pyvoid-less machines drop the pyvoid-revit server and keep others", async 
       full.mcpServers.map((server) => server.id),
       ["pyvoid-revit", "other"],
     );
+  });
+});
+
+test("shared models.json overlays upsert providers and merge by id", async () => {
+  await fixture(async (directory) => {
+    await writeFile(
+      path.join(directory, "config/models.json"),
+      JSON.stringify({
+        providers: {
+          "kimi-code-api": {
+            baseUrl: "https://api.kimi.ai/coding/v1",
+            models: [
+              { id: "k3.1-pro", contextWindow: 1048576 },
+              { id: "k3.1-pro-highspeed", contextWindow: 1048576 },
+            ],
+          },
+        },
+      }),
+    );
+    await writeFile(
+      path.join(directory, "models.json"),
+      JSON.stringify({
+        providers: {
+          "local-llama": { baseUrl: "http://127.0.0.1:8081/v1" },
+          "kimi-code-api": {
+            baseUrl: "https://old.example/v1",
+            models: [
+              { id: "k3.1-pro", contextWindow: 65536 },
+              { id: "machine-only", contextWindow: 8192 },
+            ],
+            modelOverrides: { "machine-override": { maxTokens: 4096 } },
+          },
+        },
+      }),
+    );
+    assert.deepEqual(await syncConfig({ directory, machine }), [
+      "settings.json",
+      "platform.json",
+      "models.json",
+    ]);
+    await syncConfig({ directory, machine, apply: true });
+    const merged = JSON.parse(
+      await readFile(path.join(directory, "models.json"), "utf8"),
+    );
+    assert.equal(
+      merged.providers["local-llama"].baseUrl,
+      "http://127.0.0.1:8081/v1",
+    );
+    const shared = merged.providers["kimi-code-api"];
+    assert.equal(shared.baseUrl, "https://api.kimi.ai/coding/v1");
+    assert.deepEqual(
+      shared.models.map((model) => model.id),
+      ["k3.1-pro", "machine-only", "k3.1-pro-highspeed"],
+    );
+    assert.equal(
+      shared.models.find((model) => model.id === "k3.1-pro").contextWindow,
+      1048576,
+    );
+    assert.deepEqual(shared.modelOverrides, {
+      "machine-override": { maxTokens: 4096 },
+    });
+    // Idempotent: a second check reports no drift.
+    assert.deepEqual(await syncConfig({ directory, machine }), []);
+  });
+});
+
+test("a missing root models.json is created from the shared overlay", async () => {
+  await fixture(async (directory) => {
+    await writeFile(
+      path.join(directory, "config/models.json"),
+      JSON.stringify({ providers: { "kimi-code-api": { models: [] } } }),
+    );
+    await syncConfig({ directory, machine, apply: true });
+    const created = JSON.parse(
+      await readFile(path.join(directory, "models.json"), "utf8"),
+    );
+    assert.deepEqual(Object.keys(created.providers), ["kimi-code-api"]);
+  });
+});
+
+test("no config/models.json leaves root models.json untouched", async () => {
+  await fixture(async (directory) => {
+    await writeFile(
+      path.join(directory, "models.json"),
+      JSON.stringify({ providers: { "local-llama": { models: [] } } }),
+    );
+    const changed = await syncConfig({ directory, machine, apply: true });
+    assert.deepEqual(changed, ["settings.json", "platform.json"]);
+  });
+});
+
+test("mergeModelsConfig rejects invalid shapes and unknown keys", () => {
+  assert.throws(() => mergeModelsConfig({}, []), /JSON object/);
+  assert.throws(
+    () => mergeModelsConfig({}, { providers: {}, extra: true }),
+    /Unknown models.json key/,
+  );
+  // Shared model overrides merge per key over root values.
+  const merged = mergeModelsConfig(
+    {
+      providers: {
+        p: { modelOverrides: { a: { maxTokens: 1 }, b: { maxTokens: 2 } } },
+      },
+    },
+    { providers: { p: { modelOverrides: { a: { maxTokens: 9 } } } } },
+  );
+  assert.deepEqual(merged.providers.p.modelOverrides, {
+    a: { maxTokens: 9 },
+    b: { maxTokens: 2 },
   });
 });
 
