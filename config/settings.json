@@ -4,7 +4,7 @@
   "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "medium",
   "packages": [
-    "npm:pi-provider-kimi-code@0.6.12"
+    "npm:pi-provider-kimi-code@0.6.13"
   ],
   "skills": [
     "!**/.agents/skills/impeccable"
