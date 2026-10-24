@@ -47,6 +47,8 @@ export interface McpServerDefinition {
   readonly protocol?: "legacy" | "auto" | "2026-07-28";
   readonly credentialReference?: string;
   readonly oauth?: McpOAuthServer;
+  /** Per-call budget; omitted keeps the adapter default (30 s). */
+  readonly requestTimeoutMs?: number;
 }
 
 export interface McpToolDescriptor {
@@ -275,6 +277,44 @@ function toolSummary(serverId: string, tool: McpToolDescriptor) {
     description: tool.description ?? "",
     readOnly: tool.annotations?.readOnlyHint === true,
   } satisfies FederatedToolSummary;
+}
+
+function isMcpImageContent(
+  value: JsonValue | undefined,
+): value is JsonObject & {
+  readonly type: "image";
+  readonly data: string;
+  readonly mimeType: string;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const candidate = value as JsonObject;
+  return (
+    candidate.type === "image" &&
+    typeof candidate.data === "string" &&
+    typeof candidate.mimeType === "string"
+  );
+}
+
+function maskMcpImageData(result: McpCallResult) {
+  return {
+    ...result,
+    content: result.content.map((item) =>
+      isMcpImageContent(item) ? { ...item, data: "" } : item,
+    ),
+  };
+}
+
+function restoreMcpImageData(result: McpCallResult, complete: McpCallResult) {
+  return {
+    ...result,
+    content: result.content.map((item, index) => {
+      const source = complete.content[index];
+      return isMcpImageContent(item) && isMcpImageContent(source)
+        ? { ...item, data: source.data }
+        : item;
+    }),
+  };
 }
 
 export function createToolFederation(
@@ -696,7 +736,10 @@ export function createToolFederation(
             return federationError("call_failed", stored.error.message);
           artifactId = stored.value.id;
         }
-        const sanitized = controls.sanitize(result, {
+        // Image data is binary transport, not text context. Mask it before
+        // applying string limits, then restore the complete sanitized image
+        // after the inline text budget has passed.
+        const sanitized = controls.sanitize(maskMcpImageData(result), {
           maxStringBytes: 45 * 1024,
           maxNodes: 2_000,
           maxDepth: 16,
@@ -714,6 +757,8 @@ export function createToolFederation(
             ],
             isError: result.isError,
           };
+        } else {
+          value = restoreMcpImageData(value, complete.value as McpCallResult);
         }
         return {
           ok: true,

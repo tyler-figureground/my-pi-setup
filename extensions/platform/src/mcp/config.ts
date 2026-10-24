@@ -56,6 +56,7 @@ function decodeOne(
         "credentialReference",
         "oauth",
         "protocol",
+        "requestTimeoutSeconds",
       ].includes(key),
   );
   if (unknown.length > 0)
@@ -277,11 +278,25 @@ function decodeOne(
     object.protocol !== "2026-07-28"
   )
     throw new Error("MCP protocol must be legacy, auto, or 2026-07-28.");
+  const timeoutSeconds = object.requestTimeoutSeconds;
+  if (
+    timeoutSeconds !== undefined &&
+    (typeof timeoutSeconds !== "number" ||
+      !Number.isInteger(timeoutSeconds) ||
+      timeoutSeconds < 1 ||
+      timeoutSeconds > 3600)
+  )
+    throw new Error(
+      "MCP requestTimeoutSeconds must be an integer from 1 to 3600.",
+    );
   return {
     id: object.id,
     transport: decodedTransport,
     enabled: object.enabled === undefined ? true : object.enabled,
     ...(object.protocol ? { protocol: object.protocol } : {}),
+    ...(typeof timeoutSeconds === "number"
+      ? { requestTimeoutMs: timeoutSeconds * 1000 }
+      : {}),
     tools: {
       include,
       exclude,

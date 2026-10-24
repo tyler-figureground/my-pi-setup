@@ -36,4 +36,16 @@ server.registerTool(
     structuredContent: arguments_,
   }),
 );
+server.registerTool(
+  "sleep_then_reply",
+  {
+    description: "Wait the requested milliseconds, then reply",
+    inputSchema: z.object({ ms: z.number().int() }),
+    annotations: { readOnlyHint: true },
+  },
+  async ({ ms }) => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return { content: [{ type: "text", text: `slept ${ms}` }] };
+  },
+);
 await server.connect(new StdioServerTransport());

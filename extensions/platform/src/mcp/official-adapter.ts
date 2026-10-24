@@ -162,6 +162,7 @@ function clientConnection(
   transport: { close(): Promise<void> },
   terminateProcessTree?: () => void,
   terminateRemote?: () => Promise<void>,
+  requestTimeoutMs: number = REQUEST_TIMEOUT_MS,
 ): McpConnection {
   let closed = false;
   return {
@@ -184,7 +185,10 @@ function clientConnection(
     async callTool(request, signal) {
       const result = await client.callTool(
         { name: request.name, arguments: request.arguments },
-        { signal, timeout: REQUEST_TIMEOUT_MS },
+        // Per-server budget: a server whose tools legitimately run for
+        // minutes (a Revit capture paging a large model) declares
+        // requestTimeoutSeconds instead of failing every long call.
+        { signal, timeout: requestTimeoutMs },
       );
       const content = structuredClone(result.content) as JsonValue[];
       return {
@@ -283,6 +287,8 @@ export function createOfficialMcpAdapter(
             process.platform === "win32"
               ? () => transport.terminateProcessTree()
               : undefined,
+            undefined,
+            definition.requestTimeoutMs,
           );
         } catch (error) {
           try {
@@ -326,8 +332,12 @@ export function createOfficialMcpAdapter(
           signal,
           timeout: CONNECT_TIMEOUT_MS,
         });
-        return clientConnection(client, transport, undefined, () =>
-          transport.terminateSession(),
+        return clientConnection(
+          client,
+          transport,
+          undefined,
+          () => transport.terminateSession(),
+          definition.requestTimeoutMs,
         );
       } catch (error) {
         await transport.close().catch(() => undefined);

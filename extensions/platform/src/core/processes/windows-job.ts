@@ -37,42 +37,63 @@ const PROCESS_TERMINATE = 0x0001;
 const PROCESS_SET_QUOTA = 0x0100;
 const JOB_TERMINATED_EXIT_CODE = 1;
 
-let bindingsPromise: Promise<JobBindings> | undefined;
+// Koffi's type registry is process-wide, but this module can be instantiated
+// more than once per process: extension reload replaces the runtime with fresh
+// module instances. A module-scoped cache would then re-register the named
+// types and fail with "Duplicate type name 'PI_JOB_HANDLE'", which took down
+// every stdio MCP connection. Share the bindings through a process-global slot,
+// and register named types idempotently so a retry after a partial failure
+// reuses what the failed attempt already registered.
+const BINDINGS_SLOT = Symbol.for("pi.platform.windowsJobBindings");
+
+type BindingsHolder = { [BINDINGS_SLOT]?: Promise<JobBindings> };
+
+const bindingsHolder = globalThis as BindingsHolder;
 
 async function loadBindings(): Promise<JobBindings> {
   const loaded = await import("koffi");
   const koffi = "default" in loaded ? loaded.default : loaded;
+  const named = <T>(name: string, register: () => T): T => {
+    try {
+      return koffi.type(name) as T;
+    } catch {
+      return register();
+    }
+  };
   const kernel32 = koffi.load("kernel32.dll");
-  koffi.pointer("PI_JOB_HANDLE", koffi.opaque());
-  const basicLimit = koffi.struct("PI_JOBOBJECT_BASIC_LIMIT_INFORMATION", {
-    PerProcessUserTimeLimit: "int64",
-    PerJobUserTimeLimit: "int64",
-    LimitFlags: "uint32",
-    MinimumWorkingSetSize: "size_t",
-    MaximumWorkingSetSize: "size_t",
-    ActiveProcessLimit: "uint32",
-    Affinity: "uintptr_t",
-    PriorityClass: "uint32",
-    SchedulingClass: "uint32",
-  });
-  const ioCounters = koffi.struct("PI_IO_COUNTERS", {
-    ReadOperationCount: "uint64",
-    WriteOperationCount: "uint64",
-    OtherOperationCount: "uint64",
-    ReadTransferCount: "uint64",
-    WriteTransferCount: "uint64",
-    OtherTransferCount: "uint64",
-  });
-  const extendedLimit = koffi.struct(
-    "PI_JOBOBJECT_EXTENDED_LIMIT_INFORMATION",
-    {
+  named("PI_JOB_HANDLE", () => koffi.pointer("PI_JOB_HANDLE", koffi.opaque()));
+  const basicLimit = named("PI_JOBOBJECT_BASIC_LIMIT_INFORMATION", () =>
+    koffi.struct("PI_JOBOBJECT_BASIC_LIMIT_INFORMATION", {
+      PerProcessUserTimeLimit: "int64",
+      PerJobUserTimeLimit: "int64",
+      LimitFlags: "uint32",
+      MinimumWorkingSetSize: "size_t",
+      MaximumWorkingSetSize: "size_t",
+      ActiveProcessLimit: "uint32",
+      Affinity: "uintptr_t",
+      PriorityClass: "uint32",
+      SchedulingClass: "uint32",
+    }),
+  );
+  const ioCounters = named("PI_IO_COUNTERS", () =>
+    koffi.struct("PI_IO_COUNTERS", {
+      ReadOperationCount: "uint64",
+      WriteOperationCount: "uint64",
+      OtherOperationCount: "uint64",
+      ReadTransferCount: "uint64",
+      WriteTransferCount: "uint64",
+      OtherTransferCount: "uint64",
+    }),
+  );
+  const extendedLimit = named("PI_JOBOBJECT_EXTENDED_LIMIT_INFORMATION", () =>
+    koffi.struct("PI_JOBOBJECT_EXTENDED_LIMIT_INFORMATION", {
       BasicLimitInformation: basicLimit,
       IoInfo: ioCounters,
       ProcessMemoryLimit: "size_t",
       JobMemoryLimit: "size_t",
       PeakProcessMemoryUsed: "size_t",
       PeakJobMemoryUsed: "size_t",
-    },
+    }),
   );
   const CreateJobObjectW = kernel32.func(
     "PI_JOB_HANDLE __stdcall CreateJobObjectW(void *attributes, const char16_t *name)",
@@ -119,10 +140,11 @@ async function loadBindings(): Promise<JobBindings> {
 export async function createWindowsKillOnCloseJob(): Promise<WindowsKillOnCloseJob> {
   if (process.platform !== "win32")
     throw new Error("Windows job objects are unavailable on this platform.");
-  const bindings = await (bindingsPromise ??= loadBindings().catch((error) => {
-    bindingsPromise = undefined;
-    throw error;
-  }));
+  const bindings = await (bindingsHolder[BINDINGS_SLOT] ??=
+    loadBindings().catch((error) => {
+      bindingsHolder[BINDINGS_SLOT] = undefined;
+      throw error;
+    }));
   const job = bindings.createJob();
   if (!job)
     throw new Error(
