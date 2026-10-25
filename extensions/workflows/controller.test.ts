@@ -26,8 +26,8 @@ test("RunController reserves calls synchronously and caps global fanout", async 
   assert.equal(await controller.settle(), true);
 });
 
-for (const requested of [undefined, 10, 99]) {
-  test(`RunController allows ten and caps excess fanout (${requested ?? "default"})`, async () => {
+for (const requested of [undefined, 8, 10, 99]) {
+  test(`RunController allows eight and caps excess fanout (${requested ?? "default"})`, async () => {
     const controller = new RunController(undefined, requested);
     let active = 0;
     let peak = 0;
@@ -41,7 +41,7 @@ for (const requested of [undefined, 10, 99]) {
         }),
       ),
     );
-    assert.equal(peak, 10);
+    assert.equal(peak, 8);
     assert.equal(await controller.settle(), true);
   });
 }
