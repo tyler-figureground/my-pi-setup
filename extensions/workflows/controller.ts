@@ -1,4 +1,4 @@
-export const MAX_CONCURRENCY = 10;
+export const MAX_CONCURRENCY = 8;
 export const MAX_AGENT_CALLS = 32;
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;
 

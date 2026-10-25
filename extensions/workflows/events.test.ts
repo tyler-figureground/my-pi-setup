@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,7 +17,9 @@ import workflows from "./index.ts";
 test("workflows publish committed task transitions with host-selected failure and cancellation", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-workflow-events-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousLock = process.env.HEAVY_RUN_LOCK;
   process.env.PI_CODING_AGENT_DIR = directory;
+  process.env.HEAVY_RUN_LOCK = path.join(directory, "heavy-run.lock");
   try {
     const eventBus = createEventBus();
     const events: PlatformHookEventEnvelope[] = [];
@@ -111,6 +113,72 @@ test("workflows publish committed task transitions with host-selected failure an
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousLock === undefined) delete process.env.HEAVY_RUN_LOCK;
+    else process.env.HEAVY_RUN_LOCK = previousLock;
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
+  }
+});
+
+test("a heavy workflow is refused while another session holds the machine lock, and releases its own", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-workflow-lock-"));
+  const lockPath = path.join(directory, "heavy-run.lock");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousLock = process.env.HEAVY_RUN_LOCK;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  process.env.HEAVY_RUN_LOCK = lockPath;
+  try {
+    let workflowTool: ToolDefinition | undefined;
+    workflows({
+      events: createEventBus(),
+      on() {},
+      registerTool(definition: ToolDefinition) {
+        if (definition.name === "workflow") workflowTool = definition;
+      },
+      registerCommand() {},
+      getThinkingLevel: () => "medium",
+    } as unknown as ExtensionAPI);
+    assert.ok(workflowTool);
+    const context = {
+      cwd: directory,
+      hasUI: false,
+      isProjectTrusted: () => false,
+      sessionManager: { getSessionId: () => "session-lock" },
+    };
+    const run = (name: string) =>
+      workflowTool!.execute(
+        name,
+        {
+          script: `export const meta = { name: "${name}", phases: [] }; return 1;`,
+        } as never,
+        undefined,
+        undefined,
+        context as never,
+      );
+
+    // Live foreign owner: this process's pid stands in for another harness.
+    await writeFile(
+      lockPath,
+      `tower other-session ${process.pid} ${new Date().toISOString()} site-axis drain\n`,
+    );
+    await assert.rejects(run("drain"), /HEAVY run already live/);
+    await run("fix-main");
+    assert.match(await readFile(lockPath, "utf8"), /other-session/);
+
+    // Free machine: the run takes the lock and frees it when it settles.
+    await rm(lockPath);
+    await run("drain");
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(readFile(lockPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousLock === undefined) delete process.env.HEAVY_RUN_LOCK;
+    else process.env.HEAVY_RUN_LOCK = previousLock;
     await rm(directory, {
       recursive: true,
       force: true,

@@ -385,20 +385,20 @@ test("the global concurrency cap includes by-the-way sessions", async () => {
   });
 });
 
-test("the concurrency cap admits ten and rejects an eleventh running subagent", async () => {
+test("the concurrency cap admits eight and rejects a ninth running subagent", async () => {
   await withManager(async (manager, runtime) => {
     const spawns = await runTool(
       runtime,
       Effect.forEach(
-        Array.from({ length: 10 }, (_, n) => n + 1),
+        Array.from({ length: 8 }, (_, n) => n + 1),
         (n) => manager.spawn("codex", task(`Task ${n}`)),
         { concurrency: "unbounded" },
       ),
     );
-    assert.equal(spawns.length, 10);
+    assert.equal(spawns.length, 8);
     await assert.rejects(
-      runTool(runtime, manager.spawn("codex", task("Task 11"))),
-      /Max 10 subagents/,
+      runTool(runtime, manager.spawn("codex", task("Task 9"))),
+      /Max 8 subagents/,
     );
   });
 });

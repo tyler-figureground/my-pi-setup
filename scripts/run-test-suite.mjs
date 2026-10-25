@@ -80,6 +80,7 @@ const unit = [
   "extensions/platform/trigger-engine-phase7.test.ts",
   "extensions/shared/context-utilization.test.ts",
   "extensions/shared/execution-role.test.ts",
+  "extensions/shared/heavy-run-lock.test.ts",
   "extensions/shared/scheduled-agent.test.ts",
   "extensions/shared/tool-call-timeout.test.ts",
   "extensions/subagents/by-the-way.test.ts",

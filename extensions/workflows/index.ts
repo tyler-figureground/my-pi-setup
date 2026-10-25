@@ -35,6 +35,11 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import {
+  acquireHeavyRun,
+  isHeavyWorkflow,
+  type HeavyRunAcquisition,
+} from "../shared/heavy-run-lock.ts";
+import {
   platformHookEventProducerFor,
   type PlatformHookEvent,
   type PlatformHookEventProducer,
@@ -410,6 +415,25 @@ export default function workflows(pi: ExtensionAPI) {
       }
 
       const meta = prepared.meta;
+
+      // One heavy run per machine, shared with Claude Code's heavy-run-guard
+      // hook. Lock I/O failures never block work.
+      let releaseHeavyRun = () => {};
+      if (isHeavyWorkflow(meta.name)) {
+        let heavy: HeavyRunAcquisition = { ok: true, release: () => {} };
+        try {
+          heavy = acquireHeavyRun({
+            session: `pi-${ctx.sessionManager.getSessionId()}`,
+            cwd: ctx.cwd,
+            card: meta.name ?? "inline-workflow",
+          });
+        } catch {
+          // Fail open.
+        }
+        if (!heavy.ok) throw new Error(heavy.reason);
+        releaseHeavyRun = heavy.release;
+      }
+
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
       const background = (params.background ?? false) && ctx.hasUI;
@@ -426,16 +450,24 @@ export default function workflows(pi: ExtensionAPI) {
         agents: [],
       };
 
-      writeRunFile(runDir, "script.js", params.script);
-      if (params.args !== undefined)
-        writeRunFile(runDir, "args.json", params.args);
-      persistWorkflowJson(runDir, details);
-      const persistence = createWorkflowPersistence(runDir, details);
-      const platformArtifactProducer = artifactProducerFor(pi.events);
+      let persistence: ReturnType<typeof createWorkflowPersistence>;
+      let platformArtifactProducer: ReturnType<typeof artifactProducerFor>;
+      let controller: RunController;
+      try {
+        writeRunFile(runDir, "script.js", params.script);
+        if (params.args !== undefined)
+          writeRunFile(runDir, "args.json", params.args);
+        persistWorkflowJson(runDir, details);
+        persistence = createWorkflowPersistence(runDir, details);
+        platformArtifactProducer = artifactProducerFor(pi.events);
 
-      // Background runs survive Esc on the parent turn, but all runs are
-      // aborted and settled during session shutdown.
-      const controller = new RunController(background ? undefined : signal);
+        // Background runs survive Esc on the parent turn, but all runs are
+        // aborted and settled during session shutdown.
+        controller = new RunController(background ? undefined : signal);
+      } catch (error) {
+        releaseHeavyRun();
+        throw error;
+      }
 
       // Each concurrent child gets its own extension runtime. All children use
       // the parent cwd and live trust decision.
@@ -768,6 +800,7 @@ export default function workflows(pi: ExtensionAPI) {
         ...(details.name ? { name: details.name } : {}),
       });
       const completion = runScript();
+      void completion.then(releaseHeavyRun, releaseHeavyRun);
       activeRun.completion = completion;
       if (ctx.hasUI) lastUi = ctx.ui;
       updateIndicator();

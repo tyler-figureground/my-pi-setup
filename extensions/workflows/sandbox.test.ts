@@ -47,8 +47,9 @@ test("sandbox exposes only workflow capabilities and validates results", async (
 
 for (const [options, expected] of [
   ["{}", 4],
-  ["{ concurrency: 10 }", 10],
-  ["{ concurrency: 99 }", 10],
+  ["{ concurrency: 8 }", 8],
+  ["{ concurrency: 10 }", 8],
+  ["{ concurrency: 99 }", 8],
 ] as const) {
   test(`sandbox parallel fanout ${options} peaks at ${expected}`, async () => {
     let active = 0;
