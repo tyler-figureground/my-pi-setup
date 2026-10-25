@@ -16,11 +16,15 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
-      npm_config_prefix: ${{ runner.temp }}/pi-prefix
     steps:
       - uses: actions/checkout@v4
+      # The runner context is not available in job-level env; using
+      # runner.temp there makes GitHub reject the whole workflow file.
+      - name: Isolate agent directory and command prefix
+        shell: bash
+        run: |
+          echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-agent" >> "$GITHUB_ENV"
+          echo "npm_config_prefix=$RUNNER_TEMP/pi-prefix" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: "24.15.0"

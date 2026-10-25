@@ -354,6 +354,20 @@ test("refuses private agent data inside the source checkout", (t) => {
   assert.deepEqual(snapshot(directory), before);
 });
 
+test("refuses a not-yet-created agent directory reached through a link into the checkout", (t) => {
+  const { root, directory } = fixture(t);
+  // A junction needs no privilege on Windows; elsewhere this is a symlink,
+  // like macOS's /var -> /private/var temp directory.
+  const link = path.join(directory, "linked checkout");
+  fs.symlinkSync(root, link, "junction");
+  const before = snapshot(directory);
+  assert.throws(
+    () => planInstall(root, path.join(link, "private-home")),
+    /neither directory may contain the other/,
+  );
+  assert.deepEqual(snapshot(directory), before);
+});
+
 for (const nested of [false, true]) {
   test(`refuses source ${nested ? "inside" : "equal to"} agent directory`, (t) => {
     const { root, directory } = fixture(t);
