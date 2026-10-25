@@ -47,9 +47,20 @@ export function run(command, args, cwd = repository, capture = false) {
 export function planInstall(root, agentDir) {
   root = fs.realpathSync(root);
   agentDir = path.resolve(agentDir);
-  const existingAgentDir = fs.existsSync(agentDir)
-    ? fs.realpathSync(agentDir)
-    : agentDir;
+  // Resolve links through the deepest existing ancestor, so a directory not
+  // created yet is compared in the same form as the realpath'd root (macOS
+  // /var -> /private/var, Windows junctions).
+  let existingAgentDir = agentDir;
+  for (let ancestor = agentDir; ; ancestor = path.dirname(ancestor)) {
+    if (fs.existsSync(ancestor)) {
+      existingAgentDir = path.join(
+        fs.realpathSync(ancestor),
+        path.relative(ancestor, agentDir),
+      );
+      break;
+    }
+    if (path.dirname(ancestor) === ancestor) break;
+  }
   const contains = (parent, child) => {
     const relative = path.relative(parent, child);
     return (
