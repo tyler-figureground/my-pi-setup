@@ -81,6 +81,11 @@ interface ActiveHooksRuntime {
   triggerOwnerId?: string;
   triggerGeneration: number;
   acceptingEffects: boolean;
+  hookEventCoverage?: {
+    revision: number;
+    events: ReadonlySet<string>;
+  };
+  dispatchFailure?: { detail: string; suppressed: number };
   stopPromise?: Promise<{
     readonly status: "stopped";
     readonly reason: string;
@@ -405,14 +410,70 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
     }
   };
 
+  // A configured hook is the only consumer of a `hook:<event>` dispatch: the
+  // TriggerEngine binding runs Hooks, which executes only hooks whose event
+  // matches. The revision-memoized set below answers "could any configured
+  // hook observe this event?" without publishing it. Hooks from suspended
+  // sources stay listed until a clean reload replaces them, so their
+  // fail-closed gate protection keeps dispatching.
+  const hooksCoverEvent = (
+    runtime: ActiveHooksRuntime,
+    eventName: NativeHookEventName | PlatformHookEvent,
+  ) => {
+    const inspection = runtime.hooks.inspect();
+    const coverage = runtime.hookEventCoverage;
+    if (!coverage || coverage.revision !== inspection.revision) {
+      const events = new Set<string>(
+        inspection.hooks.map((hook) => hook.event),
+      );
+      runtime.hookEventCoverage = {
+        revision: inspection.revision,
+        events,
+      };
+      return events.has(eventName);
+    }
+    return coverage.events.has(eventName);
+  };
+
+  // One notification per distinct failure signature, with an occasional
+  // re-notify while it persists. Gate blocks below still carry the exact
+  // reason on every occurrence; only the UI notification is deduplicated.
+  const reportDispatchFailure = (
+    runtime: ActiveHooksRuntime,
+    ctx: ExtensionContext,
+    detail: string,
+    reason: string,
+  ) => {
+    if (!supportsHookUi(ctx)) return;
+    const previous = runtime.dispatchFailure;
+    if (previous && previous.detail === detail) {
+      previous.suppressed += 1;
+      if (previous.suppressed % 100 !== 0) return;
+      ctx.ui.notify(
+        `${reason} [${previous.suppressed} earlier failures suppressed]`,
+        "error",
+      );
+      return;
+    }
+    runtime.dispatchFailure = { detail, suppressed: 0 };
+    ctx.ui.notify(reason, "error");
+  };
+
   const handle = async (
     eventName: NativeHookEventName | PlatformHookEvent,
     event: unknown,
     ctx: ExtensionContext,
     unattended: boolean,
-  ): Promise<HookResponse> => {
+  ): Promise<HookResponse & { dispatchFailed?: true }> => {
     const runtime = active;
     if (!runtime || !runtime.acceptingEffects) return { context: [] };
+    // No configured hook can observe this event, so a dispatch can produce no
+    // hook effect. Skipping the publish keeps high-frequency observation
+    // events from saturating TriggerEngine queues, where transient capacity
+    // backpressure was reported as "Hook dispatch failed within TriggerEngine
+    // safety bounds" and could deny gate events on behalf of a policy that
+    // does not exist. A configured hook for the event always dispatches.
+    if (!hooksCoverEvent(runtime, eventName)) return { context: [] };
     const converted = eventPayload(event);
     const triggerPayload = triggerInvocation(
       eventName,
@@ -424,14 +485,11 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       (converted.bounded || triggerPayload.bounded) &&
       gateEvents.has(eventName as NativeHookEventName)
     ) {
-      // No policy can inspect this event when it has no configured hooks.
-      // Do not reject ordinary large prompts, writes, or compaction payloads
-      // on behalf of a nonexistent policy. Never dispatch truncated gate data.
-      // Include suspended hooks: their fail-closed protection still applies.
-      if (
-        !runtime.hooks.inspect().hooks.some((hook) => hook.event === eventName)
-      )
-        return { context: [] };
+      // A configured hook could inspect this event, so never dispatch
+      // truncated gate data: deny closed instead. Uncovered events returned
+      // earlier and never reject ordinary large prompts, writes, or
+      // compaction payloads on behalf of a nonexistent policy. Suspended
+      // sources keep their fail-closed protection (see hooksCoverEvent).
       return {
         context: [],
         block: {
@@ -458,15 +516,22 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
             .find((value) => value !== undefined)
         : undefined;
       if (response) return response;
+      const failedDelivery = published.ok
+        ? published.value.deliveries.find(
+            ({ status }) => status !== "delivered",
+          )
+        : undefined;
       if (
         !published.ok ||
         published.value.deliveries.some(({ status }) => status !== "delivered")
       ) {
-        const reason =
-          "Hook dispatch failed within TriggerEngine safety bounds.";
-        if (supportsHookUi(ctx)) ctx.ui.notify(reason, "error");
+        const detail = !published.ok
+          ? `${published.error.code}: ${published.error.message}`
+          : `delivery ${failedDelivery?.status ?? "not-delivered"} for ${eventName}`;
+        const reason = `Hook dispatch failed within TriggerEngine safety bounds. (${detail})`;
+        reportDispatchFailure(runtime, ctx, detail, reason);
         return gateEvents.has(eventName as NativeHookEventName)
-          ? { context: [], block: { reason } }
+          ? { context: [], block: { reason }, dispatchFailed: true }
           : { context: [] };
       }
       return { context: [] };
@@ -635,7 +700,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
       nativeEventIsUnattended(event, ctx),
     );
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "error");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "error");
       ctx.abort();
     }
     if (response.context.length > 0) {
@@ -662,7 +728,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   pi.on("input", async (event, ctx) => {
     const response = await handleNative(event, ctx);
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "warning");
       return { action: "handled" as const };
     }
   });
@@ -684,7 +751,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   pi.on("session_before_switch", async (event, ctx) => {
     const response = await handleNative(event, ctx);
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "warning");
       return { cancel: true };
     }
   });
@@ -692,7 +760,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   pi.on("session_before_fork", async (event, ctx) => {
     const response = await handleNative(event, ctx);
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "warning");
       return { cancel: true };
     }
   });
@@ -700,7 +769,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   pi.on("session_before_compact", async (event, ctx) => {
     const response = await handleNative(event, ctx);
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "warning");
       return { cancel: true };
     }
   });
@@ -708,7 +778,8 @@ export function createHooksCapability(options: HooksCapabilityOptions) {
   pi.on("session_before_tree", async (event, ctx) => {
     const response = await handleNative(event, ctx);
     if (response.block) {
-      if (supportsHookUi(ctx)) ctx.ui.notify(response.block.reason, "warning");
+      if (supportsHookUi(ctx) && !response.dispatchFailed)
+        ctx.ui.notify(response.block.reason, "warning");
       return { cancel: true };
     }
   });

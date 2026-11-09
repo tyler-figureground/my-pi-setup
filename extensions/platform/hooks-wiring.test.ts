@@ -1582,6 +1582,25 @@ test("large native events stay within TriggerEngine serialized payload bounds", 
     const harness = createPiHarness();
     const notifications: string[] = [];
     const ctx = createContext(directory, notifications);
+    // A covering observe hook is required for dispatch: events with no
+    // configured hook never reach the TriggerEngine (see the no-hook burst
+    // regression test below), and this test measures large-payload routing.
+    await writeFile(
+      path.join(directory, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: observe-provider-request
+    event: before_provider_request
+    priority: 0
+    match: {}
+    actions: [{ type: status, key: large-observe, text: observing }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: open
+`,
+      "utf8",
+    );
     const capability = createHooksCapability({
       pi: harness.pi,
       agentDir: directory,
@@ -1698,6 +1717,270 @@ hooks:
         reason: "quit",
       });
       await trigger.close();
+    }
+  });
+});
+
+test("no-hook observation bursts never report TriggerEngine dispatch failures", async () => {
+  // Root-cause regression: with no hook covering an event, dispatching it
+  // through the TriggerEngine can produce no hook effect. Concurrent bursts
+  // of high-frequency events used to saturate the engine's per-binding queue
+  // (QUEUE_FULL), reporting "Hook dispatch failed within TriggerEngine safety
+  // bounds" for every dropped event and denying gate events on behalf of a
+  // nonexistent policy.
+  await withFixture(async (directory) => {
+    const trigger = createTriggerEngine({ hostId: "hooks-burst-host" });
+    const harness = createPiHarness();
+    const notifications: string[] = [];
+    const ctx = createContext(directory, notifications);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir: directory,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-burst-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    try {
+      await capability.start(
+        { project, projectTrusted: true, ctx },
+        { type: "session_start", reason: "startup" },
+      );
+      // 300 concurrent events is far beyond the engine's ~136-event
+      // immediate-dispatch capacity; pre-fix this dropped hundreds.
+      const results = await Promise.all(
+        Array.from({ length: 300 }, (_, index) =>
+          harness.emit(
+            index % 3 === 0 ? "tool_call" : "message_update",
+            index % 3 === 0
+              ? { type: "tool_call", toolName: "bash", input: { command: "ls" } }
+              : {
+                  type: "message_update",
+                  delta: { text: `chunk ${index} ${"x".repeat(200)}` },
+                },
+            ctx,
+          ),
+        ),
+      );
+      assert.ok(results.every(([value]) => value === undefined));
+      assert.deepEqual(notifications, []);
+      const inspection = trigger.engine.inspect();
+      assert.equal(inspection.counters.dropped, 0);
+      assert.equal(
+        inspection.history.some(({ type }) => type === "hook:message_update"),
+        false,
+      );
+      await capability.handlePlatformEvent("subagent.started", {
+        id: "sa-1",
+      });
+      assert.deepEqual(notifications, []);
+    } finally {
+      await capability.stop("quit", {
+        type: "session_shutdown",
+        reason: "quit",
+      });
+      await trigger.close();
+    }
+  });
+});
+
+test("queue saturation on a covered gate stays fail-closed, specific, and non-repetitive", async () => {
+  // When a hook DOES cover the event, capacity failures must keep denying
+  // gate events closed (never fail open), while the UI reports the engine's
+  // actual error code once instead of spamming one line per event.
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: input-allows
+    event: input
+    priority: 0
+    match: {}
+    actions: [{ type: policy, decision: allow, reason: fixture-allow }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    const trigger = createTriggerEngine({ hostId: "hooks-covered-burst-host" });
+    const harness = createPiHarness();
+    const notifications: string[] = [];
+    const ctx = createContext(directory, notifications);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: trigger,
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-covered-burst-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    try {
+      await capability.start(
+        { project, projectTrusted: true, ctx },
+        { type: "session_start", reason: "startup" },
+      );
+      assert.equal(capability.inspect().hooks.length, 1);
+      const results = await Promise.all(
+        Array.from({ length: 300 }, (_, index) =>
+          harness.emit(
+            "input",
+            { type: "input", source: "text", text: `burst ${index}` },
+            ctx,
+          ),
+        ),
+      );
+      const blocked = results.filter(
+        ([value]) => (value as { action?: string } | undefined)?.action === "handled",
+      );
+      // 300 concurrent publishes far exceed the ~136-slot capacity, so some
+      // covered gate events must have been denied closed by QUEUE_FULL.
+      assert.ok(blocked.length > 0);
+      const safetyBounds = notifications.filter((message) =>
+        message.includes("Hook dispatch failed within TriggerEngine safety bounds"),
+      );
+      // Deduplicated: at most the first failure plus one periodic
+      // re-notify per hundred, each naming the engine error code.
+      assert.ok(safetyBounds.length >= 1 && safetyBounds.length <= 2);
+      assert.match(safetyBounds[0]!, /QUEUE_FULL/);
+      for (const repeat of safetyBounds.slice(1)) {
+        assert.match(repeat, /QUEUE_FULL/);
+        assert.match(repeat, /earlier failures suppressed/);
+      }
+      assert.equal(trigger.engine.inspect().counters.dropped > 0, true);
+    } finally {
+      await capability.stop("quit", {
+        type: "session_shutdown",
+        reason: "quit",
+      });
+      await trigger.close();
+    }
+  });
+});
+
+test("dispatch failure notifications report each distinct engine error once", async () => {
+  await withFixture(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "hooks.yaml"),
+      `version: 2
+hooks:
+  - id: input-allows
+    event: input
+    priority: 0
+    match: {}
+    actions: [{ type: policy, decision: allow, reason: fixture-allow }]
+    concurrency: 1
+    deadlineMs: 1000
+    outputCapBytes: 1024
+    failurePolicy: closed
+`,
+      "utf8",
+    );
+    let failure: { code: string; message: string } = {
+      code: "QUEUE_FULL",
+      message: "Trigger queue count or byte capacity reached.",
+    };
+    const publisher = {
+      publish: () =>
+        Promise.resolve({
+          ok: false as const,
+          error: { ...failure, retryable: true },
+        }),
+    };
+    const triggers = {
+      engine: {
+        reconcile: () =>
+          Promise.resolve({
+            ok: true as const,
+            value: {
+              ownerId: "hooks-stub",
+              generation: 1,
+              bindingCount: 1,
+              replay: {
+                claimed: 0,
+                delivered: 0,
+                ambiguous: 0,
+                quarantined: 0,
+                state: "healthy" as const,
+              },
+            },
+          }),
+      },
+      bindSource: () => ({ ok: true as const, value: publisher }),
+      revokeSource: () => ({ ok: true as const, value: undefined }),
+      close: () => Promise.resolve(),
+    };
+    const harness = createPiHarness();
+    const notifications: string[] = [];
+    const ctx = createContext(directory, notifications);
+    const capability = createHooksCapability({
+      pi: harness.pi,
+      agentDir,
+      actor: "parent",
+      policy: createCapabilityPolicy(),
+      mode: () => "normal",
+      triggers: triggers as unknown as Parameters<
+        typeof createHooksCapability
+      >[0]["triggers"],
+    });
+    const project = {
+      kind: "non-git",
+      projectId: "hooks-stub-project",
+      requestedCwd: directory,
+      canonicalCwd: directory,
+      cwdWasAliased: false,
+    } as const;
+    try {
+      await capability.start(
+        { project, projectTrusted: true, ctx },
+        { type: "session_start", reason: "startup" },
+      );
+      for (let round = 0; round < 5; round += 1) {
+        const [handled] = await harness.emit(
+          "input",
+          { type: "input", source: "text", text: `round ${round}` },
+          ctx,
+        );
+        assert.deepEqual(handled, { action: "handled" });
+      }
+      assert.equal(notifications.length, 1);
+      assert.match(notifications[0]!, /QUEUE_FULL/);
+      // A different failure signature notifies again exactly once.
+      failure = { code: "CLOSED", message: "TriggerEngine is closed." };
+      for (let round = 0; round < 5; round += 1) {
+        await harness.emit(
+          "input",
+          { type: "input", source: "text", text: `closed ${round}` },
+          ctx,
+        );
+      }
+      assert.equal(notifications.length, 2);
+      assert.match(notifications[1]!, /CLOSED/);
+    } finally {
+      await capability.stop("quit", {
+        type: "session_shutdown",
+        reason: "quit",
+      });
     }
   });
 });
